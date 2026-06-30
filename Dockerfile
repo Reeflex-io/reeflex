@@ -4,6 +4,11 @@ FROM python:3.12-slim
 
 ARG OPA_VERSION=1.18.0
 
+# OCI metadata — associates this image with its source repo (GHCR auto-links via image.source).
+LABEL org.opencontainers.image.source="https://github.com/Reeflex-io/reeflex" \
+      org.opencontainers.image.description="Reeflex — deterministic governance engine (reeflex-core)" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
 # Bake the OPA binary into the image (linux static build). Self-contained: the
 # container does not depend on an OPA install on the host.
 ADD https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}/opa_linux_amd64_static /usr/local/bin/opa
