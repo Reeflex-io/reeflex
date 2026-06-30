@@ -3,6 +3,29 @@
 All notable changes to Reeflex are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project is pre-release.
 
+## [0.1.1] - Unreleased
+
+API hardening ahead of network exposure. The decision path is unchanged.
+
+### Added
+- **Optional bearer-token auth on `POST /v1/decide`** — set `REEFLEX_AUTH_TOKEN` to require
+  `Authorization: Bearer <token>` (constant-time comparison). Unset/empty = disabled (backward
+  compatible — identical behavior to 0.1.0). Missing or invalid token → HTTP 401, fail-closed.
+  `GET /healthz` is always unauthenticated so liveness probes work without credentials.
+- **Request body size cap** — `REEFLEX_MAX_BODY_BYTES` (default 256 KiB); oversized request → HTTP 413.
+
+### Security
+- Suppressed the HTTP server version banner (no stack / Python-version disclosure).
+- Added `X-Content-Type-Options: nosniff` and `Cache-Control: no-store` to every response.
+- Sanitized the `invalid_json` error response (no JSON-parser detail leaked to the client).
+- Unsupported methods (PUT / DELETE / PATCH) → clean `405` JSON instead of the default HTML page.
+- The container now runs as an unprivileged non-root user (uid 10001).
+
+### Notes
+- Decision path unchanged: determinism, fail-closed on OPA error, the five reference behaviors, and the
+  43/43 engine + 9/9 policy tests all hold. Auth is off by default, so adapters and demos are unaffected.
+- TLS termination, rate limiting, and DNS are handled at the deployment edge (reverse proxy), not in-engine.
+
 ## [0.1.0] - Unreleased
 
 First public preview: the deterministic decision engine, its contract, a reference adapter, and onboarding.

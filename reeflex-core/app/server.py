@@ -12,10 +12,24 @@ Routes:
 All other paths/methods -> HTTP 404 or 405.
 
 Content-Type for all responses: application/json; charset=utf-8.
+
+Auth (optional bearer token):
+  If env REEFLEX_AUTH_TOKEN is set, POST /v1/decide requires
+  "Authorization: Bearer <token>"; missing or wrong token -> HTTP 401.
+  If REEFLEX_AUTH_TOKEN is unset/empty, auth is disabled (backward compatible).
+  GET /healthz is always unauthenticated.
+
+Security hardening (applied to all responses):
+  - Server banner suppressed to "reeflex-core" (no Python/version leakage).
+  - Security headers: X-Content-Type-Options: nosniff, Cache-Control: no-store.
+  - Request body size cap: 413 if Content-Length exceeds REEFLEX_MAX_BODY_BYTES
+    (default 256 KB) — DoS guard.
+  - Unsupported HTTP methods (PUT, DELETE, PATCH) return 405 JSON, not 501 HTML.
 """
 
 from __future__ import annotations
 
+import hmac
 import http.server
 import json
 import os
@@ -23,8 +37,17 @@ import sys
 
 from .decide import process
 
+_MAX_BODY_BYTES = int(os.environ.get("REEFLEX_MAX_BODY_BYTES", str(256 * 1024)))
+
 
 class _DecideHandler(http.server.BaseHTTPRequestHandler):
+
+    server_version = "reeflex-core"
+    sys_version = ""
+
+    def version_string(self) -> str:  # noqa: N802
+        """Return a clean server banner with no Python or BaseHTTP version leak."""
+        return self.server_version
 
     def log_message(self, fmt: str, *args: object) -> None:  # noqa: N802
         # Override to prefix with service name; goes to stderr
@@ -34,7 +57,28 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
     # GET /healthz
     # ------------------------------------------------------------------
 
+    def _authorized(self) -> bool:
+        """Return True if the request is authorized to reach /v1/decide.
+
+        Auth is OPTIONAL: if REEFLEX_AUTH_TOKEN is unset or empty the method
+        always returns True (backward-compatible — identical to prior behavior).
+        When the env var is set, the request must supply a matching bearer token
+        in the Authorization header.  Comparison is constant-time to resist
+        timing attacks.
+        """
+        expected = os.environ.get("REEFLEX_AUTH_TOKEN")
+        if not expected:
+            return True  # auth disabled (default) — backward compatible
+        header = self.headers.get("Authorization", "")
+        prefix = "Bearer "
+        if not header.startswith(prefix):
+            return False
+        provided = header[len(prefix):].strip()
+        return hmac.compare_digest(provided, expected)
+
     def do_GET(self) -> None:  # noqa: N802
+        # /healthz is intentionally unauthenticated — health probes and docker
+        # healthcheck must work without credentials regardless of auth config.
         if self.path == "/healthz":
             self._respond(200, {"status": "ok"})
         else:
@@ -70,6 +114,16 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
             self._respond(404, {"error": "not_found"})
             return
 
+        # Auth check BEFORE reading the body: an unauthenticated client's body
+        # (possibly huge or hostile) is never consumed.
+        if not self._authorized():
+            self._respond(
+                401,
+                {"error": "unauthorized"},
+                extra_headers={"WWW-Authenticate": "Bearer"},
+            )
+            return
+
         # Read body
         length_str = self.headers.get("Content-Length", "")
         try:
@@ -78,13 +132,17 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
             self._respond(411, {"error": "content_length_required"})
             return
 
+        if length > _MAX_BODY_BYTES:
+            self._respond(413, {"error": "payload_too_large"})
+            return
+
         raw = self.rfile.read(length)
 
         # Parse JSON
         try:
             body = json.loads(raw.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            self._respond(400, {"error": "invalid_json", "detail": str(exc)})
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._respond(400, {"error": "invalid_json"})
             return
 
         # Delegate to the decision pipeline
@@ -92,14 +150,40 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
         self._respond(status, response)
 
     # ------------------------------------------------------------------
+    # Unsupported methods
+    # ------------------------------------------------------------------
+
+    def _method_not_allowed(self) -> None:
+        self._respond(405, {"error": "method_not_allowed"}, extra_headers={"Allow": "GET, POST"})
+
+    def do_PUT(self) -> None:     # noqa: N802
+        self._method_not_allowed()
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        self._method_not_allowed()
+
+    def do_PATCH(self) -> None:   # noqa: N802
+        self._method_not_allowed()
+
+    # ------------------------------------------------------------------
     # Helper
     # ------------------------------------------------------------------
 
-    def _respond(self, status: int, body: dict) -> None:
+    def _respond(
+        self,
+        status: int,
+        body: dict,
+        extra_headers: dict | None = None,
+    ) -> None:
         payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store")
+        if extra_headers:
+            for name, value in extra_headers.items():
+                self.send_header(name, value)
         self.end_headers()
         self.wfile.write(payload)
 
