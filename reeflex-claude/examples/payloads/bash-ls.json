@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "sess_example_001",
+  "cwd": "/home/dev/project",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "ls -la /home/dev/project",
+    "description": "List project files"
+  },
+  "permission_mode": "default"
+}

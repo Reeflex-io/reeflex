@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|Read|Glob|Grep|LS|NotebookEdit|WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -m reeflex_claude",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

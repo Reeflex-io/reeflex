@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "sess_example_004",
+  "cwd": "/home/dev/project",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "git push --force origin main",
+    "description": "Force push to main branch"
+  },
+  "permission_mode": "default"
+}

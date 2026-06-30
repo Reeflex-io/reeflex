@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "sess_example_002",
+  "cwd": "/home/dev",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "rm -rf /",
+    "description": "DANGEROUS: wipe root filesystem"
+  },
+  "permission_mode": "default"
+}
