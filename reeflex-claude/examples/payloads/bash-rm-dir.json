@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "sess_example_003",
+  "cwd": "/home/dev/project",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "rm -rf /home/dev/project/dist",
+    "description": "Delete build output directory"
+  },
+  "permission_mode": "default"
+}

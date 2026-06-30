@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "sess_example_006",
+  "cwd": "/home/dev/project",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/home/dev/project/src/helpers/synthetic_new_module.py",
+    "content": "# synthetic new module\ndef greet(name: str) -> str:\n    return f'hello {name}'\n"
+  },
+  "permission_mode": "default"
+}

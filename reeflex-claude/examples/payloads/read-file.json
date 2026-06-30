@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "sess_example_007",
+  "cwd": "/home/dev/project",
+  "tool_name": "Read",
+  "tool_input": {
+    "file_path": "/home/dev/project/src/main.py"
+  },
+  "permission_mode": "default"
+}

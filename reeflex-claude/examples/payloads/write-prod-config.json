@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "sess_example_005",
+  "cwd": "/home/dev/project",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/home/dev/project/.env",
+    "content": "DATABASE_URL=postgres://localhost/mydb\nSECRET_KEY=synthetic-not-real\n"
+  },
+  "permission_mode": "default"
+}
