@@ -1,0 +1,21 @@
+# reeflex-core deployment stack (minimal: one service).
+# Host port is parameterized — set REEFLEX_HOST_PORT to the free port chosen on the VM.
+services:
+  core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: reeflex-core:0.1
+    container_name: reeflex-core
+    environment:
+      REEFLEX_HOST: "0.0.0.0"
+      REEFLEX_PORT: "8080"
+    ports:
+      - "${REEFLEX_HOST_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 4s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped

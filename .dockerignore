@@ -1,0 +1,14 @@
+# Keep the build context minimal — the image only needs reeflex-core/.
+.git
+.github
+.gitignore
+docs
+reeflex-spec
+reeflex-mock
+reeflex-wordpress
+*.md
+**/__pycache__
+**/*.py[cod]
+**/audit/*.jsonl
+*-audit.jsonl
+*.log
