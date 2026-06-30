@@ -19,6 +19,13 @@ WORKDIR /app
 # reeflex-core is pure Python stdlib — no pip dependencies to install.
 COPY reeflex-core/ /app/
 
+# --- non-root hardening: run as an unprivileged system user (uid 10001) ---
+# Files are COPYed as root; chown the app tree so the audit log dir is writable
+# by the unprivileged user. Port 8080 (>1024) binds without root privilege.
+RUN useradd --uid 10001 --user-group --home-dir /app --shell /usr/sbin/nologin reeflex \
+    && mkdir -p /app/audit \
+    && chown -R reeflex:reeflex /app
+
 # Container must bind 0.0.0.0 (not 127.0.0.1) so the published port is reachable.
 ENV REEFLEX_HOST=0.0.0.0 \
     REEFLEX_PORT=8080 \
@@ -32,5 +39,8 @@ EXPOSE 8080
 # Liveness via the stdlib (slim image has no curl/wget).
 HEALTHCHECK --interval=30s --timeout=4s --start-period=5s --retries=3 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=3).status==200 else 1)" || exit 1
+
+# Drop privileges: the service runs as the unprivileged 'reeflex' user.
+USER reeflex
 
 CMD ["python", "main.py"]

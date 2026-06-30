@@ -6,6 +6,7 @@ docs
 reeflex-spec
 reeflex-mock
 reeflex-wordpress
+reeflex-core/tests
 *.md
 **/__pycache__
 **/*.py[cod]
