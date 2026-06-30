@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1090 124" width="1090" height="124" font-family="'Segoe UI', system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <!-- AI Agent -->
+  <rect x="20" y="32" width="120" height="60" rx="8" fill="#eef1f8" stroke="#5b6b9e" stroke-width="1.5"/>
+  <text x="80" y="67" text-anchor="middle" fill="#27324d" font-weight="bold" font-size="13">AI Agent</text>
+
+  <!-- intent -->
+  <line x1="140" y1="62" x2="240" y2="62" stroke="#475569" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="190" y="52" text-anchor="middle" fill="#5d6973" font-size="10">intent</text>
+
+  <!-- Adapter -->
+  <rect x="240" y="32" width="200" height="60" rx="8" fill="#f3f5f8" stroke="#4a5568" stroke-width="1.5"/>
+  <text x="340" y="58" text-anchor="middle" fill="#1a202c" font-weight="bold" font-size="13">Adapter</text>
+  <text x="340" y="78" text-anchor="middle" fill="#5d6973" font-size="10.5">normalize to Action Envelope</text>
+
+  <!-- POST -->
+  <line x1="440" y1="62" x2="540" y2="62" stroke="#475569" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="490" y="52" text-anchor="middle" fill="#5d6973" font-size="10">POST /v1/decide</text>
+
+  <!-- reeflex-core -->
+  <rect x="540" y="32" width="200" height="60" rx="8" fill="#e4f1f2" stroke="#0b6e75" stroke-width="1.5"/>
+  <text x="640" y="58" text-anchor="middle" fill="#0a4f54" font-weight="bold" font-size="13">reeflex-core</text>
+  <text x="640" y="78" text-anchor="middle" fill="#327a7f" font-size="10.5">OPA/Rego, deterministic</text>
+
+  <!-- decision -->
+  <line x1="740" y1="62" x2="840" y2="62" stroke="#475569" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="790" y="52" text-anchor="middle" fill="#5d6973" font-size="10">decision</text>
+
+  <!-- Adapter enforces -->
+  <rect x="840" y="28" width="230" height="68" rx="8" fill="#f3f5f8" stroke="#4a5568" stroke-width="1.5"/>
+  <text x="955" y="56" text-anchor="middle" fill="#1a202c" font-weight="bold" font-size="13">Adapter enforces</text>
+  <text x="955" y="78" text-anchor="middle" fill="#5d6973" font-size="10.5">allow &#183; deny &#183; require_approval</text>
+</svg>

@@ -1,0 +1,84 @@
+# =============================================================================
+# Reeflex — .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# INTERNAL ORCHESTRATION / WORKING LAYER — NOT FOR THE PUBLIC REPO
+#
+# These paths are the local development / working layer (process notes, journals,
+# local scaffolding). They are never part of the open-source surface.
+# Keep them local; never commit them to the public repository.
+# -----------------------------------------------------------------------------
+legacy/
+.claude/
+journal-*.md
+code-reports/
+BOOTSTRAP.md
+wow.md
+CLAUDE.md
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# -----------------------------------------------------------------------------
+# OPA binary (downloaded locally, not committed)
+# -----------------------------------------------------------------------------
+opa
+opa.exe
+
+# -----------------------------------------------------------------------------
+# Runtime audit and probe artifacts
+# (keep reeflex-core/audit/.gitkeep so the directory is tracked)
+# -----------------------------------------------------------------------------
+reeflex-core/audit/*.jsonl
+reeflex-mock/*.jsonl
+*-audit.jsonl
+*.log
+
+# -----------------------------------------------------------------------------
+# Secrets / credentials / certificates
+# -----------------------------------------------------------------------------
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+
+# -----------------------------------------------------------------------------
+# IDE and OS artifacts
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+
+# -----------------------------------------------------------------------------
+# Misc test / temp artifacts
+# -----------------------------------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.prof

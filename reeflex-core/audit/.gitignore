@@ -1,0 +1,3 @@
+# runtime audit logs (regenerated at runtime); keep the dir via .gitkeep
+*.jsonl
+!.gitkeep
