@@ -2,11 +2,29 @@
 /**
  * Reeflex Config — runtime configuration resolver.
  *
- * Reads all tunable values from WordPress constants (set in wp-config.php).
- * No secrets are ever hardcoded. The core URL is the sole trust anchor for
- * the decision engine and is intentionally NOT overridable by any WordPress
- * filter — a later-loading plugin cannot redirect decisions to an attacker-
- * controlled server.
+ * Precedence model (two fields exposed to the Settings UI):
+ *
+ *   core_url():
+ *     1. Constant REEFLEX_CORE_URL if defined AND non-empty  (trust anchor; wins always).
+ *     2. DB option reeflex_gate_options['core_url']          (Settings page path).
+ *     3. ''  → fail-closed (no URL configured).
+ *     The same scheme-validation rule applies to whichever source is used.
+ *
+ *   core_token():
+ *     1. Constant REEFLEX_CORE_TOKEN if defined              (trust anchor; wins always).
+ *     2. DB option reeflex_gate_options['core_token']        (Settings page path).
+ *     3. ''  → no Authorization header sent.
+ *
+ * All other values (env, agent_id, audit_log_path, request_timeout) remain
+ * constant-only; no Settings UI is provided for them.
+ *
+ * Constants always win over the DB option — a constant defined in wp-config.php
+ * is a server-side trust anchor that an admin or agent cannot override through
+ * the UI.  Allowing a DB value to override a constant would let a malicious or
+ * compromised admin re-point or disable the governance gate — a bypass.
+ *
+ * Option name:  reeflex_gate_options  (single array option).
+ * Keys:         core_url, core_token.
  *
  * @package ReeflexWordPress
  * @since   0.1.0
@@ -17,25 +35,30 @@ declare( strict_types=1 );
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Resolves Reeflex adapter configuration from WP constants only.
+ * Resolves Reeflex adapter configuration.
  *
- * All values carry safe defaults so the adapter runs out of the box in
- * a development environment without any configuration. Operators MUST set
- * REEFLEX_CORE_URL (and ideally REEFLEX_ENV) for production use.
+ * Priority: wp-config.php constants > DB option (Settings page) > safe default.
+ * Constants are trust anchors and always win over the DB value.
  *
- * Constants (define in wp-config.php):
+ * Constants accepted in wp-config.php:
  *   REEFLEX_CORE_URL   — base URL of reeflex-core (required for production).
+ *                        When defined + non-empty, it wins over any DB/Settings
+ *                        value and the Settings field is rendered read-only.
  *                        Must be https:// in production. http:// is accepted
- *                        ONLY for loopback hosts (127.0.0.1, localhost, ::1)
- *                        OR when REEFLEX_ENV === 'dev'. Any other http:// URL
- *                        is rejected as a misconfiguration; decide() will
- *                        fail-closed.  Default: '' (fail-closed until configured).
+ *                        ONLY for loopback hosts (127.0.0.1, localhost, ::1).
+ *                        Any other http:// URL is rejected; decide() will
+ *                        fail-closed. Developers who need http:// to a
+ *                        non-loopback host must set REEFLEX_CORE_URL as a
+ *                        constant (operator-trusted path), not via the UI.
+ *                        Default: '' (fail-closed until configured).
+ *   REEFLEX_CORE_TOKEN — bearer token for Authorization header. Optional.
+ *                        When defined, it wins over any DB/Settings value and
+ *                        the Settings token field is rendered read-only.
  *   REEFLEX_ENV        — target environment label; default 'production'.
  *   REEFLEX_AGENT_ID   — agent identity string; default 'agent:wordpress'.
- *   REEFLEX_AUDIT_LOG  — absolute filesystem path to the JSONL audit log.
- *                        Default: WP_CONTENT_DIR/reeflex-audit.jsonl
- *                        (outside uploads/ so the file is not web-accessible).
- *   REEFLEX_TIMEOUT    — HTTP timeout in seconds for core requests; default 5.
+ *   REEFLEX_AUDIT_LOG  — absolute path to JSONL audit log.
+ *                        Default: WP_CONTENT_DIR/reeflex-audit.jsonl.
+ *   REEFLEX_TIMEOUT    — HTTP timeout in seconds for /v1/decide; default 5.
  *
  * Security note — no reeflex_core_url filter:
  *   The filter present in v0.1.0 was removed (P1-4). The core URL is a trust
@@ -47,72 +70,147 @@ defined( 'ABSPATH' ) || exit;
 final class Reeflex_Config {
 
 	/**
+	 * DB option name that stores the Settings page values.
+	 *
+	 * @var string
+	 */
+	public const OPTION_NAME = 'reeflex_gate_options';
+
+	/**
 	 * Loopback host patterns that are exempt from the https-only requirement.
 	 *
 	 * @var array<int,string>
 	 */
 	private const LOOPBACK_HOSTS = array( '127.0.0.1', 'localhost', '::1' );
 
+	// ------------------------------------------------------------------
+	// Public getters (decision-path use)
+	// ------------------------------------------------------------------
+
 	/**
 	 * Base URL of the reeflex-core decision engine.
 	 *
-	 * Returns '' when the configured URL is invalid or missing, which causes
-	 * Reeflex_Core_Client::decide() to produce a fail-closed deny — the
-	 * correct response to a misconfigured adapter.
+	 * Precedence:
+	 *   1. REEFLEX_CORE_URL constant (defined + non-empty) — trust anchor.
+	 *   2. DB option reeflex_gate_options['core_url'].
+	 *   3. '' — fail-closed.
 	 *
-	 * Scheme policy (P1-4):
-	 *   https  -> always accepted.
-	 *   http   -> accepted ONLY for loopback hosts or when REEFLEX_ENV='dev'.
-	 *   other  -> rejected; '' returned; error_log warning emitted.
+	 * The same scheme-validation rule is applied to BOTH sources (P1-4):
+	 *   https  → always accepted.
+	 *   http   → accepted ONLY for loopback hosts (127.0.0.1, localhost, ::1).
+	 *   other  → rejected; '' returned; error_log warning emitted.
+	 *   '..'   → rejected (SSRF/traversal guard).
+	 *
+	 * Note: there is NO http-in-dev exception for the DB-sourced value.  A dev
+	 * environment that genuinely needs http:// to a non-loopback host must use
+	 * the REEFLEX_CORE_URL constant (operator-trusted, validated via the same
+	 * sanitize_core_url() but with the constant being an explicit operator act).
+	 *
+	 * Returns '' when the configured URL is invalid or missing, which causes
+	 * Reeflex_Core_Client::decide() to produce a fail-closed deny.
 	 *
 	 * @return string  Validated URL, or '' on misconfiguration.
 	 */
 	public static function core_url(): string {
-		if ( ! defined( 'REEFLEX_CORE_URL' ) || '' === (string) REEFLEX_CORE_URL ) {
-			error_log(
-				'[reeflex] WARN: REEFLEX_CORE_URL is not defined. ' .
-				'All governance decisions will fail-closed until this constant is set in wp-config.php.'
-			);
-			return '';
+		// Source 1: constant (trust anchor).
+		if ( defined( 'REEFLEX_CORE_URL' ) && '' !== (string) REEFLEX_CORE_URL ) {
+			return self::sanitize_core_url( (string) REEFLEX_CORE_URL, 'REEFLEX_CORE_URL (constant)' );
 		}
 
-		$url = (string) REEFLEX_CORE_URL;
+		// Source 2: DB option (Settings page).
+		$options = self::stored_options();
+		$db_url  = isset( $options['core_url'] ) ? (string) $options['core_url'] : '';
 
-		// Reject paths with directory-traversal sequences regardless of source.
-		if ( false !== strpos( $url, '..' ) ) {
-			error_log( '[reeflex] WARN: REEFLEX_CORE_URL contains ".." — rejected as misconfigured.' );
-			return '';
+		if ( '' !== $db_url ) {
+			return self::sanitize_core_url( $db_url, 'reeflex_gate_options[core_url] (settings)' );
 		}
 
-		$scheme = strtolower( (string) parse_url( $url, PHP_URL_SCHEME ) );
-		$host   = strtolower( (string) parse_url( $url, PHP_URL_HOST ) );
-
-		if ( 'https' === $scheme ) {
-			// https is always acceptable.
-			return $url;
-		}
-
-		if ( 'http' === $scheme ) {
-			// http is acceptable ONLY for loopback or dev environment.
-			if ( in_array( $host, self::LOOPBACK_HOSTS, true ) ) {
-				return $url;
-			}
-			if ( 'dev' === self::env() ) {
-				return $url;
-			}
-			error_log(
-				'[reeflex] WARN: REEFLEX_CORE_URL uses http:// with a non-loopback host ' .
-				'in a non-dev environment — rejected (SSRF risk). Use https://.'
-			);
-			return '';
-		}
-
+		// Source 3: no URL configured — fail-closed path.
 		error_log(
-			'[reeflex] WARN: REEFLEX_CORE_URL has an unrecognised scheme "' .
-			esc_html( $scheme ) . '" — rejected as misconfigured.'
+			'[reeflex] WARN: No core URL is configured. ' .
+			'All governance decisions will fail-closed until a URL is set in ' .
+			'wp-config.php (REEFLEX_CORE_URL) or the Reeflex Gate settings page.'
 		);
 		return '';
 	}
+
+	/**
+	 * Bearer token for the Authorization header sent to reeflex-core.
+	 *
+	 * Precedence:
+	 *   1. REEFLEX_CORE_TOKEN constant (defined) — trust anchor.
+	 *   2. DB option reeflex_gate_options['core_token'].
+	 *   3. '' — no Authorization header will be sent.
+	 *
+	 * Security: the token is never logged anywhere in this class.
+	 *
+	 * @return string  Token string, or '' if not configured.
+	 */
+	public static function core_token(): string {
+		// Source 1: constant (trust anchor).
+		if ( defined( 'REEFLEX_CORE_TOKEN' ) ) {
+			return (string) REEFLEX_CORE_TOKEN;
+		}
+
+		// Source 2: DB option (Settings page).
+		$options = self::stored_options();
+		return isset( $options['core_token'] ) ? (string) $options['core_token'] : '';
+	}
+
+	// ------------------------------------------------------------------
+	// Lock-state helpers (used by Settings UI only)
+	// ------------------------------------------------------------------
+
+	/**
+	 * Whether the core URL is locked by a wp-config.php constant.
+	 *
+	 * True when REEFLEX_CORE_URL is defined AND non-empty.  When true the
+	 * Settings field renders read-only; the DB value is ignored at runtime.
+	 *
+	 * @return bool
+	 */
+	public static function core_url_is_locked(): bool {
+		return defined( 'REEFLEX_CORE_URL' ) && '' !== (string) REEFLEX_CORE_URL;
+	}
+
+	/**
+	 * Whether the core token is locked by a wp-config.php constant.
+	 *
+	 * True when REEFLEX_CORE_TOKEN is defined (even if the value is '').
+	 * When true the Settings field renders read-only; the DB value is ignored.
+	 *
+	 * @return bool
+	 */
+	public static function core_token_is_locked(): bool {
+		return defined( 'REEFLEX_CORE_TOKEN' );
+	}
+
+	// ------------------------------------------------------------------
+	// Raw stored option (for pre-filling the Settings form only)
+	// ------------------------------------------------------------------
+
+	/**
+	 * Return the raw stored options array from the DB (unvalidated).
+	 *
+	 * Used only by the Settings UI to pre-fill form fields.  Never use this
+	 * in the decision path — use core_url() and core_token() instead.
+	 *
+	 * @return array{core_url: string, core_token: string}
+	 */
+	public static function stored_options(): array {
+		$raw = get_option( self::OPTION_NAME, array() );
+		if ( ! is_array( $raw ) ) {
+			$raw = array();
+		}
+		return array(
+			'core_url'   => isset( $raw['core_url'] ) ? (string) $raw['core_url'] : '',
+			'core_token' => isset( $raw['core_token'] ) ? (string) $raw['core_token'] : '',
+		);
+	}
+
+	// ------------------------------------------------------------------
+	// Constant-only getters (no Settings UI; unchanged from v0.1.0)
+	// ------------------------------------------------------------------
 
 	/**
 	 * Environment label written into every envelope's target.environment.
@@ -190,5 +288,74 @@ final class Reeflex_Config {
 	 */
 	public static function request_timeout(): int {
 		return defined( 'REEFLEX_TIMEOUT' ) ? (int) REEFLEX_TIMEOUT : 5;
+	}
+
+	// ------------------------------------------------------------------
+	// URL validation — single source of truth (P1 / MED-1)
+	// ------------------------------------------------------------------
+
+	/**
+	 * Validate a URL string against the Reeflex scheme policy.
+	 *
+	 * This is the SINGLE implementation of the URL validation rule used by
+	 * both core_url() (runtime path) and Reeflex_Settings (save path).
+	 * Having one implementation prevents the two from diverging.
+	 *
+	 * Rule (P1 — no http-in-dev exception):
+	 *   https         → always accepted.
+	 *   http loopback → accepted (127.0.0.1, localhost, ::1 only).
+	 *   http other    → rejected unconditionally (SSRF / token-exfiltration risk).
+	 *   '..'          → rejected (traversal guard).
+	 *   other scheme  → rejected.
+	 *
+	 * Rationale for removing the REEFLEX_ENV==='dev' exception:
+	 *   A dev-env deployment that has no REEFLEX_CORE_URL constant and uses the
+	 *   Settings page could be pointed at http://attacker-controlled-host, causing
+	 *   the bearer token to be POSTed there.  The exception is therefore a
+	 *   token-exfiltration vector.  Developers who genuinely need http:// to a
+	 *   non-loopback host must set REEFLEX_CORE_URL as a wp-config.php constant
+	 *   (an explicit, operator-privileged act), not through the Settings UI.
+	 *
+	 * Returns '' on rejection, which causes decide() to fail-closed.
+	 *
+	 * @param  string $url     The URL to validate.
+	 * @param  string $source  Human-readable source label for the error_log message.
+	 * @return string          Validated URL or '' on rejection.
+	 */
+	public static function sanitize_core_url( string $url, string $source = 'reeflex' ): string {
+		// Reject directory-traversal sequences regardless of source.
+		if ( false !== strpos( $url, '..' ) ) {
+			error_log(
+				'[reeflex] WARN: ' . $source . ' contains ".." — rejected as misconfigured.'
+			);
+			return '';
+		}
+
+		$scheme = strtolower( (string) parse_url( $url, PHP_URL_SCHEME ) );
+		$host   = strtolower( (string) parse_url( $url, PHP_URL_HOST ) );
+
+		if ( 'https' === $scheme ) {
+			// https is always acceptable.
+			return $url;
+		}
+
+		if ( 'http' === $scheme ) {
+			// http is acceptable ONLY for loopback hosts — no dev-env exception.
+			if ( in_array( $host, self::LOOPBACK_HOSTS, true ) ) {
+				return $url;
+			}
+			error_log(
+				'[reeflex] WARN: ' . $source . ' uses http:// with a non-loopback host — ' .
+				'rejected (SSRF / token-exfiltration risk). Use https://, or set ' .
+				'REEFLEX_CORE_URL as a wp-config.php constant for non-loopback http://.'
+			);
+			return '';
+		}
+
+		error_log(
+			'[reeflex] WARN: ' . $source . ' has an unrecognised scheme "' .
+			$scheme . '" — rejected as misconfigured.'
+		);
+		return '';
 	}
 }

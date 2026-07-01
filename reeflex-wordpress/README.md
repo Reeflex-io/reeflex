@@ -87,19 +87,36 @@ Full install steps for both methods: [INSTALL.md](INSTALL.md).
 
 ## Configuration
 
-All configuration is read from PHP constants defined in `wp-config.php`.
+### Settings page (standard plugin install)
+
+When installed as a standard plugin, **Settings > Reeflex Gate** provides a
+two-field admin page:
+
+- **API URL** — the base URL of your reeflex-core instance. Mandatory; without
+  it Reeflex fails closed on every action.
+- **Token** — the bearer token for the Authorization header. Optional.
+
+Settings are stored in `wp_options` under the option `reeflex_gate_options`.
+
+### wp-config.php constants
+
+Constants defined in `wp-config.php` always take precedence over the Settings
+page values and lock those fields read-only. Use constants for production
+deployments where you need a server-side trust anchor an admin cannot override.
 No secrets are accepted inline — reference them via environment or Vault.
 
 | Constant             | Required     | Default                                    | Description |
 |----------------------|--------------|--------------------------------------------|-------------|
-| `REEFLEX_CORE_URL`   | **Yes**      | `''` (fail-closed until set)              | Base URL of `reeflex-core`. Must be `https://` in production. `http://` is accepted only for loopback hosts (`127.0.0.1`, `localhost`, `::1`) or when `REEFLEX_ENV=dev`. Any other `http://` URL is rejected as a misconfiguration and every call fails closed. No filter override is possible (the URL is a trust anchor; a later-loading plugin cannot redirect decisions). |
+| `REEFLEX_CORE_URL`   | **Yes**      | `''` (fail-closed until set)              | Base URL of `reeflex-core`. Must be `https://` in production. `http://` is accepted only for loopback hosts (`127.0.0.1`, `localhost`, `::1`). Any other `http://` URL is rejected unconditionally and every call fails closed. No filter override is possible (the URL is a trust anchor; a later-loading plugin cannot redirect decisions). |
 | `REEFLEX_ENV`        | No           | `production`                               | Environment label written into every envelope's `target.environment`. Values: `production`, `staging`, `dev`. |
 | `REEFLEX_AGENT_ID`   | No           | `agent:wordpress`                          | Agent identity string for `agent.id` in the envelope. |
 | `REEFLEX_AUDIT_LOG`  | No           | `WP_CONTENT_DIR/reeflex-audit.jsonl`      | Absolute filesystem path for the append-only JSONL audit log. The default is outside `uploads/` so the file is not web-accessible. Paths containing `..` are rejected; a path inside `uploads/` generates a warning. |
 | `REEFLEX_TIMEOUT`    | No           | `5`                                        | HTTP timeout in seconds for `POST /v1/decide`. Short is correct — the fail-closed path fires on timeout; a long timeout only delays the deny. |
 
-`REEFLEX_CORE_URL` has no built-in default remote host. If the constant is
-unset, every decision fails closed immediately. Set it explicitly.
+`REEFLEX_CORE_URL` has no built-in default remote host. If neither the constant
+nor the Settings page value is set, every decision fails closed immediately.
+Set it explicitly — via the Settings page for a standard plugin install, or via
+the constant for a mu-plugin install or any production deployment.
 
 ---
 

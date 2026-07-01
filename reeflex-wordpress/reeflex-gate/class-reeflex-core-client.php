@@ -57,10 +57,21 @@ final class Reeflex_Core_Client {
 			return self::fail_closed( 'envelope JSON encoding failed' );
 		}
 
+		// Build request headers.
+		// The token is fetched here, stripped of control characters as defense-in-depth
+		// against CRLF/NUL header injection (MED-2), used once, and never logged (P2-13).
+		$headers = array( 'Content-Type' => 'application/json' );
+		$token   = (string) preg_replace( '/[\x00-\x1F\x7F]/', '', Reeflex_Config::core_token() );
+		if ( '' !== $token ) {
+			$headers['Authorization'] = 'Bearer ' . $token;
+		}
+		// $token is discarded after this point; it is not recorded in any log.
+		unset( $token );
+
 		$response = wp_remote_post(
 			$url,
 			array(
-				'headers'     => array( 'Content-Type' => 'application/json' ),
+				'headers'     => $headers,
 				'body'        => $body,
 				'timeout'     => Reeflex_Config::request_timeout(),
 				'redirection' => 0,    // never follow redirects on the decision endpoint

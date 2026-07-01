@@ -65,9 +65,9 @@ wp-content/
 
    ```php
    // Required — base URL of your reeflex-core instance.
-   // https:// is required in production.
-   // http:// is accepted only for loopback (127.0.0.1, localhost, ::1)
-   // or when REEFLEX_ENV is 'dev'.
+   // https:// is always accepted.
+   // http:// is accepted only for loopback hosts (127.0.0.1, localhost, ::1).
+   // Any other http:// URL is rejected unconditionally; decide() fails closed.
    define( 'REEFLEX_CORE_URL', 'https://your-reeflex-core-host' );
 
    // Optional — defaults shown.
@@ -229,9 +229,17 @@ unchanged when proxying allowed requests to WordPress.
 
 ## Configuration reference
 
-See [README.md](README.md#configuration) for the full constants table.
+**Standard plugin install:** go to **Settings > Reeflex Gate** in wp-admin. The
+page has two fields — API URL (mandatory) and Token (optional). Settings are
+stored in `wp_options` under `reeflex_gate_options`.
 
-Quick reference for `wp-config.php` (Method 1):
+**All install methods:** `wp-config.php` constants always take precedence over
+the Settings page and lock those fields read-only. Use constants for any
+production deployment. See [README.md](README.md#configuration) for the full
+constants table.
+
+Quick reference for `wp-config.php` (required for mu-plugin; overrides Settings
+page for standard plugin):
 
 ```php
 define( 'REEFLEX_CORE_URL', 'https://your-reeflex-core-host' );  // required
@@ -245,9 +253,14 @@ define( 'REEFLEX_TIMEOUT',  5 );                                   // optional
 
 ## Security notes
 
-- `REEFLEX_CORE_URL` must use `https://` in production. The adapter rejects
-  any `http://` URL that is not a loopback address or in a `dev` environment,
-  returning a fail-closed deny to prevent SSRF.
+- `REEFLEX_CORE_URL` must use `https://`. The adapter rejects any `http://` URL
+  whose host is not a loopback address (127.0.0.1, localhost, ::1), regardless
+  of environment. This restriction is unconditional — there is no dev-mode
+  exception — because permitting `http://` to arbitrary hosts is an SSRF and
+  token-exfiltration risk. Developers who genuinely need `http://` to a
+  non-loopback host must define `REEFLEX_CORE_URL` as a wp-config.php constant
+  (an explicit, operator-privileged act); they cannot use the Settings page for
+  this.
 - The audit log must not be web-accessible. The safe default path is
   `WP_CONTENT_DIR/reeflex-audit.jsonl`, outside `uploads/`.
 - Never set credentials (Application Passwords, Vault tokens) as PHP

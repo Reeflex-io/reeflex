@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<ruleset name="Reeflex Gate">
+    <description>WordPress Coding Standards ruleset for the Reeflex Gate plugin.</description>
+
+    <!-- Scan only the plugin PHP source; skip tests and the PHPCS config itself. -->
+    <file>reeflex-gate.php</file>
+    <file>uninstall.php</file>
+    <file>reeflex-gate/</file>
+
+    <exclude-pattern>tests/*</exclude-pattern>
+    <exclude-pattern>vendor/*</exclude-pattern>
+
+    <!-- Target PHP 7.4+ syntax. -->
+    <config name="testVersion" value="7.4-"/>
+
+    <!-- WordPress + extras (superset of WordPress-Core + WordPress-Docs). -->
+    <rule ref="WordPress"/>
+    <rule ref="WordPress-Extra"/>
+
+    <!-- i18n: enforce literal text-domain 'reeflex-gate' in all gettext calls. -->
+    <rule ref="WordPress.WP.I18n">
+        <properties>
+            <property name="text_domain" type="array">
+                <element value="reeflex-gate"/>
+            </property>
+        </properties>
+    </rule>
+
+    <!-- Prefix allowlist: all global symbols must be prefixed with Reeflex/reeflex/REEFLEX. -->
+    <rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+        <properties>
+            <property name="prefixes" type="array">
+                <element value="Reeflex"/>
+                <element value="reeflex"/>
+                <element value="REEFLEX"/>
+            </property>
+        </properties>
+    </rule>
+
+</ruleset>
