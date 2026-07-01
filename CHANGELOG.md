@@ -23,7 +23,7 @@ API hardening ahead of network exposure. The decision path is unchanged.
 
 ### Notes
 - Decision path unchanged: determinism, fail-closed on OPA error, the five reference behaviors, and the
-  43/43 engine + 9/9 policy tests all hold. Auth is off by default, so adapters and demos are unaffected.
+  55/55 engine + 9/9 policy tests all hold. Auth is off by default, so adapters and demos are unaffected.
 - TLS termination, rate limiting, and DNS are handled at the deployment edge (reverse proxy), not in-engine.
 
 ## [0.1.0] - Unreleased
@@ -38,7 +38,7 @@ First public preview: the deterministic decision engine, its contract, a referen
   fail-closed conservative defaults (non-canonical axis values coerce to most-restrictive), strict
   `magnitude.count`, required `agent.session_id`, a per-session cumulative ledger with a fragmentation
   guard (SPEC §4.1), and an append-only JSONL audit. Fail-closed on any OPA error — never `allow`.
-  Zero LLM in the decision path. 43/43 engine tests; 9/9 policy tests.
+  Zero LLM in the decision path. 55/55 engine tests; 9/9 policy tests.
 - **Base policy pack (R1–R5)** — read-only-internal → allow; irreversible + broad + production →
   require_approval; irreversible + systemic + production → deny; default allow; session delete-budget
   fragmentation guard.
@@ -54,6 +54,7 @@ First public preview: the deterministic decision engine, its contract, a referen
 
 ### Notes
 - v0.1 is an early preview. Cryptographic signing of envelopes and audit records, a Postgres-backed
-  audit/ledger, the production WordPress adapter, the hosted tier, and an approval workflow are on the
-  roadmap (see [ROADMAP.md](ROADMAP.md)) — not yet built.
+  audit/ledger, a live WordPress install on a real instance, the hosted tier, and an approval workflow are on the
+  roadmap (see [ROADMAP.md](ROADMAP.md)) — not yet built. The Claude Code and WordPress reference adapters
+  are included and conformance-tested.
 - `reeflex-spec/` is the maintained source of truth for the Action Envelope, Adapter Contract, and conformance requirements.

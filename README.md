@@ -182,9 +182,11 @@ A recorded asciicast/GIF is planned.
 
 **What works today:**
 
-- `reeflex-core` `/v1/decide` engine: Python + OPA/Rego, 43/43 unit tests passing
+- `reeflex-core` `/v1/decide` engine: Python + OPA/Rego, 55/55 unit tests passing
 - Policy pack: 9/9 `opa test` passing; rules cover read-only allow, irreversible-broad-production require_approval, session delete-budget (fragmentation resistance), fail-closed
 - Mock adapter + demo: 5/5 scenarios passing end-to-end with store before/after read-back
+- **Claude Code adapter** (`reeflex-claude`): PreToolUse hook governing tool calls at the source; 133 unit tests; demo blocks `rm -rf /` and force-push
+- **WordPress adapter** (`reeflex-wordpress`): must-use plugin at the Abilities API seam; conformance demo passes end-to-end against a live core (read→allow, bulk force-delete→hold, systemic→deny, forged approval→still held, fail-closed)
 - Fail-closed: guaranteed on any OPA error or core unreachability, no silent allow
 - Anti-fragmentation: cumulative per-session ledger defeats split-batch evasion (SPEC §4.1)
 - Envelope signing: specified in SPEC, stubbed in v0.1 (full ed25519 signing is roadmap)
@@ -193,7 +195,8 @@ A recorded asciicast/GIF is planned.
 
 - Ed25519 envelope and audit-record signing (Vault-backed key management)
 - Audit persistence in Postgres (current: append-only JSONL)
-- reeflex-wordpress adapter (reference implementation against the spec)
+- Live WordPress install on a real instance (adapter is conformance-tested; live deploy is the next step)
+- Database (`reeflex-postgres` wire-proxy) and GraphQL adapters — decision logic exists; these are adapter surfaces
 - Hosted / subscription variant (Variant B): engine operated by Reeflex at reeflex.io
 - Multi-tenancy, authentication, billing (commercial tier, never in this repo)
 - EU/RO compliance pack: NIS2/DORA/GDPR reporting, ANAF/SmartBill integrations (commercial tier, never in this repo)
@@ -211,9 +214,11 @@ See [ROADMAP.md](ROADMAP.md) for the full list.
 
 ## Architecture and spec
 
+- [**Architecture whitepaper (PDF)**](docs/Reeflex_Architecture.pdf) — a visual walkthrough of the decision model, how impact is computed, integration, and five real use cases (WordPress, databases, GraphQL, chatbots, generic APIs)
 - [docs/architecture.md](docs/architecture.md) — decision flow and deployment variants (Variant B clearly marked planned); Mermaid source for the diagrams above
 - [docs/adr/](docs/adr/) — architecture decision records, including [ADR-0001: Deployment Model](docs/adr/0001-deployment-model.md) (engine-as-service, open-core, on-prem-first; hosted = roadmap)
 - [reeflex-spec/SPEC.md](reeflex-spec/SPEC.md) — Action Envelope, Adapter Contract, conformance requirements
+- [reeflex-spec/IMPACT-MODEL.md](reeflex-spec/IMPACT-MODEL.md) — how impact is computed (the three layers, concrete mappings, and the honest structure-vs-magnitude note)
 
 ---
 

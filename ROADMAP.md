@@ -1,29 +1,28 @@
 # Reeflex Roadmap
 
-Everything on this page is **planned and not yet built**. Nothing here
-describes a delivered or currently available capability. Current state of
-the project is in [CHANGELOG.md](CHANGELOG.md).
+This page describes work that is **planned or in progress**, not yet fully
+delivered. For what already ships and is tested today — including the
+`reeflex-core` engine and the Claude Code and WordPress reference adapters —
+see [CHANGELOG.md](CHANGELOG.md) and the component READMEs.
 
 ---
 
 ## Adapters
 
-### WordPress adapter (planned — not built)
+### WordPress adapter — live deployment (in progress)
 
-A production-grade WordPress adapter implementing the full SPEC §6 adapter
-contract against the WordPress Abilities API and the official MCP Adapter.
-This will replace `reeflex-mock/` as the reference implementation.
+The WordPress adapter itself is **built and conformance-tested**: a must-use
+plugin that intercepts at the Abilities API seam (`WP_Ability::execute()` via
+`wp_register_ability_args`), normalizes abilities into the Action Envelope
+(verb + 3 axes + stable `session_id`), enforces decisions faithfully, emits
+audit records, and passes the conformance demo end-to-end against a live core.
+See [`reeflex-wordpress/`](reeflex-wordpress/).
 
-- Hook into the WordPress MCP Adapter / Abilities API boundary.
-- Normalize WordPress Abilities into the Action Envelope (verb + 3 axes +
-  stable `session_id`).
-- Enforce decisions faithfully (allow / deny / require_approval) before
-  dispatch.
-- Emit per-decision audit records.
-- Pass the full conformance suite (SPEC §7).
+What remains is the **live deployment milestone**:
 
-`reeflex-mock/` is the current worked example for adapter authors; it uses
-an in-memory store rather than WordPress.
+- A documented install on a real WordPress instance, with hooks firing on
+  actual posts (before/after on real data), not just the stubbed conformance harness.
+- WooCommerce-specific coverage (orders, refunds, bulk product edits).
 
 ### Community adapters (planned — not built)
 

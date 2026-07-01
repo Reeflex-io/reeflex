@@ -1,14 +1,23 @@
 # Reeflex — Deterministic Governance for AI-Agent Actions
 
-> **Governance that isn't another AI.** A deterministic gate that decides what
-> an AI agent is allowed to do — across any backend — before the action runs.
+> **A seatbelt for the AI acting on your systems.** A deterministic gate that
+> decides what an AI agent is allowed to do — across any backend — before the
+> action runs.
 
-Reeflex is a governance layer that sits between AI agents and the systems they
-act on. When an agent tries to do something — delete a record, send an email,
-execute a transaction — Reeflex intercepts the request, evaluates it against
-a deterministic policy, and returns one of three decisions: **allow**, **deny**,
-or **require_approval**. The decision is made by OPA/Rego + classical logic.
-Zero LLM in the decision path.
+AI agents can now write to your database, edit your store, send your emails.
+That's wonderful — until the day one of them gets it catastrophically wrong.
+Reeflex sits between AI agents and the systems they act on. When an agent tries
+to do something — delete a record, send an email, execute a transaction — Reeflex
+intercepts the request, evaluates it against a deterministic policy, and returns
+one of three decisions: **allow**, **deny**, or **require_approval**. The decision
+is made by OPA/Rego + classical logic. **Zero LLM in the decision path.**
+
+### 💚 We love open source — so the core is free, forever
+
+The engine, the specification, the policy language, the reference adapters — all
+**Apache-2.0**, yours to run, fork, and build on. No lock-in, no metering on the
+decision path, no asterisks. Safety infrastructure should belong to everyone who
+needs it. We'd rather earn your trust than trap it.
 
 ---
 
@@ -63,7 +72,7 @@ The following components are built, tested, and available:
   `deny`, never `allow`.
 - Append-only JSONL audit of every decision.
 - Per-session cumulative action ledger for fragmentation resistance (SPEC §4.1).
-- 43/43 Python unit tests passing; 9/9 OPA policy tests passing.
+- 55/55 Python unit tests passing; 9/9 OPA policy tests passing.
 
 **Base policy pack (R1–R5)**
 - R1 — allow read-only internal actions.
@@ -72,6 +81,25 @@ The following components are built, tested, and available:
 - R4 — default allow when no high-risk rule fires.
 - R5 — session delete budget: cumulative deletes exceeding 20 items per session
   require approval (fragmentation guard, SPEC §4.1).
+
+**`reeflex-claude` — Claude Code adapter (reference, conformance-tested)**
+- A PreToolUse hook that governs Claude Code tool calls (Bash, Write, Edit, …)
+  at the source: intercept → classify into an Action Envelope → decide → enforce.
+- Pure classification logic (`classify.py`) mapping shell/SQL/file operations to
+  the three axes: `rm -rf /` → irreversible+systemic, `DROP TABLE` → irreversible+broad, etc.
+- 133 unit tests passing; end-to-end demo blocks `rm -rf /` and force-push.
+
+**`reeflex-wordpress` — WordPress adapter (reference, conformance-tested)**
+- A must-use plugin that intercepts at the WordPress Abilities API seam
+  (`WP_Ability::execute()` via `wp_register_ability_args`), normalizes the
+  action into an Action Envelope, calls core, and enforces the verdict.
+- A normalizer (`class-reeflex-normalizer.php`) that computes verb + three axes
+  from the ability name and input, with a strict rule: agent-supplied input may
+  only *raise* risk, never lower it (a forged approval flag cannot bypass a hold).
+- Passes the WordPress conformance demo end-to-end against a live core: read →
+  allow, bulk force-delete → hold, systemic delete → deny, forged approval →
+  still held, fail-closed when core is unreachable.
+- Live install on a real WordPress instance is the next step (see ROADMAP.md).
 
 **`reeflex-mock` — reference adapter + demo**
 - A runnable mock adapter (`adapter.py`) demonstrating all four adapter
@@ -86,22 +114,25 @@ The following components are built, tested, and available:
 
 ## What is planned (not yet built)
 
-**WordPress adapter** — A production-grade Reeflex adapter for WordPress,
-implementing the SPEC §6 contract against the WordPress 6.9 Abilities API and
-the official MCP Adapter. `reeflex-wordpress/` is currently a scaffold only.
-See [ROADMAP.md](../ROADMAP.md).
+**Live WordPress deployment** — The WordPress adapter is conformance-tested
+against a live core (see above); the remaining step is a documented install on a
+real WordPress instance with hooks firing on actual posts. See [ROADMAP.md](../ROADMAP.md).
 
 **WooCommerce, content, and user policy packs** — Framework Rego rule sets
 targeting WordPress-specific abilities (bulk operations, media upload limits,
 role escalation guards, WooCommerce financial gates). See
 [ROADMAP.md](../ROADMAP.md).
 
-**Community adapters** — `reeflex-postgres`, `reeflex-s3`, and others.
-See [ROADMAP.md](../ROADMAP.md).
+**Database & GraphQL adapters** — `reeflex-postgres` (a wire-protocol proxy that
+computes real row-impact before forwarding) and a GraphQL resolver hook. The
+decision logic already exists; these are adapter surfaces. See
+[ROADMAP.md](../ROADMAP.md).
 
-**Hosted / subscription tier** — Variant B of the deployment model, where
-the client installs a thin adapter and calls a Reeflex-operated engine over
-HTTPS. Not built; not available today. See
+**Community adapters** — `reeflex-s3` and others, built against this spec.
+
+**Hosted / subscription tier** — A Reeflex-operated engine plus curated,
+regulation-mapped policy packs (GDPR / NIS2 / WooCommerce) and managed policy
+distribution. The open core never depends on it. See
 [docs/adr/0001-deployment-model.md](../docs/adr/0001-deployment-model.md).
 
 ---

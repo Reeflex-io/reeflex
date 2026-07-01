@@ -29,7 +29,8 @@ reeflex-core/         # decision engine: POST /v1/decide (Python + OPA/Rego)
 reeflex-spec/         # SPEC.md (Action Envelope + Adapter Contract) + JSON schemas
   ADAPTER-EXAMPLES.md # worked adapter implementations (WordPress reference, Postgres)
 reeflex-mock/         # mock adapter + end-to-end demo (worked example for adapter authors)
-reeflex-wordpress/    # WordPress reference adapter (planned — see ROADMAP.md)
+reeflex-claude/       # Claude Code adapter (reference, conformance-tested)
+reeflex-wordpress/    # WordPress adapter (reference, conformance-tested)
 docs/adr/             # Architecture Decision Records
 QUICKSTART.md         # 10-minute walkthrough from zero to watching core stop a bulk delete
 INSTALL.md            # OPA installation instructions (per OS)
