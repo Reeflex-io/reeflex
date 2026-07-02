@@ -25,8 +25,25 @@ continue the tool anyway -- silent allow).
 
 ## Install / wire up
 
-1. Set environment variables (see below).
-2. Add to your Claude Code `settings.json`:
+**1. Get the code.** The adapter is plain Python (stdlib only, no pip install) and
+lives in this repository:
+
+```bash
+git clone https://github.com/Reeflex-io/reeflex.git
+cd reeflex/reeflex-claude
+```
+
+(Or download the source from the [latest release](https://github.com/Reeflex-io/reeflex/releases)
+and unpack it — the adapter is the `reeflex-claude/` directory.)
+
+**2. Have a reachable core.** Either run `reeflex-core` locally
+(`docker compose up -d` from the repo root gives you `http://127.0.0.1:8080`)
+or point at an existing deployment.
+
+**3. Wire the hook into Claude Code.** Add to your Claude Code `settings.json`
+(a full sample is in [`examples/settings.sample.json`](examples/settings.sample.json)) —
+use the **absolute path** to `hook_entry.py` so it works regardless of the
+working directory Claude Code runs from:
 
 ```json
 {
@@ -37,7 +54,7 @@ continue the tool anyway -- silent allow).
         "hooks": [
           {
             "type": "command",
-            "command": "python -m reeflex_claude",
+            "command": "python /absolute/path/to/reeflex/reeflex-claude/hook_entry.py",
             "timeout": 30
           }
         ]
@@ -47,10 +64,11 @@ continue the tool anyway -- silent allow).
 }
 ```
 
-Or use the top-level shim:
-```json
-"command": "python /absolute/path/to/reeflex-claude/hook_entry.py"
-```
+(`python -m reeflex_claude` also works, but only if Claude Code's working
+directory is `reeflex-claude/` — the absolute-path form is the reliable one.)
+
+**4. Set the environment variables** (below) and restart Claude Code. From the
+next tool call on, every action passes through the gate.
 
 ## Environment variables
 

@@ -1,0 +1,34 @@
+# Reeflex
+
+> A seatbelt for the AI acting on your systems. Reeflex is a deterministic,
+> open-source (Apache-2.0) governance gate that decides — before an AI agent's
+> action reaches your data — whether it is safe to run, needs a human, or must
+> be blocked. Decisions are made by OPA/Rego on computed impact (reversibility,
+> blast radius, externality, cumulative session state). Zero LLM in the
+> decision path: same action in, same decision out, every time, with an
+> append-only audit record either way.
+
+Reeflex governs at the resource, on impact — complementary to source-side
+agent-governance platforms (identity/authorization), not a replacement for
+them. Reference adapters ship for WordPress/WooCommerce (standard plugin and
+mu-plugin) and Claude Code; any backend can be covered by implementing the
+public adapter contract: intercept → normalize → enforce → audit.
+
+## Docs
+
+- [README](README.md): what Reeflex is, deploy on-prem in one command, usage
+- [Quickstart](QUICKSTART.md): clone to a working demo in under 10 minutes
+- [Specification](reeflex-spec/SPEC.md): the Action Envelope and Adapter Contract
+- [Impact model](reeflex-spec/IMPACT-MODEL.md): how impact is computed, in depth
+- [WordPress adapter](reeflex-wordpress/README.md): install from the wp-admin UI or as a mu-plugin
+- [Claude Code adapter](reeflex-claude/README.md): gate every Claude Code tool call
+- [Open-core boundary](docs/open-core.md): everything that keeps you safe is free, forever
+- [Architecture whitepaper (PDF)](docs/Reeflex_Architecture.pdf): visual walkthrough and use cases
+- [Roadmap](ROADMAP.md): what is planned vs. what ships today
+- [Contributing](CONTRIBUTING.md): new adapters and policy packs are genuinely welcome
+
+## Optional
+
+- [Architecture notes](docs/architecture.md): decision flow and deployment variants
+- [ADR-0002](docs/adr/0002-no-llm-in-decision-path.md): why there is no LLM in the decision path
+- [Verification tool](reeflex-verify/README.md): fire real actions at a live install and see allow/hold/deny

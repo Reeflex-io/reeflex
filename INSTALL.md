@@ -104,7 +104,7 @@ environment.
 ### 1. Clone the repository
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/Reeflex-io/reeflex.git
 cd reeflex
 ```
 

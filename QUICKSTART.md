@@ -7,6 +7,17 @@ production, with no prior knowledge of the codebase.
 
 ---
 
+## Step 0 — get the code (30 seconds)
+
+```bash
+git clone https://github.com/Reeflex-io/reeflex.git
+cd reeflex
+```
+
+All commands below run from this directory (the repo root).
+
+---
+
 ## Prerequisites check (2 minutes)
 
 Open a terminal in the repo root and run the following:
@@ -374,4 +385,21 @@ responsibilities map directly to these functions:
 The decision path (`POST /v1/decide`) is OPA/Rego plus classical logic. There
 is no LLM in this path. Free text, markdown, and OKF files are never decision
 inputs. The same envelope in produces the same decision out, every time.
-Governance that is not another AI.
+
+---
+
+## Where to next
+
+You just watched a deterministic gate stop a bulk delete, defeat fragmentation,
+and fail closed — in under ten minutes, on your own machine. That is the whole
+product in miniature.
+
+- Put it in front of something real: the [WordPress adapter](reeflex-wordpress/)
+  installs from the wp-admin UI in minutes.
+- Point Claude Code at it: the [Claude Code adapter](reeflex-claude/) gates
+  every tool call.
+- Build your own adapter: the [SPEC](reeflex-spec/SPEC.md) is deliberately
+  simple — one envelope shape, four responsibilities — and
+  [contributions are genuinely welcome](CONTRIBUTING.md).
+
+*Reeflex — a seatbelt for the AI acting on your systems.*

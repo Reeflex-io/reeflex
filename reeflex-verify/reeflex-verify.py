@@ -25,6 +25,7 @@ import base64
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -95,22 +96,38 @@ class WPClient:
         headers = {
             "Authorization": self.auth_header,
             "Accept": "application/json",
+            # Some hosts (cPanel mod_security / anti-bot WAFs) reset or cancel
+            # connections from non-browser User-Agents like "Python-urllib".
+            # Present a browser UA so an operator's own site is not blocked.
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
         }
         if body is not None:
             data = json.dumps(body).encode()
             headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        try:
-            resp = urllib.request.urlopen(req, timeout=self.timeout, context=self.ssl_ctx)
-            raw = resp.read()
-            status = resp.status
-        except urllib.error.HTTPError as e:
-            raw = e.read()
-            status = e.code
-        except urllib.error.URLError as e:
-            return 0, {"__neterror__": str(e.reason)}
-        except Exception as e:  # noqa: BLE001
-            return 0, {"__neterror__": str(e)}
+
+        # Retry transient transport failures (TLS reset / dropped connection) that a
+        # WAF or rate-limit can cause; an HTTP status (incl. 4xx/5xx) is a final answer.
+        last_err = None
+        raw = b""
+        status = 0
+        for attempt in range(3):
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+            try:
+                resp = urllib.request.urlopen(req, timeout=self.timeout, context=self.ssl_ctx)
+                raw = resp.read()
+                status = resp.status
+                break
+            except urllib.error.HTTPError as e:
+                raw = e.read()
+                status = e.code
+                break
+            except Exception as e:  # noqa: BLE001  (URLError / RemoteDisconnected / reset / timeout)
+                last_err = e
+                if attempt < 2:
+                    time.sleep(2)
+                    continue
+                return 0, {"__neterror__": str(getattr(e, "reason", e))}
 
         try:
             parsed = json.loads(raw.decode() or "null")
