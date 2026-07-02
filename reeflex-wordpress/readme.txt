@@ -4,7 +4,7 @@ Tags: security, governance, ai, mcp, abilities
 Requires at least: 6.9
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 0.1.0
+Stable tag: 0.1.1
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
