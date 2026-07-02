@@ -211,4 +211,4 @@ themselves are open; the commercial reporting layer is closed.
 
 ---
 
-*Reeflex — governance that isn't another AI.*
+*Reeflex — a seatbelt for the AI acting on your systems.*

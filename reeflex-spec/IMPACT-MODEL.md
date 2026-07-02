@@ -101,6 +101,15 @@ the adapter — computes this. The adapter's only extra duty is to supply a stab
 `session_id`. This is how "delete 5, one hundred times" trips the same budget as
 "delete 500": fragmentation buys nothing.
 
+> **Deliberate strictness, worth knowing:** once a session has exceeded its
+> delete budget, the base policy holds *every* subsequent action from that
+> session — including reads — until it is approved or the rolling window
+> (default 3600 s) expires. The posture is "a session that tried to fragment
+> is a suspicious session." If you are testing repeatedly, use a fresh
+> `session_id` per run (the `reeflex-verify` tool does this for you).
+> Narrowing the post-budget hold to destructive verbs only is an open policy
+> decision; either way, you can tune or replace R5 in your own Rego pack.
+
 ---
 
 ## Layer 3 — The verdict (the policy)
@@ -167,4 +176,4 @@ real impact can be computed rather than trusted.
 | What's the hard part? | Real row-count magnitude — reliable only at the resource, which is why we govern there. |
 | Is it built? | Yes, in two reference adapters (Claude Code, WordPress). Database/GraphQL magnitude is the next adapter surface. |
 
-*Reeflex — a deterministic gate, not another AI.*
+*Reeflex — a seatbelt for the AI acting on your systems.*

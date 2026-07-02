@@ -287,12 +287,16 @@ When core returns `allow` with obligations, the adapter:
 
 **Proven:**
 - Adapter code (all five classes in `reeflex-gate/`) is written and code-reviewed.
+- **Validated live, end-to-end, on a real WordPress install**: the standard
+  plugin installed from the release zip, configured through the Settings page
+  against a live `reeflex-core`, with real actions fired via the
+  [`reeflex-verify`](../reeflex-verify/) tool — all five scenarios decided as
+  expected (read → allow, single delete → allow, bulk force-delete → hold,
+  ≥20-item delete → hold, site-wide delete → deny) and enforced in WordPress.
 - Offline conformance harness (`tests/conformance-demo.php`) runs the real
   adapter classes against a live `reeflex-core` with WordPress stubbed. All
   seven scenarios pass. Fail-closed behaviour against a dead port is verified.
   See [DEMO.md](DEMO.md) for the full output.
-- The in-WordPress live demo (hooks firing inside a real WordPress install,
-  before/after verification on actual posts) is described in [DEMO.md](DEMO.md).
 
 **v0.1 roadmap items (not yet implemented):**
 - `meta.signature` in the Action Envelope is a stub (`ed25519:stub:...`).
@@ -314,4 +318,4 @@ When core returns `allow` with obligations, the adapter:
 
 ---
 
-*Reeflex — governance that isn't another AI.*
+*Reeflex — a seatbelt for the AI acting on your systems.*

@@ -206,4 +206,4 @@ Rejected for three reasons:
 
 ---
 
-*Reeflex — governance that isn't another AI.*
+*Reeflex — a seatbelt for the AI acting on your systems.*

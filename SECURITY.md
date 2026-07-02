@@ -88,4 +88,4 @@ is noted in the spec (SPEC §6) and the ROADMAP.
 
 ---
 
-*Reeflex — governance that isn't another AI.*
+*Reeflex — a seatbelt for the AI acting on your systems.*

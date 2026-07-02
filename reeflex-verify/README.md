@@ -75,11 +75,20 @@ decide in a production environment:
 | read a test item | **ALLOW** | read-only, no risk |
 | delete 1 item (soft) | **ALLOW** | single, recoverable |
 | bulk delete 50 (force) | **HOLD** | irreversible + broad in production |
-| bulk delete 25 (soft, ≥20) | **HOLD** | ≥20 items counts as irreversible |
+| bulk delete 25 (soft) | **HOLD** | crosses the 20-item per-session delete budget — the **anti-fragmentation rule**: splitting a big delete into small batches doesn't evade the gate, the budget is cumulative per session |
 | delete ALL site data (force) | **DENY** | systemic blast radius — denied outright |
+
+The tool uses a **fresh session for every run**, so repeated runs don't inherit
+the previous run's cumulative budget. (That budget is a feature, not a quirk —
+see the [impact model](../reeflex-spec/IMPACT-MODEL.md) — but it would make
+back-to-back test runs report false mismatches.)
 
 A run where all five match tells you the gate is intercepting and deciding
 correctly on **your** site. The tool exits `0` on a full match, `1` otherwise.
+
+An actual clean run against a live WordPress site — all five verdicts match:
+
+![reeflex-verify output: five WordPress actions, five matching verdicts (ALLOW, ALLOW, HOLD, HOLD, DENY)](../docs/img/reeflex-verify-output.png)
 
 > The "delete" actions are decided by Reeflex **before** the callback runs, so
 > the HOLD and DENY cases never touch anything. The ALLOW cases run against the

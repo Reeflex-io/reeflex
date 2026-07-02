@@ -249,4 +249,4 @@ The core and the contract are the product. Adapters are the ecosystem — `reefl
 
 ---
 
-*Reeflex — a deterministic gate, not another AI. Governance for any agent action, on any backend.*
+*Reeflex — a seatbelt for the AI acting on your systems. Deterministic governance for any agent action, on any backend.*

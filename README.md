@@ -1,13 +1,25 @@
+<div align="center">
+
 # Reeflex
 
-**A seatbelt for the AI acting on your systems.** Reeflex is a deterministic
-gate that decides — before an AI agent's action reaches your data — whether it
-is safe to run, needs a human, or must be blocked. Across any backend, with no
-LLM in the decision path.
+**A seatbelt for the AI acting on your systems.**
+
+Reeflex is a deterministic gate that decides — *before* an AI agent's action
+reaches your data — whether it is safe to run, needs a human, or must be
+blocked. Across any backend, with no LLM in the decision path.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-v0.1%20preview-orange.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-55%2F55%20core%20%C2%B7%209%2F9%20policy-brightgreen.svg)](#status)
+[![Tests](https://img.shields.io/badge/tests-55%2F55%20core%20%C2%B7%209%2F9%20policy-brightgreen.svg)](#status--v01-preview)
+[![WordPress](https://img.shields.io/badge/WordPress-6.9%2B-21759b.svg)](reeflex-wordpress/)
+[![Release](https://img.shields.io/github/v/release/Reeflex-io/reeflex?color=6a4c93)](https://github.com/Reeflex-io/reeflex/releases)
+
+[Quickstart](QUICKSTART.md) · [How it works](#how-it-works) ·
+[WordPress adapter](reeflex-wordpress/) · [Claude Code adapter](reeflex-claude/) ·
+[Spec](reeflex-spec/SPEC.md) · [Whitepaper](docs/Reeflex_Architecture.pdf) ·
+[Contributing](CONTRIBUTING.md)
+
+</div>
 
 ---
 
@@ -93,6 +105,11 @@ flowchart TD
 The adapter enforces the decision faithfully and **fails closed** — if the
 engine is unreachable, nothing goes through.
 
+One more thing the per-session ledger buys: **fragmentation doesn't work
+here.** An agent that splits "delete 500" into a hundred small batches trips
+the same cumulative budget as the single big call — each batch looks innocent,
+the session total doesn't. ([How impact is computed →](reeflex-spec/IMPACT-MODEL.md))
+
 The engine knows nothing about WordPress, Postgres, or S3. It decides on
 **actions** — normalized, structured, and risk-profiled. Adapters are the
 ecosystem; the spec and the engine are the product. See the
@@ -124,8 +141,7 @@ your reverse proxy for TLS, point your adapter at it, and you're governing
 actions. For a hardened setup (auth token, body-size caps, non-root container),
 see [INSTALL.md](INSTALL.md).
 
-> Prefer to run without Docker? [INSTALL.md](INSTALL.md) covers the Python 3.12
-> + OPA setup directly.
+> Prefer to run without Docker? [INSTALL.md](INSTALL.md) covers the direct Python 3.12 and OPA setup.
 
 > **Want to try it without deploying anything?** We run a public development
 > endpoint at `https://api-dev.reeflex.io` — point an adapter at it and go. It
