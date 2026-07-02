@@ -1,11 +1,20 @@
 # ci.yml — Reeflex CI: OPA policy tests + Python unit tests.
-# Manual-only for now (workflow_dispatch). To run automatically on every change,
-# add push / pull_request triggers under `on:` below.
+# Runs on every push to main and on pull requests targeting main, plus manual dispatch.
 
 name: CI
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# One in-flight run per ref; a newer push/PR update cancels the older run
+# (prevents duplicate/stacked runs on rapid updates).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   opa-policy-tests:
@@ -38,15 +47,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install OPA (required by test_decide.py — real subprocess, no mock)
+      - name: Install OPA (required by the tests — real subprocess, no mock)
         run: |
           curl -sL -o opa https://github.com/open-policy-agent/opa/releases/download/v1.18.0/opa_linux_amd64_static
           chmod +x opa
           sudo mv opa /usr/local/bin/opa
 
-      - name: Run Python unit tests
+      - name: "Run Python unit tests (core engine: decide + auth + hardening = 55)"
         working-directory: reeflex-core
         env:
           REEFLEX_OPA_BIN: opa
           REEFLEX_POLICY_DIR: policy
-        run: python -m unittest tests.test_decide -v
+        run: python -m unittest tests.test_decide tests.test_auth tests.test_hardening -v
