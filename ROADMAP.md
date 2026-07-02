@@ -11,11 +11,13 @@ see [CHANGELOG.md](CHANGELOG.md) and the component READMEs.
 
 ### WordPress adapter — live deployment (in progress)
 
-The WordPress adapter itself is **built and conformance-tested**: a must-use
-plugin that intercepts at the Abilities API seam (`WP_Ability::execute()` via
-`wp_register_ability_args`), normalizes abilities into the Action Envelope
-(verb + 3 axes + stable `session_id`), enforces decisions faithfully, emits
-audit records, and passes the conformance demo end-to-end against a live core.
+The WordPress adapter itself is **built and conformance-tested**: delivered as
+a standard plugin (installed from the wp-admin UI, configured via a Settings
+screen) and as a must-use plugin (configured via `wp-config.php` constants).
+Both intercept at the Abilities API seam (`WP_Ability::execute()` via
+`wp_register_ability_args`), normalize abilities into the Action Envelope
+(verb + 3 axes + stable `session_id`), enforce decisions faithfully, emit
+audit records, and pass the conformance demo end-to-end against a live core.
 See [`reeflex-wordpress/`](reeflex-wordpress/).
 
 What remains is the **live deployment milestone**:
@@ -138,4 +140,4 @@ is a publication format for the policy constitution, not a runtime input.
 
 ---
 
-*Reeflex — governance that isn't another AI.*
+*Reeflex — a seatbelt for the AI acting on your systems.*
