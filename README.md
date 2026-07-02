@@ -12,7 +12,7 @@ blocked. Across any backend, with no LLM in the decision path.
 [![Status](https://img.shields.io/badge/status-v0.1%20preview-orange.svg)](CHANGELOG.md)
 [![Tests](https://img.shields.io/badge/tests-55%2F55%20core%20%C2%B7%209%2F9%20policy-brightgreen.svg)](#status--v01-preview)
 [![WordPress](https://img.shields.io/badge/WordPress-6.9%2B-21759b.svg)](reeflex-wordpress/)
-[![Release](https://img.shields.io/github/v/release/Reeflex-io/reeflex?color=6a4c93)](https://github.com/Reeflex-io/reeflex/releases)
+[![Release](https://img.shields.io/github/v/release/Reeflex-io/reeflex?sort=semver&color=6a4c93)](https://github.com/Reeflex-io/reeflex/releases)
 
 [Quickstart](QUICKSTART.md) · [How it works](#how-it-works) ·
 [WordPress adapter](reeflex-wordpress/) · [Claude Code adapter](reeflex-claude/) ·
