@@ -76,7 +76,7 @@ The normalized representation every adapter MUST produce. JSON. This is the cont
 
 **Rules**
 
-- `action.namespace`, `action.verb`, `target.environment`, and `axes.*` are REQUIRED. Everything an adapter cannot determine MUST be set to a safe-conservative default (e.g. unknown reversibility -> `irreversible`), never omitted.
+- `action.namespace`, `action.verb`, `target.environment`, and `axes.*` are REQUIRED. Everything an adapter cannot determine MUST be set to a safe-conservative default (e.g. unknown reversibility → `irreversible`), never omitted.
 - The adapter SHOULD provide a first estimate of the three axes. `reeflex-core`'s cost estimator MAY refine them, but a missing axis is a conformance failure.
 - The envelope is signed at interception (`meta.signature`) so the audit trail is tamper-evident end to end. (See the v0.1 implementation-status note in §6 — signing is a normative requirement currently fulfilled by a stub; full signing is on the roadmap.)
 
@@ -120,7 +120,7 @@ Every action is priced on three axes. This is what makes coverage intrinsic inst
 - `outbound` — reaches third parties (email, API, publish)
 - `physical` — affects the physical world (SCADA, robotics, energy)
 
-Policy reasons in these axes. A rule like *"irreversible + broad + production -> require human approval"* protects Postgres, S3, and WordPress identically.
+Policy reasons in these axes. A rule like *"irreversible + broad + production → require human approval"* protects Postgres, S3, and WordPress identically.
 
 ---
 
@@ -172,9 +172,9 @@ This is the discrete-decision equivalent of the cumulative-cost idea at the proj
 }
 ```
 
-- `allow` -> adapter lets the action run.
-- `deny` -> adapter blocks it and returns `reason` to the agent.
-- `require_approval` -> adapter holds the action and routes it to a human; on approval it re-submits the envelope with `approval.present = true`.
+- `allow` → adapter lets the action run.
+- `deny` → adapter blocks it and returns `reason` to the agent.
+- `require_approval` → adapter holds the action and routes it to a human; on approval it re-submits the envelope with `approval.present = true`.
 - `obligations` are mandatory side-effects (e.g. `redact:pii`, `rate_limit`). An adapter that ignores an obligation is non-conformant.
 
 Every decision is deterministic: same envelope in, same decision out. No LLM in this path.

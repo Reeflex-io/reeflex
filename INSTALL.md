@@ -207,7 +207,7 @@ request returns HTTP 500 with:
 
 If instead the adapter itself cannot reach the core server at all (connection
 refused, core not started), the adapter emits its own fallback deny with reason
-`"reeflex-core unreachable or error -- failing closed: <detail>"`. These are two
+`"reeflex-core unreachable or error — failing closed: <detail>"`. These are two
 distinct fail-closed paths; only the first applies when OPA is misconfigured but
 core is running.
 

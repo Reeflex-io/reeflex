@@ -140,7 +140,7 @@ Both variants run the identical OPA/Rego evaluation path. Zero LLM is in the dec
 either variant. Free text, OKF documents, and markdown are never inputs to the decision
 (see ADR-0002). The invariant holds:
 
-> Same Action Envelope in -> same Decision out, regardless of where the engine runs.
+> Same Action Envelope in → same Decision out, regardless of where the engine runs.
 
 ---
 

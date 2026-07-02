@@ -78,22 +78,20 @@ genuinely welcome — we'll help you land them**. See
 
 ## How it works
 
+```mermaid
+flowchart TD
+    A["🤖 AI Agent"] --> B["Adapter<br/><i>normalizes the action into an Action Envelope</i><br/>verb · reversibility · blast_radius · externality"]
+    B -- "POST /v1/decide" --> C["reeflex-core<br/><i>OPA/Rego policy + per-session cumulative ledger</i><br/>zero LLM in the decision path"]
+    C --> D{Decision}
+    D -- allow --> E["✅ Action executes"]
+    D -- require_approval --> F["✋ Held for a human"]
+    D -- deny --> G["⛔ Blocked, with a reason"]
+    C -.-> H["📜 Append-only audit record<br/><i>written either way</i>"]
+    style D fill:#f6f8fa,stroke:#57606a
 ```
-AI Agent
-   │
-   ▼
-Adapter ──────────── normalizes the action into an Action Envelope
-   │                 (verb · reversibility · blast_radius · externality)
-   │  POST /v1/decide
-   ▼
-reeflex-core ─────── OPA/Rego policy + per-session cumulative ledger
-   │
-   ▼
-Decision  ────────── allow │ deny │ require_approval
-   │
-   ▼
-Adapter ──────────── enforces faithfully · fails closed · writes audit
-```
+
+The adapter enforces the decision faithfully and **fails closed** — if the
+engine is unreachable, nothing goes through.
 
 The engine knows nothing about WordPress, Postgres, or S3. It decides on
 **actions** — normalized, structured, and risk-profiled. Adapters are the

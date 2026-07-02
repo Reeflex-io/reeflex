@@ -3,7 +3,7 @@
 Reference adapter: Claude Code PreToolUse hook for [Reeflex](https://reeflex.io) governance.
 
 **What it is:** A Reeflex adapter that governs Claude Code tool calls by implementing the
-four contract responsibilities (SPEC §6): INTERCEPT -> NORMALIZE -> ENFORCE -> AUDIT.
+four contract responsibilities (SPEC §6): INTERCEPT → NORMALIZE → ENFORCE → AUDIT.
 
 **What it is NOT:** It does not decide anything.  The decision is made deterministically
 by `reeflex-core` (OPA/Rego).  Zero LLM anywhere near the decision path.
@@ -12,16 +12,27 @@ by `reeflex-core` (OPA/Rego).  Zero LLM anywhere near the decision path.
 
 Claude Code fires a `PreToolUse` hook before every tool call.  This adapter:
 
-1. **INTERCEPT** -- receives the tool call JSON on stdin (before execution).
-2. **NORMALIZE** -- maps the tool call to a signed Action Envelope (SPEC §2):
+1. **INTERCEPT** — receives the tool call JSON on stdin (before execution).
+2. **NORMALIZE** — maps the tool call to a signed Action Envelope (SPEC §2):
    verb, three risk axes (reversibility / blast_radius / externality), tier.
-3. **ENFORCE** -- POSTs the envelope to `reeflex-core /v1/decide`; maps the
+3. **ENFORCE** — POSTs the envelope to `reeflex-core /v1/decide`; maps the
    Decision to Claude Code's `permissionDecision` (allow | deny | ask).
-4. **AUDIT** -- appends one JSONL record per decision to the audit log.
+4. **AUDIT** — appends one JSONL record per decision to the audit log.
 
 Fail-closed invariant: if core is unreachable for any reason, the hook emits
 `deny` and exits 0.  It NEVER exits non-zero (which would make Claude Code
-continue the tool anyway -- silent allow).
+continue the tool anyway — silent allow).
+
+```mermaid
+flowchart LR
+    T["Claude Code tool call<br/>(Bash, Write, Edit, …)"] --> H["PreToolUse hook<br/><i>this adapter</i>"]
+    H -- "Action Envelope" --> C["reeflex-core<br/>POST /v1/decide"]
+    C --> D{Decision}
+    D -- allow --> R["✅ Tool runs"]
+    D -- ask --> A["✋ Human confirmation dialog"]
+    D -- deny --> X["⛔ Tool blocked, reason fed to the model"]
+    style D fill:#f6f8fa,stroke:#57606a
+```
 
 ## Install / wire up
 
@@ -76,7 +87,7 @@ next tool call on, every action passes through the gate.
 |-----------------------------|-------------------------------------|---------------------------------------------|
 | `REEFLEX_CORE_URL`          | `http://127.0.0.1:8080`             | reeflex-core endpoint                        |
 | `REEFLEX_CLAUDE_ENVIRONMENT`| `production`                        | target environment (production\|staging\|dev)|
-| `REEFLEX_CLAUDE_STRICT`     | unset                               | if set truthy: unknown execute -> irreversible|
+| `REEFLEX_CLAUDE_STRICT`     | unset                               | if set truthy: unknown execute → irreversible|
 | `REEFLEX_CLAUDE_PRINCIPAL`  | null                                | on_behalf_of value in the envelope           |
 | `REEFLEX_CLAUDE_AUDIT_LOG`  | `<tempdir>/reeflex-claude-audit.jsonl`| adapter-side audit log path                |
 | `REEFLEX_CLAUDE_TIMEOUT`    | `5`                                 | HTTP timeout to core in seconds              |
@@ -100,8 +111,8 @@ set REEFLEX_OPA_BIN=C:\path\to\opa.exe
 python reeflex-claude/demo/run_demo.py
 ```
 
-Runs 7 scenarios (ls -> allow, rm -rf / -> deny, force push -> ask,
-fragmentation -> ask at budget, fail-closed -> deny exit 0).
+Runs 7 scenarios (ls → allow, rm -rf / → deny, force push → ask,
+fragmentation → ask at budget, fail-closed → deny exit 0).
 
 ## Running the tests
 
@@ -125,6 +136,6 @@ tests spin a local stub server).
 - **approval re-submission**: the hook sets `approval.present = false` at
   interception.  Re-submission with `approval.present = true` after human
   approval is the caller's responsibility (Claude Code surfaces the `ask` dialog;
-  the human clicks allow; Claude Code retries the tool -- the adapter then
+  the human clicks allow; Claude Code retries the tool — the adapter then
   re-intercepts with the same payload, at which point the policy must be
   configured to allow with approval present).

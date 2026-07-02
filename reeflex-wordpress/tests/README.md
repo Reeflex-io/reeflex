@@ -101,7 +101,7 @@ array, and expected enforced outcome:
 | 1 | `core/get-post`, `{id: 42}` | `allow` (read, single, internal) |
 | 2 | `core/delete-post`, `{ids: [42]}` | `allow` (soft delete, single, recoverable) |
 | 3 | `core/delete-post`, `{ids: [1..50], force_delete: true}` | `reeflex_hold` (irreversible, broad, production) |
-| 4 | `core/delete-post`, `{ids: [1..25]}` | `reeflex_hold` (>=20 items -> irreversible, broad) |
+| 4 | `core/delete-post`, `{ids: [1..25]}` | `reeflex_hold` (>=20 items → irreversible, broad) |
 | 5 | `core/delete-site-wide-data`, `{force_delete: true}` | `reeflex_denied` (systemic blast radius, deny) |
 | 6 | `core/delete-post`, `{ids: [1..50], force_delete: true, _reeflex_approved: '1'}` | `reeflex_hold` (bypass attempt; forged approval stripped by normalizer) |
 | 7 | `core/fetch-and-delete-posts`, `{ids: [1..30]}` | `reeflex_hold` (verb collision resolved to `delete` by danger-priority) |

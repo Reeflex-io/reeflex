@@ -243,7 +243,7 @@ leaves the store untouched. The read-back confirms no change.
 
 **Separate path:** if the adapter cannot reach core at all (connection refused,
 timeout), the adapter itself emits its own fallback deny with reason
-`"reeflex-core unreachable or error -- failing closed: <detail>"` — this is
+`"reeflex-core unreachable or error — failing closed: <detail>"` — this is
 adapter-side fail-closed, distinct from the core's OPA-error path above.
 
 **Key point:** fail-closed is an invariant. A governance layer that silently

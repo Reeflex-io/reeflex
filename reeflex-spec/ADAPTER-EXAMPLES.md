@@ -2,7 +2,7 @@
 
 Two backends, two completely different interception mechanisms, **one envelope, one policy.** This is the whole thesis made concrete: write the rule once, govern everything.
 
-Each adapter does the same four things from the contract: **intercept -> normalize -> enforce -> audit.** Only *intercept* and *normalize* differ per backend. The decision call and the policy are shared.
+Each adapter does the same four things from the contract: **intercept → normalize → enforce → audit.** Only *intercept* and *normalize* differ per backend. The decision call and the policy are shared.
 
 ---
 
@@ -67,7 +67,7 @@ function reeflex_normalize( string $ability, array $input ): array {
 }
 ```
 
-The agent asks to delete 50 posts permanently -> envelope says `verb: delete, irreversible, broad, production`.
+The agent asks to delete 50 posts permanently → envelope says `verb: delete, irreversible, broad, production`.
 
 ---
 
@@ -124,7 +124,7 @@ def normalize(sql: str, conn) -> dict:
     }
 ```
 
-The agent issues `DELETE FROM users WHERE active = false` with no backup, affecting 1,206 rows -> envelope says `verb: delete, irreversible, broad, production`.
+The agent issues `DELETE FROM users WHERE active = false` with no backup, affecting 1,206 rows → envelope says `verb: delete, irreversible, broad, production`.
 
 > Note: this is the same failure class behind widely-reported AI-agent incidents — an agent issuing a destructive bulk action against production. The same envelope a WordPress bulk-delete produces.
 

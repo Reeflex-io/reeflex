@@ -9,7 +9,14 @@ One script, one subcommand per integration. Today: `wp` (WordPress). As new
 integrations ship (databases, shell, …), each gets its own subcommand and its
 own test fixtures — same tool, same shape.
 
-Stdlib-only Python (3.8+). No `pip install`.
+Requirements: **Python 3.8+** (stdlib only, no `pip install`) and **`curl`** on
+your PATH (built into Windows 10+, macOS, and virtually every Linux — the tool
+uses it as the HTTP transport because it passes host WAFs that block generic
+HTTP clients). Runs the same on Windows, Linux, and macOS.
+
+You can run it straight from a clone of this repo, or download
+`reeflex-verify.zip` from the
+[latest release](https://github.com/Reeflex-io/reeflex/releases).
 
 ---
 
@@ -26,7 +33,10 @@ Stdlib-only Python (3.8+). No `pip install`.
    has no write-abilities registered, so there is nothing to fire at. This small
    plugin registers a few **safe** abilities (they only ever touch their own
    `reeflex_test` posts, never your real content) so you have real targets.
-   - File: [`wordpress-test-plugin/reeflex-test-abilities.zip`](wordpress-test-plugin/reeflex-test-abilities.zip)
+   - File: `reeflex-test-abilities.zip` — download it from the
+     [latest release](https://github.com/Reeflex-io/reeflex/releases), or use
+     the copy in this repo at
+     [`wordpress-test-plugin/`](wordpress-test-plugin/) (same file).
    - Install it like any plugin: **wp-admin → Plugins → Add New → Upload Plugin
      → choose the zip → Install → Activate.**
    - Remove it when you're done testing.

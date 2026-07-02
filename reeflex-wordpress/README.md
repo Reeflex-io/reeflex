@@ -72,6 +72,23 @@ confidence instead of crossed fingers.
 
 ## How interception works (both delivery forms)
 
+Every path an agent can take into WordPress converges on the same seam — and
+that seam is where the gate sits:
+
+```mermaid
+flowchart LR
+    R["REST API call"] --> X
+    M["MCP tools/call"] --> X
+    P["Direct PHP call"] --> X
+    X["WP_Ability::execute()"] --> G["Reeflex Gate<br/><i>wraps permission_callback</i>"]
+    G -- "Action Envelope" --> C["reeflex-core<br/>POST /v1/decide"]
+    C --> D{Decision}
+    D -- allow --> E["✅ Ability runs"]
+    D -- hold --> H["✋ WP_Error — held for a human"]
+    D -- deny --> B["⛔ WP_Error — blocked"]
+    style D fill:#f6f8fa,stroke:#57606a
+```
+
 ### Seam 1 — the Abilities API hook (primary)
 
 Both delivery forms (standard plugin and mu-plugin, below) register the same
