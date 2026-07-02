@@ -136,6 +136,13 @@ curl http://localhost:8080/healthz
 # {"status":"ok"}
 ```
 
+> **No clone needed?** Pull the prebuilt image straight from GHCR:
+>
+> ```bash
+> docker run -d -p 8080:8080 ghcr.io/reeflex-io/reeflex-core:v0.1.2
+> curl http://localhost:8080/healthz   # {"status":"ok"}
+> ```
+
 That's the whole engine — stateless, self-contained, fail-closed. Put it behind
 your reverse proxy for TLS, point your adapter at it, and you're governing
 actions. For a hardened setup (auth token, body-size caps, non-root container),

@@ -17,6 +17,9 @@ For the end-to-end demo walkthrough, see [QUICKSTART.md](QUICKSTART.md).
 No other runtime dependencies exist. The core server (`reeflex-core/main.py`) and
 the demo (`reeflex-mock/demo.py`) both use Python stdlib exclusively.
 
+Or skip local setup entirely with the prebuilt image (see [README](README.md)):
+`docker run -d -p 8080:8080 ghcr.io/reeflex-io/reeflex-core:v0.1.2`.
+
 ---
 
 ## Getting OPA
