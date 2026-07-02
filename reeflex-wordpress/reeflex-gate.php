@@ -70,6 +70,9 @@
  *                        When set, locks the API URL field on the Settings page.
  *   REEFLEX_CORE_TOKEN — bearer token for Authorization header (optional).
  *                        When set, locks the Token field on the Settings page.
+ *   REEFLEX_VERIFY_SSL — verify the core's TLS certificate (default: true).
+ *                        Set false ONLY for dev/staging certs (e.g. api-dev).
+ *                        When set, locks the Verify TLS checkbox on the Settings page.
  *   REEFLEX_ENV        — 'production'|'staging'|'dev' (default: 'production').
  *   REEFLEX_AGENT_ID   — agent identity string (default: 'agent:wordpress').
  *   REEFLEX_AUDIT_LOG  — absolute path to JSONL audit log
@@ -78,9 +81,9 @@
  *
  * SETTINGS PAGE (normal-plugin install)
  * --------------------------------------
- *   Settings > Reeflex Gate provides two fields — API URL and Token — as a
- *   convenience alternative to wp-config.php constants. Constants, when
- *   defined, always override Settings values and lock the fields read-only.
+ *   Settings > Reeflex Gate provides three fields — API URL, Token, and
+ *   Verify TLS — as a convenience alternative to wp-config.php constants.
+ *   Constants, when defined, always override Settings values and lock the fields read-only.
  *
  * @package  ReflexWordPress
  * @since    0.1.0

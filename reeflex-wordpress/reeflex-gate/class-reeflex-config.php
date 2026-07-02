@@ -2,7 +2,7 @@
 /**
  * Reeflex Config — runtime configuration resolver.
  *
- * Precedence model (two fields exposed to the Settings UI):
+ * Precedence model (three fields exposed to the Settings UI):
  *
  *   core_url():
  *     1. Constant REEFLEX_CORE_URL if defined AND non-empty  (trust anchor; wins always).
@@ -15,6 +15,14 @@
  *     2. DB option reeflex_gate_options['core_token']        (Settings page path).
  *     3. ''  → no Authorization header sent.
  *
+ *   verify_ssl():
+ *     1. Constant REEFLEX_VERIFY_SSL if defined              (trust anchor; wins always).
+ *     2. DB option reeflex_gate_options['verify_ssl']        (Settings page path).
+ *     3. true → TLS verification ON (secure default).
+ *     Default true: verification ON. Disable ONLY for dev endpoints with untrusted/
+ *     staging certs (e.g. api-dev.reeflex.io). Keep true in production — this
+ *     setting protects the decision call from MITM interception.
+ *
  * All other values (env, agent_id, audit_log_path, request_timeout) remain
  * constant-only; no Settings UI is provided for them.
  *
@@ -24,7 +32,7 @@
  * compromised admin re-point or disable the governance gate — a bypass.
  *
  * Option name:  reeflex_gate_options  (single array option).
- * Keys:         core_url, core_token.
+ * Keys:         core_url, core_token, verify_ssl.
  *
  * @package ReeflexWordPress
  * @since   0.1.0
@@ -54,6 +62,14 @@ defined( 'ABSPATH' ) || exit;
  *   REEFLEX_CORE_TOKEN — bearer token for Authorization header. Optional.
  *                        When defined, it wins over any DB/Settings value and
  *                        the Settings token field is rendered read-only.
+ *   REEFLEX_VERIFY_SSL — boolean; controls TLS certificate verification on the
+ *                        POST /v1/decide HTTP request. When defined, it wins
+ *                        over any DB/Settings value and the Settings checkbox
+ *                        is rendered disabled. Default: true (verification ON).
+ *                        Set to false ONLY for dev/staging endpoints with
+ *                        untrusted certs (e.g. api-dev.reeflex.io). Never
+ *                        disable in production — MITM protection for the
+ *                        governance decision call.
  *   REEFLEX_ENV        — target environment label; default 'production'.
  *   REEFLEX_AGENT_ID   — agent identity string; default 'agent:wordpress'.
  *   REEFLEX_AUDIT_LOG  — absolute path to JSONL audit log.
@@ -157,6 +173,32 @@ final class Reeflex_Config {
 		return isset( $options['core_token'] ) ? (string) $options['core_token'] : '';
 	}
 
+	/**
+	 * Whether TLS certificate verification is enabled for POST /v1/decide.
+	 *
+	 * Precedence:
+	 *   1. REEFLEX_VERIFY_SSL constant (defined) — trust anchor.
+	 *   2. DB option reeflex_gate_options['verify_ssl'].
+	 *   3. true — verification ON (secure default).
+	 *
+	 * Default true: TLS verification is ON. Disable ONLY for development
+	 * endpoints with untrusted/staging certificates (e.g. api-dev.reeflex.io).
+	 * Keep true in production — this protects the governance decision call from
+	 * MITM interception.
+	 *
+	 * @return bool  True = verify TLS certificate (production default); false = skip (dev only).
+	 */
+	public static function verify_ssl(): bool {
+		// Source 1: constant (trust anchor).
+		if ( defined( 'REEFLEX_VERIFY_SSL' ) ) {
+			return (bool) REEFLEX_VERIFY_SSL;
+		}
+
+		// Source 2: DB option (Settings page).
+		$options = self::stored_options();
+		return (bool) $options['verify_ssl'];
+	}
+
 	// ------------------------------------------------------------------
 	// Lock-state helpers (used by Settings UI only)
 	// ------------------------------------------------------------------
@@ -185,6 +227,18 @@ final class Reeflex_Config {
 		return defined( 'REEFLEX_CORE_TOKEN' );
 	}
 
+	/**
+	 * Whether the SSL verification setting is locked by a wp-config.php constant.
+	 *
+	 * True when REEFLEX_VERIFY_SSL is defined (any value, including false).
+	 * When true the Settings checkbox renders disabled; the DB value is ignored.
+	 *
+	 * @return bool
+	 */
+	public static function verify_ssl_is_locked(): bool {
+		return defined( 'REEFLEX_VERIFY_SSL' );
+	}
+
 	// ------------------------------------------------------------------
 	// Raw stored option (for pre-filling the Settings form only)
 	// ------------------------------------------------------------------
@@ -193,9 +247,9 @@ final class Reeflex_Config {
 	 * Return the raw stored options array from the DB (unvalidated).
 	 *
 	 * Used only by the Settings UI to pre-fill form fields.  Never use this
-	 * in the decision path — use core_url() and core_token() instead.
+	 * in the decision path — use core_url(), core_token(), and verify_ssl() instead.
 	 *
-	 * @return array{core_url: string, core_token: string}
+	 * @return array{core_url: string, core_token: string, verify_ssl: bool}
 	 */
 	public static function stored_options(): array {
 		$raw = get_option( self::OPTION_NAME, array() );
@@ -205,6 +259,9 @@ final class Reeflex_Config {
 		return array(
 			'core_url'   => isset( $raw['core_url'] ) ? (string) $raw['core_url'] : '',
 			'core_token' => isset( $raw['core_token'] ) ? (string) $raw['core_token'] : '',
+			// array_key_exists so a deliberately saved false is preserved; a never-saved
+			// key defaults to true (verification ON — secure default).
+			'verify_ssl' => array_key_exists( 'verify_ssl', $raw ) ? (bool) $raw['verify_ssl'] : true,
 		);
 	}
 

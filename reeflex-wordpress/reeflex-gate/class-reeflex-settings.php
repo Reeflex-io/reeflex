@@ -2,11 +2,14 @@
 /**
  * Reeflex Settings — WordPress admin Settings page.
  *
- * Provides a Settings > Reeflex Gate page with exactly two fields:
+ * Provides a Settings > Reeflex Gate page with exactly three fields:
  *
- *   1. API URL  — maps to reeflex-core base URL (MANDATORY for any action to
- *                 be allowed; an empty URL means everything is blocked).
- *   2. Token    — optional bearer token for Authorization header.
+ *   1. API URL      — maps to reeflex-core base URL (MANDATORY for any action to
+ *                     be allowed; an empty URL means everything is blocked).
+ *   2. Token        — optional bearer token for Authorization header.
+ *   3. Verify TLS   — checkbox; controls TLS certificate verification on the
+ *                     POST /v1/decide call. Default: checked (ON). Uncheck ONLY
+ *                     for dev/staging endpoints with untrusted certs.
  *
  * Trust-anchor rule (invariant):
  *   A value defined in wp-config.php via a constant ALWAYS wins over the
@@ -16,6 +19,7 @@
  *
  *   REEFLEX_CORE_URL   set + non-empty → API URL field locked.
  *   REEFLEX_CORE_TOKEN set (any value) → Token field locked.
+ *   REEFLEX_VERIFY_SSL set (any value) → Verify TLS checkbox locked.
  *
  * Security posture:
  *   - Nonce + capability enforced by the Settings API (register_setting).
@@ -119,6 +123,7 @@ final class Reeflex_Settings {
 				'default'           => array(
 					'core_url'   => '',
 					'core_token' => '',
+					'verify_ssl' => true,
 				),
 			)
 		);
@@ -142,6 +147,14 @@ final class Reeflex_Settings {
 			'reeflex_core_token',
 			esc_html__( 'Token', 'reeflex-gate' ),
 			array( self::class, 'render_field_token' ),
+			'reeflex-gate',
+			self::SECTION_ID
+		);
+
+		add_settings_field(
+			'reeflex_verify_ssl',
+			esc_html__( 'Verify TLS certificate', 'reeflex-gate' ),
+			array( self::class, 'render_field_verify_ssl' ),
 			'reeflex-gate',
 			self::SECTION_ID
 		);
@@ -182,6 +195,7 @@ final class Reeflex_Settings {
 		$out = array(
 			'core_url'   => $current['core_url'],
 			'core_token' => $current['core_token'],
+			'verify_ssl' => $current['verify_ssl'],
 		);
 
 		if ( ! is_array( $input ) ) {
@@ -253,6 +267,18 @@ final class Reeflex_Settings {
 					$out['core_token'] = $submitted_token;
 				}
 			}
+		}
+
+		// --- verify_ssl ---
+		if ( Reeflex_Config::verify_ssl_is_locked() ) {
+			// Constant wins; ignore submitted value; keep existing DB value as-is.
+			// (The DB value is irrelevant at runtime when the constant is set, but
+			// we preserve it so the field doesn't flip when the lock is later removed.)
+			$out['verify_ssl'] = $current['verify_ssl'];
+		} else {
+			// An unchecked checkbox sends no key in the POST array → false.
+			// This is correct explicit-uncheck behaviour (unlike the token blank-keep rule).
+			$out['verify_ssl'] = ! empty( $input['verify_ssl'] );
 		}
 
 		return $out;
@@ -498,6 +524,85 @@ final class Reeflex_Settings {
 	}
 
 	// ------------------------------------------------------------------
+	// Render: Verify TLS field
+	// ------------------------------------------------------------------
+
+	/**
+	 * Render the Verify TLS certificate settings field.
+	 *
+	 * Locked state: if REEFLEX_VERIFY_SSL is defined, the checkbox is disabled
+	 * and a "Locked" notice is shown reflecting the constant value.
+	 *
+	 * Warning state: when the effective value is false (verification OFF), a red
+	 * warning is displayed to make the risk visible to the operator.
+	 *
+	 * @return void
+	 */
+	public static function render_field_verify_ssl(): void {
+		$locked    = Reeflex_Config::verify_ssl_is_locked();
+		$effective = Reeflex_Config::verify_ssl();
+		$field_id  = 'reeflex_verify_ssl';
+
+		if ( $locked ) {
+			// Checkbox is locked via constant; render disabled, reflecting constant value.
+			?>
+			<label>
+				<input
+					type="checkbox"
+					id="<?php echo esc_attr( $field_id ); ?>"
+					name="<?php echo esc_attr( Reeflex_Config::OPTION_NAME . '[verify_ssl]' ); ?>"
+					value="1"
+					<?php checked( $effective ); ?>
+					disabled
+					aria-describedby="<?php echo esc_attr( $field_id . '-desc' ); ?>"
+				/>
+				<?php echo esc_html__(
+					'Verify the TLS certificate of the core endpoint. Keep enabled in production. Uncheck ONLY for development endpoints with an untrusted/staging certificate (e.g. api-dev.reeflex.io).',
+					'reeflex-gate'
+				); ?>
+			</label>
+			<p class="description" id="<?php echo esc_attr( $field_id . '-desc' ); ?>">
+				<strong><?php echo esc_html__( 'Locked — defined in wp-config.php (REEFLEX_VERIFY_SSL).', 'reeflex-gate' ); ?></strong>
+				<?php echo esc_html__( 'To change this value, update the constant in wp-config.php.', 'reeflex-gate' ); ?>
+			</p>
+			<?php
+		} else {
+			// Editable checkbox.
+			?>
+			<label>
+				<input
+					type="checkbox"
+					id="<?php echo esc_attr( $field_id ); ?>"
+					name="<?php echo esc_attr( Reeflex_Config::OPTION_NAME . '[verify_ssl]' ); ?>"
+					value="1"
+					<?php checked( $effective ); ?>
+					aria-describedby="<?php echo esc_attr( $field_id . '-desc' ); ?>"
+				/>
+				<?php echo esc_html__(
+					'Verify the TLS certificate of the core endpoint. Keep enabled in production. Uncheck ONLY for development endpoints with an untrusted/staging certificate (e.g. api-dev.reeflex.io).',
+					'reeflex-gate'
+				); ?>
+			</label>
+			<?php
+		}
+
+		// Red warning when verification is OFF (regardless of lock state).
+		if ( ! $effective ) {
+			?>
+			<p class="description" style="color:#d63638;font-weight:bold;margin-top:6px;">
+				<?php echo esc_html__(
+					'Warning: TLS certificate verification is DISABLED. This is for development only (e.g. staging certs). Never disable it in production.',
+					'reeflex-gate'
+				); ?>
+			</p>
+			<?php
+		}
+
+		// Source label for transparency.
+		self::render_source_label( $locked ? 'constant' : 'settings' );
+	}
+
+	// ------------------------------------------------------------------
 	// Render: status block
 	// ------------------------------------------------------------------
 
@@ -510,9 +615,11 @@ final class Reeflex_Settings {
 	 * @return void
 	 */
 	private static function render_status_block(): void {
-		$url_effective = Reeflex_Config::core_url();
-		$url_source    = self::get_url_source_label();
-		$token_source  = self::get_token_source_label();
+		$url_effective  = Reeflex_Config::core_url();
+		$url_source     = self::get_url_source_label();
+		$token_source   = self::get_token_source_label();
+		$ssl_source     = self::get_ssl_source_label();
+		$ssl_effective  = Reeflex_Config::verify_ssl();
 
 		?>
 		<div class="notice notice-info" style="margin-left:0;">
@@ -534,6 +641,17 @@ final class Reeflex_Settings {
 					<td><?php echo esc_html( $token_source ); ?></td>
 					<td style="padding-left:16px;">
 						<?php echo esc_html( self::get_token_presence_label() ); ?>
+					</td>
+				</tr>
+				<tr>
+					<td style="padding-right:16px;"><strong><?php echo esc_html__( 'TLS verification:', 'reeflex-gate' ); ?></strong></td>
+					<td><?php echo esc_html( $ssl_source ); ?></td>
+					<td style="padding-left:16px;">
+						<?php if ( $ssl_effective ) : ?>
+							<?php echo esc_html__( 'ON', 'reeflex-gate' ); ?>
+						<?php else : ?>
+							<span style="color:#d63638;font-weight:bold;"><?php echo esc_html__( 'OFF', 'reeflex-gate' ); ?></span>
+						<?php endif; ?>
 					</td>
 				</tr>
 			</table>
@@ -608,6 +726,18 @@ final class Reeflex_Settings {
 		return '' !== $effective
 			? __( 'set', 'reeflex-gate' )
 			: __( 'not set', 'reeflex-gate' );
+	}
+
+	/**
+	 * Human-readable source label for TLS verification (for status block).
+	 *
+	 * @return string
+	 */
+	private static function get_ssl_source_label(): string {
+		if ( Reeflex_Config::verify_ssl_is_locked() ) {
+			return __( 'wp-config.php constant (REEFLEX_VERIFY_SSL)', 'reeflex-gate' );
+		}
+		return __( 'Settings page (database)', 'reeflex-gate' );
 	}
 
 }
