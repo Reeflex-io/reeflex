@@ -8,10 +8,13 @@ block it with a `WP_Error`, or hold it for human approval. Every decision is
 deterministic — OPA/Rego evaluated in `reeflex-core`, zero LLM in the
 decision path.
 
-> **Open-core boundary.** This adapter (like `reeflex-core` and
-> `reeflex-spec`) is Apache 2.0 / open source. The planned commercial
-> compliance tier (NIS2/DORA/GDPR reporting, ANAF/SmartBill integrations)
-> is a separate, closed package and will never be present in this repository.
+> **Open-core boundary & licensing.** The source in this repository is
+> Apache-2.0 / open source. The `reeflex-gate/` plugin published to the
+> WordPress.org directory is **additionally licensed GPLv2-or-later** for
+> WordPress.org compatibility — we hold the copyright and dual-license it; the
+> rest of the project stays Apache-2.0. The planned commercial compliance tier
+> (NIS2/DORA/GDPR reporting, ANAF/SmartBill integrations) is a separate, closed
+> package and will never be present in this repository.
 
 ---
 
@@ -280,6 +283,44 @@ When core returns `allow` with obligations, the adapter:
 - Fires `do_action('reeflex_obligation', $obligation, $envelope, $decision)` for each obligation, so operators can hook custom handlers.
 - Acknowledges `audit:full` (the audit record is already written before enforcement).
 - Logs a warning for any obligation it does not recognize, so nothing passes silently.
+
+---
+
+## Reeflex + WooCommerce
+
+If your store runs WooCommerce and you are starting to let an AI agent manage it
+— bulk-editing products, processing refunds, clearing orders — Reeflex already
+covers it, with **no WooCommerce-specific code**.
+
+Here is why. WooCommerce exposes its agent-facing operations through the same
+**WordPress Abilities API** as everything else. A `woocommerce/*` ability (say,
+deleting products or cancelling orders) runs through the identical seam Reeflex
+already guards — `WP_Ability::execute()`. The gate wraps its `permission_callback`,
+normalizes the attempt into an Action Envelope, and asks `reeflex-core` for a
+verdict, exactly as it does for a core `posts/*` ability. The engine never needs
+to know the action came from WooCommerce; it decides on the **computed impact**,
+not the plugin of origin.
+
+**A concrete store scenario.** An agent with a valid shop-manager capability is
+asked to "clean up the catalogue" and starts deleting products:
+
+| What the agent attempts | `permission_callback` | Reeflex verdict | Why |
+|---|---|---|---|
+| Read a product | allow | **ALLOW** | read-only, no impact |
+| Delete 1 product (trash) | allow | **ALLOW** | single, recoverable |
+| Bulk force-delete 200 products | allow | **HOLD** | irreversible + broad in production — waits for a human |
+| Wipe the entire store's data | allow | **DENY** | systemic blast radius — blocked outright |
+
+The capability check says "yes" to all four — the agent has the badge. Reeflex is
+the check that stops the bulldozer: it holds the 200-product wipe for a human and
+denies the store-wide destruction, while letting the harmless read and the single
+recoverable delete through. Every verdict lands in the audit log, so you have a
+pre-execution record of what the agent tried against your store.
+
+None of this is WooCommerce-specific inside Reeflex — which is exactly the point.
+Any plugin that registers abilities (WooCommerce, memberships, LMS, your own) is
+governed the moment its actions go through the Abilities API. Install the gate,
+point it at your core, and your store's agent actions are decided on impact.
 
 ---
 

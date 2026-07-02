@@ -3,13 +3,13 @@
  * Plugin Name:  Reeflex Gate
  * Plugin URI:   https://github.com/Reeflex-io/reeflex
  * Description:  Deterministic governance for every WordPress agent action via reeflex-core (allow / deny / require-approval, fail-closed).
- * Version:      0.1.1
+ * Version:      0.1.2
  * Requires at least: 6.9
  * Requires PHP: 7.4
  * Author:       Reeflex
  * Author URI:   https://github.com/Reeflex-io
- * License:      Apache-2.0
- * License URI:  https://www.apache.org/licenses/LICENSE-2.0
+ * License:      GPLv2 or later
+ * License URI:  https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain:  reeflex-gate
  * Domain Path:  /languages
  * Update URI:   false
