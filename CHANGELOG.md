@@ -13,6 +13,15 @@ API hardening ahead of network exposure. The decision path is unchanged.
   compatible — identical behavior to 0.1.0). Missing or invalid token → HTTP 401, fail-closed.
   `GET /healthz` is always unauthenticated so liveness probes work without credentials.
 - **Request body size cap** — `REEFLEX_MAX_BODY_BYTES` (default 256 KiB); oversized request → HTTP 413.
+- **WordPress adapter — admin Settings page** — Settings > Reeflex Gate (API URL, Token, Verify TLS),
+  with wp-config constants taking precedence over and locking the fields; bearer core token
+  (`REEFLEX_CORE_TOKEN`) and an optional TLS-verify toggle (`REEFLEX_VERIFY_SSL`, default on; disable
+  only for dev/staging certs such as api-dev.reeflex.io).
+- **`reeflex-verify` CLI** — operator tool that fires real actions at a live install and prints the
+  allow / hold / deny verdict per scenario. Transports over the system `curl` (browser UA + retry) so it
+  works against WAF-protected sites, with UTF-8 output. Cross-platform (Windows / Linux / macOS).
+- **Release packages** — the WordPress gate as `reeflex-gate-wordpress-standard.zip` and `-mu.zip`, plus
+  `reeflex-verify.zip` (the CLI) and `reeflex-test-abilities.zip` (safe test abilities to exercise the gate).
 
 ### Security
 - Suppressed the HTTP server version banner (no stack / Python-version disclosure).
