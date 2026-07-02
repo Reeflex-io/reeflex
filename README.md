@@ -11,6 +11,7 @@ blocked. Across any backend, with no LLM in the decision path.
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-v0.1%20preview-orange.svg)](CHANGELOG.md)
 [![Tests](https://img.shields.io/badge/tests-55%2F55%20core%20%C2%B7%209%2F9%20policy-brightgreen.svg)](#status--v01-preview)
+[![CI](https://github.com/Reeflex-io/reeflex/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Reeflex-io/reeflex/actions/workflows/ci.yml)
 [![WordPress](https://img.shields.io/badge/WordPress-6.9%2B-21759b.svg)](reeflex-wordpress/)
 [![Release](https://img.shields.io/github/v/release/Reeflex-io/reeflex?sort=semver&color=6a4c93)](https://github.com/Reeflex-io/reeflex/releases)
 
