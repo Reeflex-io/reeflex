@@ -55,7 +55,8 @@ you safe is free, forever** — a planned commercial tier adds compliance
 *attestation* (auditor-ready reports, regulation-mapped policy packs, a hosted
 engine), never safety. Details in [docs/open-core.md](docs/open-core.md).
 
-Worth knowing even today: every decision lands in an append-only audit log —
+The open tier is already useful as an evidence source: every decision lands in
+an append-only audit log —
 a pre-execution record of what an agent *attempted*, not just what happened.
 If you have ever had to answer an auditor's "what could this agent have done,
 and what stopped it?", that log is the answer.
@@ -106,10 +107,11 @@ flowchart TD
 The adapter enforces the decision faithfully and **fails closed** — if the
 engine is unreachable, nothing goes through.
 
-One more thing the per-session ledger buys: **fragmentation doesn't work
-here.** An agent that splits "delete 500" into a hundred small batches trips
-the same cumulative budget as the single big call — each batch looks innocent,
-the session total doesn't. ([How impact is computed →](reeflex-spec/IMPACT-MODEL.md))
+Decisions are also **cumulative per session**: an agent that splits
+"delete 500" into a hundred small batches trips the same budget as the single
+big call. Each batch looks innocent on its own; the session total doesn't —
+so fragmenting a dangerous action doesn't evade the gate.
+([How impact is computed →](reeflex-spec/IMPACT-MODEL.md))
 
 The engine knows nothing about WordPress, Postgres, or S3. It decides on
 **actions** — normalized, structured, and risk-profiled. Adapters are the

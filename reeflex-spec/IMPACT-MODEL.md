@@ -4,7 +4,7 @@
 > impact is calculated** so that a deterministic policy can decide on it. If you
 > have ever wondered whether "computed impact" is a real mechanism or just a
 > slogan, this is the answer: it is a plain, reproducible classification — no LLM,
-> no magic score.
+> no black-box score.
 
 ---
 
@@ -101,7 +101,7 @@ the adapter — computes this. The adapter's only extra duty is to supply a stab
 `session_id`. This is how "delete 5, one hundred times" trips the same budget as
 "delete 500": fragmentation buys nothing.
 
-> **Deliberate strictness, worth knowing:** once a session has exceeded its
+> **Deliberate strictness:** once a session has exceeded its
 > delete budget, the base policy holds *every* subsequent action from that
 > session — including reads — until it is approved or the rolling window
 > (default 3600 s) expires. The posture is "a session that tried to fragment
