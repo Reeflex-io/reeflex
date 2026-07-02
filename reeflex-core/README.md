@@ -78,19 +78,23 @@ Run from the `reeflex-core/` directory:
 ```bash
 # Windows
 cd reeflex-core
-python -m unittest tests.test_decide -v
+python -m unittest discover -s tests -v
 
 # Linux / macOS
 cd reeflex-core
-python -m unittest tests.test_decide -v
+python -m unittest discover -s tests -v
 ```
 
 Or using pytest if you have it available:
 
 ```bash
 cd reeflex-core
-python -m pytest tests/test_decide.py -v
+python -m pytest tests/ -v
 ```
+
+This runs all 55 tests across `test_decide.py` (decision pipeline),
+`test_auth.py` (bearer-token auth), and `test_hardening.py` (limits,
+error surface).
 
 Tests drive the real `decide.process()` pipeline end-to-end. OPA is invoked as
 a real subprocess — no mocking. `REEFLEX_OPA_BIN` must resolve to a working OPA

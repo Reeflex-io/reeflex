@@ -1,8 +1,8 @@
-# Reeflex — Deterministic Governance for AI-Agent Actions
+# Reeflex Specification — the contract everything builds on
 
-> **A seatbelt for the AI acting on your systems.** A deterministic gate that
-> decides what an AI agent is allowed to do — across any backend — before the
-> action runs.
+> **A seatbelt for the AI acting on your systems.** This directory holds the
+> specification: the Action Envelope, the Adapter Contract, and the conformance
+> requirements that every Reeflex integration implements.
 
 AI agents can now write to your database, edit your store, send your emails.
 That's wonderful — until the day one of them gets it catastrophically wrong.
@@ -12,7 +12,7 @@ intercepts the request, evaluates it against a deterministic policy, and returns
 one of three decisions: **allow**, **deny**, or **require_approval**. The decision
 is made by OPA/Rego + classical logic. **Zero LLM in the decision path.**
 
-### 💚 We love open source — so the core is free, forever
+### Open source, and meant to stay that way
 
 The engine, the specification, the policy language, the reference adapters — all
 **Apache-2.0**, yours to run, fork, and build on. No lock-in, no metering on the

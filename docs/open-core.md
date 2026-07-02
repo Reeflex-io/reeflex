@@ -15,6 +15,7 @@ any public repository, in any form — no code, no configuration, no schema, no 
 |---|---|---|---|
 | `reeflex-core` engine (`/v1/decide`, OPA integration, audit JSONL) | Open | Apache 2.0 | Available |
 | `reeflex-spec` (Action Envelope + Adapter Contract + conformance suite + JSON schemas) | Open | Apache 2.0 | Available |
+| `reeflex-claude` reference adapter (Claude Code) | Open | Apache 2.0 | Available |
 | `reeflex-wordpress` reference adapter | Open | Apache 2.0 | Available |
 | Community adapters (`reeflex-postgres`, `reeflex-s3`, etc.) | Open | Apache 2.0 | Community-built against the spec |
 | Base policy packs (Rego rules for the Action Envelope) | Open | Apache 2.0 | Available |
@@ -23,6 +24,29 @@ any public repository, in any form — no code, no configuration, no schema, no 
 | ANAF / SmartBill integrations (RO fiscal) | Commercial / closed | Proprietary | Not in any public repo |
 | Hosted multi-tenancy, authentication, billing | Commercial / closed | Proprietary | **[ROADMAP — not built, not available]** |
 | Management UI | Commercial / closed | Proprietary | **[ROADMAP — not built, not available]** |
+
+## The line, in one sentence
+
+**Everything that keeps you safe is free. What you pay for is help proving it.**
+
+The gate, the decisions, the adapters, the base policy packs, and the full
+audit trail are open — permanently. The planned commercial tier does not add
+safety; it adds *attestation*: curated mappings from Reeflex decisions to
+specific regulatory obligations (NIS2, DORA, GDPR), auditor-ready reports,
+managed policy-pack updates as regulations change, and a hosted engine for
+teams that don't want to operate one. Evidence is free; packaging that
+evidence in the language a regulator expects is the product.
+
+### For auditors: the open tier is already an evidence source
+
+Every decision Reeflex makes — allowed, held, or denied — is written to an
+append-only JSONL audit log with the ability name, the computed impact axes,
+the rule that fired, the session, and the timestamp. That gives an auditor
+something rare in AI-agent deployments: **a pre-execution record of what an
+agent attempted, not just a post-hoc log of what happened.** You can answer
+"what could this agent have done, and what stopped it?" from the open tier
+alone, today. (Cryptographic tamper-evidence for audit records is on the
+[roadmap](../ROADMAP.md); current records are append-only but not signed.)
 
 ---
 

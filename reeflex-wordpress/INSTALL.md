@@ -1,8 +1,12 @@
 # INSTALL.md — Reeflex WordPress Adapter
 
-Two installation methods are available. Choose based on your deployment
-context. Both ultimately POST to the same `reeflex-core /v1/decide` endpoint
-and enforce the same Decision.
+The adapter ships in **two delivery forms** — a standard plugin (installed from
+the wp-admin UI, configured via a Settings screen) and a mu-plugin (dropped
+into `wp-content/mu-plugins/`, configured via constants). Both register the
+same hooks, POST to the same `reeflex-core /v1/decide` endpoint, and enforce
+the same decisions. A quick overview of both forms is in
+[README.md](README.md#installing-the-adapter--two-delivery-forms); this file
+is the detailed procedure.
 
 ---
 
@@ -11,14 +15,36 @@ and enforce the same Decision.
 | Requirement | Version |
 |---|---|
 | PHP | 7.4 or higher |
-| WordPress | 6.8 or higher (6.9+ recommended) |
-| WordPress Abilities API | v0.4.0 standalone plugin on WP 6.8; built into core on WP 6.9+ |
-| MCP Adapter (`wordpress/mcp-adapter`) | v0.5.0 (requires WP >= 6.8, recommends 6.9); required only if you use MCP traffic or Hook B |
-| `reeflex-core` | Running and reachable at the URL you will set in `REEFLEX_CORE_URL` |
+| WordPress | **6.9 or higher** (Abilities API is core as of 6.9) |
+| MCP Adapter (`wordpress/mcp-adapter`) | v0.5.0; required only if you use MCP traffic or Hook B |
+| `reeflex-core` | Running and reachable — your own deployment, or `https://api-dev.reeflex.io` for testing (see the TLS note below) |
+
+> **Testing against `api-dev.reeflex.io`:** our public dev endpoint carries a
+> Let's Encrypt **staging** certificate (untrusted by design, not for
+> production). To connect to it you must disable certificate verification —
+> Settings checkbox in the standard plugin, or
+> `define( 'REEFLEX_VERIFY_SSL', false );` for the mu-plugin. For production
+> or internal deployments: valid certificate, verification **on**.
 
 ---
 
-## Method 1 — mu-plugin (primary, recommended)
+## Option A — Standard plugin (installs from the UI)
+
+1. Download `reeflex-gate-wordpress-standard.zip` from the
+   [latest release](https://github.com/Reeflex-io/reeflex/releases).
+2. wp-admin → **Plugins → Add New → Upload Plugin** → choose the zip →
+   **Install Now** → **Activate**.
+3. **Settings → Reeflex Gate**: set **API URL** (required), **Token**
+   (optional), and leave **Verify TLS certificate** on unless pointing at
+   `api-dev.reeflex.io`.
+4. Verify (see "Verification" at the end of this file).
+
+Constants in `wp-config.php` (below) override Settings fields and lock them
+in the UI — useful for pinning configuration in code on managed hosts.
+
+---
+
+## Option B — mu-plugin (must-use, hardened)
 
 The mu-plugin intercepts at the WordPress Abilities API layer. Every ability
 execution — whether triggered via REST API, direct PHP call, or an MCP
@@ -143,7 +169,7 @@ Each line is one JSON decision record. Fields include `ts`, `ability`,
 
 ---
 
-## Method 2 — external MCP proxy (defense-in-depth / when WP is not modifiable)
+## Advanced — external MCP proxy (defense-in-depth / when WP is not modifiable)
 
 This method places Reeflex at the network boundary between the AI agent and
 the WordPress MCP endpoint. It does not require access to the mu-plugins
@@ -231,14 +257,16 @@ unchanged when proxying allowed requests to WordPress.
 
 See [README.md](README.md#configuration) for the full constants table.
 
-Quick reference for `wp-config.php` (Method 1):
+Quick reference for `wp-config.php` (both forms; constants override Settings):
 
 ```php
-define( 'REEFLEX_CORE_URL', 'https://your-reeflex-core-host' );  // required
-define( 'REEFLEX_ENV',      'production' );                        // optional
-define( 'REEFLEX_AGENT_ID', 'agent:wordpress' );                   // optional
+define( 'REEFLEX_CORE_URL',  'https://your-reeflex-core-host' );  // required
+define( 'REEFLEX_CORE_TOKEN', '' );                                 // optional (core auth)
+define( 'REEFLEX_VERIFY_SSL', true );                               // false ONLY for api-dev
+define( 'REEFLEX_ENV',      'production' );                         // optional
+define( 'REEFLEX_AGENT_ID', 'agent:wordpress' );                    // optional
 define( 'REEFLEX_AUDIT_LOG', '/absolute/path/to/reeflex-audit.jsonl' );  // optional
-define( 'REEFLEX_TIMEOUT',  5 );                                   // optional
+define( 'REEFLEX_TIMEOUT',  5 );                                    // optional
 ```
 
 ---
