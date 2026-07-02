@@ -95,6 +95,20 @@ counts) to cover `transact` (monetary amount, EUR/RON) and `emit` (outbound
 call count per session). Policy rules can then gate on spend and egress
 budgets, not just destructive operations.
 
+### R5 session-delete-budget scope (open decision)
+
+R5 (`reeflex.policy/session_delete_budget`, SPEC §4.1) currently holds **every**
+verb once a session's cumulative delete budget is exceeded — including read-only
+actions — as a whole-session fragmentation guard. This is deterministically
+correct (the session is flagged for human review) but surprised operators during
+live testing: a plain read returned HOLD after enough prior deletes accumulated
+in the same session. Decision needed: keep the guard all-verbs (strongest
+fragmentation resistance — the whole session is reviewed) or scope it to
+destructive verbs only (`delete` / `transact` / `emit`), letting reads through
+while the budget is blown. Not a bug — a policy-posture choice. `reeflex-verify`
+mitigates the surprise for testing by using a fresh session per run (each run
+starts with a clean budget).
+
 ### ed25519 envelope signing and audit record signing
 
 The SPEC (§6) specifies that envelopes are signed at interception

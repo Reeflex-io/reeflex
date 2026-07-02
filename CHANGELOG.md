@@ -3,6 +3,20 @@
 All notable changes to Reeflex are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project is pre-release.
 
+## [0.1.2] - Unreleased
+
+### Changed
+- **`reeflex-verify` — fresh agent session per run.** The CLI now sends a unique `Mcp-Session-Id`
+  header on every run (override with `--session-id` to pin one). The core binds cumulative
+  anti-fragmentation policy state to `session_id` (SPEC §4.1); without a fresh session, repeated
+  runs against the same site accumulate into one per-session delete budget and eventually the gate
+  holds even read-only actions (rule `reeflex.policy/session_delete_budget`), producing false
+  mismatches. Validated 5/5 on a live WordPress site in both the standard and mu install forms.
+
+### Docs
+- `reeflex-verify/README.md` now shows a real clean-run screenshot (`docs/img/reeflex-verify-output.png`).
+- `ROADMAP.md` records the open policy decision on R5 scope (all-verbs vs destructive-verbs-only).
+
 ## [0.1.1] - Unreleased
 
 API hardening ahead of network exposure. The decision path is unchanged.

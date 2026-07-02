@@ -32,6 +32,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 # Browser-like User-Agent. Some hosts (cPanel mod_security / anti-bot WAFs) reset or
 # cancel connections from non-browser clients like "Python-urllib"; presenting a browser
@@ -92,12 +93,20 @@ VERDICT_COLOR = {
 class WPClient:
     """Minimal WordPress Abilities API client using Basic auth (App Password)."""
 
-    def __init__(self, base_url, user, app_password, insecure=False, timeout=15):
+    def __init__(self, base_url, user, app_password, insecure=False, timeout=15,
+                 session_id=None):
         self.base = base_url.rstrip("/")
         token = base64.b64encode(f"{user}:{app_password}".encode()).decode()
         self.auth_header = f"Basic {token}"
         self.timeout = timeout
         self.insecure = insecure
+        # Per-run agent session id, surfaced to the gate as the Mcp-Session-Id header.
+        # The Reeflex adapter binds cumulative (anti-fragmentation) policy state to
+        # session_id (SPEC §4.1). A FRESH id per run keeps verdicts reproducible:
+        # otherwise the core's per-session delete budget accumulates across repeated
+        # runs and eventually holds even read-only actions (the fragmentation guard,
+        # rule reeflex.policy/session_delete_budget, fires on the whole session).
+        self.session_id = session_id
         # Prefer the system curl: its TLS handshake traverses WAF/anti-bot layers
         # that reset Python's urllib. Fall back to urllib when curl is absent.
         self._curl = shutil.which("curl")
@@ -127,6 +136,8 @@ class WPClient:
         cmd = [self._curl, "-sS", "-o", tmp, "-w", "%{http_code}", "-X", method,
                "-A", _BROWSER_UA, "-H", "Authorization: " + self.auth_header,
                "-H", "Accept: application/json", "--max-time", str(self.timeout)]
+        if self.session_id:
+            cmd += ["-H", "Mcp-Session-Id: " + self.session_id]
         if self.insecure:
             cmd.append("-k")
         if data is not None:
@@ -156,6 +167,8 @@ class WPClient:
         """Fallback transport via urllib (browser UA, retries). -> (status, raw bytes)."""
         headers = {"Authorization": self.auth_header, "Accept": "application/json",
                    "User-Agent": _BROWSER_UA}
+        if self.session_id:
+            headers["Mcp-Session-Id"] = self.session_id
         if data is not None:
             headers["Content-Type"] = "application/json"
         ctx = None
@@ -275,10 +288,15 @@ def cmd_wp(args):
               "REEFLEX_WP_APP_PASSWORD.")
         return 2
 
-    client = WPClient(url, user, app_pw, insecure=args.insecure)
+    # Fresh session id per run (unless pinned): the core's cumulative anti-fragmentation
+    # policy (SPEC §4.1) binds to session_id, so a stale/shared session would let a
+    # prior run's delete budget hold this run's read-only actions.
+    sid = args.session_id or ("reeflex-verify-" + uuid.uuid4().hex)
+    client = WPClient(url, user, app_pw, insecure=args.insecure, session_id=sid)
     ns = args.namespace
 
     print_header(f"Reeflex verify · WordPress · {url}")
+    print(color(f" Session: {sid}  ({'pinned' if args.session_id else 'fresh per run'})", C.DIM))
     expect_fc = args.expect_fail_closed
     if expect_fc:
         print(color(" Mode: --expect-fail-closed — every action should be BLOCKED.", C.YELLOW))
@@ -377,6 +395,10 @@ def build_parser():
                                            "(or env REEFLEX_WP_APP_PASSWORD)")
     wp.add_argument("--namespace", default="reeflex-test",
                     help="Ability namespace to test (default: reeflex-test)")
+    wp.add_argument("--session-id", help="Pin the agent session id (sent as Mcp-Session-Id). "
+                                         "Default: a fresh random id per run, so the core's "
+                                         "cumulative anti-fragmentation policy state does not "
+                                         "carry across runs. Pin it to test cumulative behavior.")
     wp.add_argument("--expect-fail-closed", action="store_true",
                     help="Assert that EVERY action is blocked (use after pointing "
                          "the plugin at a dead core URL to test fail-closed).")
