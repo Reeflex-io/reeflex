@@ -48,8 +48,11 @@ final class Reeflex_Audit {
 
 			if ( false === $line ) {
 				// JSON encoding failed — log minimally; do not alter decision.
-				error_log( '[reeflex] WARN: audit record JSON encoding failed for nonce ' .
-					( $envelope['meta']['nonce'] ?? 'unknown' ) );
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+					error_log( '[reeflex] WARN: audit record JSON encoding failed for nonce ' .
+						( $envelope['meta']['nonce'] ?? 'unknown' ) );
+				}
 				return;
 			}
 
@@ -67,7 +70,10 @@ final class Reeflex_Audit {
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
 			$fh = fopen( $path, 'a' );
 			if ( false === $fh ) {
-				error_log( '[reeflex] WARN: cannot open audit log for writing: ' . $path );
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+					error_log( '[reeflex] WARN: cannot open audit log for writing: ' . $path );
+				}
 				return;
 			}
 
@@ -79,7 +85,10 @@ final class Reeflex_Audit {
 				flock( $fh, LOCK_UN );
 			} else {
 				// Lock failed (e.g. NFS without lock support): write anyway but warn.
-				error_log( '[reeflex] WARN: could not acquire flock on audit log; writing without lock.' );
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+					error_log( '[reeflex] WARN: could not acquire flock on audit log; writing without lock.' );
+				}
 				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
 				fwrite( $fh, $line . "\n" );
 				fflush( $fh );
@@ -90,7 +99,10 @@ final class Reeflex_Audit {
 
 		} catch ( Throwable $e ) {
 			// Audit failure MUST NOT affect the decision (SPEC §6).
-			error_log( '[reeflex] WARN: audit write threw exception: ' . $e->getMessage() );
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+				error_log( '[reeflex] WARN: audit write threw exception: ' . $e->getMessage() );
+			}
 		}
 	}
 

@@ -197,13 +197,16 @@ final class Reeflex_Gate {
 				// Step 3e: log rule+reason server-side for operator correlation (NEW-1).
 				// These are NOT in the public WP_Error data — the REST API serializes data[].
 				if ( 'allow' !== $decision['decision'] ) {
-					error_log( sprintf(
-						'[reeflex] decision=%s rule=%s nonce=%s reason=%s',
-						$decision['decision'] ?? 'unknown',
-						$decision['rule'] ?? 'unknown',
-						$nonce,
-						$decision['reason'] ?? ''
-					) );
+					if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+						// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+						error_log( sprintf(
+							'[reeflex] decision=%s rule=%s nonce=%s reason=%s',
+							$decision['decision'] ?? 'unknown',
+							$decision['rule'] ?? 'unknown',
+							$nonce,
+							$decision['reason'] ?? ''
+						) );
+					}
 				}
 
 				// Step 3f: enforce.
@@ -211,7 +214,10 @@ final class Reeflex_Gate {
 
 			} catch ( \Throwable $e ) {
 				// Unexpected exception: fail CLOSED (NEW-2). Log and deny.
-				error_log( '[reeflex] unexpected exception in permission gate, failing closed: ' . $e->getMessage() );
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+					error_log( '[reeflex] unexpected exception in permission gate, failing closed: ' . $e->getMessage() );
+				}
 				return self::enforce_from_permission_callback(
 					Reeflex_Core_Client::fail_closed( 'unexpected exception: ' . $e->getMessage() )
 				);
@@ -293,13 +299,16 @@ final class Reeflex_Gate {
 
 			// Log rule+reason server-side for operator correlation (NEW-1).
 			if ( 'allow' !== $decision['decision'] ) {
-				error_log( sprintf(
-					'[reeflex] mcp decision=%s rule=%s nonce=%s reason=%s',
-					$decision['decision'] ?? 'unknown',
-					$decision['rule'] ?? 'unknown',
-					$nonce,
-					$decision['reason'] ?? ''
-				) );
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+					error_log( sprintf(
+						'[reeflex] mcp decision=%s rule=%s nonce=%s reason=%s',
+						$decision['decision'] ?? 'unknown',
+						$decision['rule'] ?? 'unknown',
+						$nonce,
+						$decision['reason'] ?? ''
+					) );
+				}
 			}
 
 			if ( 'allow' === $decision['decision'] ) {
@@ -313,7 +322,10 @@ final class Reeflex_Gate {
 
 		} catch ( \Throwable $e ) {
 			// Unexpected exception: fail CLOSED (NEW-2). Log and deny.
-			error_log( '[reeflex] unexpected exception in MCP gate, failing closed: ' . $e->getMessage() );
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+				error_log( '[reeflex] unexpected exception in MCP gate, failing closed: ' . $e->getMessage() );
+			}
 			return self::enforce_as_wp_error_for_mcp(
 				Reeflex_Core_Client::fail_closed( 'unexpected exception: ' . $e->getMessage() )
 			);
@@ -506,10 +518,13 @@ final class Reeflex_Gate {
 			do_action( 'reeflex_obligation', $obligation, $envelope, $decision );
 
 			if ( ! in_array( $obligation, $recognized, true ) ) {
-				error_log(
-					'[reeflex] WARN: unrecognized obligation "' . $obligation . '" — ' .
-					'no built-in handler; reeflex_obligation action was fired for operator hooks.'
-				);
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+					error_log(
+						'[reeflex] WARN: unrecognized obligation "' . $obligation . '" — ' .
+						'no built-in handler; reeflex_obligation action was fired for operator hooks.'
+					);
+				}
 			}
 		}
 	}

@@ -194,15 +194,18 @@ final class Reeflex_Normalizer {
 			} else {
 				// trusted verb would downgrade danger: reject override (NEW-3).
 				$verb = $heuristic_verb;
-				error_log( sprintf(
-					'[reeflex] NEW-3: trusted verb "%s" (rank %d) would downgrade heuristic ' .
-					'"%s" (rank %d) for ability "%s" — trusted verb IGNORED; using heuristic.',
-					$trusted_verb,
-					$trusted_rank,
-					$heuristic_verb,
-					$heuristic_rank,
-					$ability
-				) );
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+					error_log( sprintf(
+						'[reeflex] NEW-3: trusted verb "%s" (rank %d) would downgrade heuristic ' .
+						'"%s" (rank %d) for ability "%s" — trusted verb IGNORED; using heuristic.',
+						$trusted_verb,
+						$trusted_rank,
+						$heuristic_verb,
+						$heuristic_rank,
+						$ability
+					) );
+				}
 			}
 		} else {
 			$verb = $heuristic_verb;
@@ -711,7 +714,7 @@ final class Reeflex_Normalizer {
 	private static function resolve_session_id( ?WP_User $user ): string {
 		// 1. MCP session id: allowlist + cap (P2-10).
 		if ( ! empty( $_SERVER['HTTP_MCP_SESSION_ID'] ) ) {
-			$raw_sid = (string) $_SERVER['HTTP_MCP_SESSION_ID'];
+			$raw_sid = sanitize_text_field( wp_unslash( $_SERVER['HTTP_MCP_SESSION_ID'] ) );
 			$mcp_sid = substr( preg_replace( '/[^A-Za-z0-9\-_]/', '', $raw_sid ), 0, 128 );
 			if ( '' !== $mcp_sid ) {
 				return 'mcp:' . $mcp_sid;
@@ -733,8 +736,8 @@ final class Reeflex_Normalizer {
 		}
 
 		// 4. Anon ephemeral fallback.
-		$ts = isset( $_SERVER['REQUEST_TIME'] ) ? (string) $_SERVER['REQUEST_TIME'] : (string) time();
-		$ip = isset( $_SERVER['REMOTE_ADDR'] ) ? (string) $_SERVER['REMOTE_ADDR'] : '0.0.0.0';
+		$ts = isset( $_SERVER['REQUEST_TIME'] ) ? (string) absint( wp_unslash( $_SERVER['REQUEST_TIME'] ) ) : (string) time();
+		$ip = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : '0.0.0.0';
 		return 'anon:' . substr( hash( 'sha256', $ip . ':' . $ts ), 0, 24 );
 	}
 

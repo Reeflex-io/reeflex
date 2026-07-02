@@ -80,12 +80,15 @@ final class Reeflex_Core_Client {
 			$parsed_host   = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
 			$loopback      = array( '127.0.0.1', 'localhost', '::1' );
 			if ( 'https' === $parsed_scheme && ! in_array( $parsed_host, $loopback, true ) ) {
-				error_log(
-					'[reeflex] WARNING: TLS certificate verification is DISABLED for a non-loopback ' .
-					'https endpoint (' . $parsed_host . '). This is for development/staging only ' .
-					'(e.g. untrusted staging certs). Enable verify_ssl in production to prevent MITM ' .
-					'interception of the governance decision call.'
-				);
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+					error_log(
+						'[reeflex] WARNING: TLS certificate verification is DISABLED for a non-loopback ' .
+						'https endpoint (' . $parsed_host . '). This is for development/staging only ' .
+						'(e.g. untrusted staging certs). Enable verify_ssl in production to prevent MITM ' .
+						'interception of the governance decision call.'
+					);
+				}
 			}
 		}
 
@@ -167,7 +170,10 @@ final class Reeflex_Core_Client {
 	 */
 	public static function fail_closed( string $reason ): array {
 		// Log the detailed reason server-side only (P2-13).
-		error_log( '[reeflex] fail-closed: ' . $reason );
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+			error_log( '[reeflex] fail-closed: ' . $reason );
+		}
 
 		return array(
 			'decision'    => 'deny',
