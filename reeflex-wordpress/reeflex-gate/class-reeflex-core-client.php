@@ -57,16 +57,48 @@ final class Reeflex_Core_Client {
 			return self::fail_closed( 'envelope JSON encoding failed' );
 		}
 
+		// Build request headers.
+		// The token is fetched here, stripped of control characters as defense-in-depth
+		// against CRLF/NUL header injection (MED-2), used once, and never logged (P2-13).
+		$headers = array( 'Content-Type' => 'application/json' );
+		$token   = (string) preg_replace( '/[\x00-\x1F\x7F]/', '', Reeflex_Config::core_token() );
+		if ( '' !== $token ) {
+			$headers['Authorization'] = 'Bearer ' . $token;
+		}
+		// $token is discarded after this point; it is not recorded in any log.
+		unset( $token );
+
+		// Resolve TLS verification setting (constant > DB > true).
+		$verify_ssl = Reeflex_Config::verify_ssl();
+
+		// Dev-guard: warn loudly if TLS verification has been disabled for a non-loopback
+		// https endpoint. The request still proceeds — this is a log-only guard intended
+		// to catch accidental production misconfiguration. Loopback hosts (127.0.0.1,
+		// localhost, ::1) are exempt because TLS is meaningless on loopback anyway.
+		if ( ! $verify_ssl ) {
+			$parsed_scheme = strtolower( (string) wp_parse_url( $url, PHP_URL_SCHEME ) );
+			$parsed_host   = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+			$loopback      = array( '127.0.0.1', 'localhost', '::1' );
+			if ( 'https' === $parsed_scheme && ! in_array( $parsed_host, $loopback, true ) ) {
+				error_log(
+					'[reeflex] WARNING: TLS certificate verification is DISABLED for a non-loopback ' .
+					'https endpoint (' . $parsed_host . '). This is for development/staging only ' .
+					'(e.g. untrusted staging certs). Enable verify_ssl in production to prevent MITM ' .
+					'interception of the governance decision call.'
+				);
+			}
+		}
+
 		$response = wp_remote_post(
 			$url,
 			array(
-				'headers'     => array( 'Content-Type' => 'application/json' ),
+				'headers'     => $headers,
 				'body'        => $body,
 				'timeout'     => Reeflex_Config::request_timeout(),
 				'redirection' => 0,    // never follow redirects on the decision endpoint
 				'httpversion' => '1.1',
 				'blocking'    => true,
-				'sslverify'   => true, // do not disable SSL verification in production
+				'sslverify'   => $verify_ssl,
 			)
 		);
 

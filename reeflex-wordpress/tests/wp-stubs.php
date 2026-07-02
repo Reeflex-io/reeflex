@@ -72,6 +72,13 @@ function wp_generate_uuid4() {
 function wp_json_encode( $data, $flags = 0, $depth = 512 ) { return json_encode( $data, $flags, $depth ); }
 function sanitize_text_field( $s ) { return trim( preg_replace( '/[\r\n\t]+/', ' ', (string) $s ) ); }
 
+// WordPress options API: the harness has no DB, so an option returns its default.
+// Reeflex_Config::stored_options() calls get_option( 'reeflex_gate_options', array() );
+// returning the default yields core_url='' / core_token='' / verify_ssl=true, so the
+// adapter falls back to the wp-config constants (defined above) — the intended
+// precedence (constant > DB option) that this harness exercises.
+function get_option( $option, $default = false ) { return $default; }
+
 // --- HTTP API: wp_remote_post -> real HTTP via streams (no curl dependency) -
 function wp_remote_post( $url, $args = array() ) {
 	$body    = $args['body'] ?? '';

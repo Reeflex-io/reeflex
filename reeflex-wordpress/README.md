@@ -200,19 +200,31 @@ Full step-by-step install for both forms: [INSTALL.md](INSTALL.md).
 
 ## Configuration
 
-Configuration comes from two places, with a clear precedence:
+### Settings page (standard plugin install)
 
-- **Standard plugin:** the **Settings → Reeflex Gate** screen (values stored in
-  `wp_options`). Fields: API URL, Token, Verify TLS certificate.
-- **Both forms:** PHP constants in `wp-config.php`. **A defined constant always
-  overrides the Settings screen** and locks the corresponding field in the UI.
-  The mu-plugin is configured exclusively through constants.
+When installed as a standard plugin, **Settings > Reeflex Gate** provides a
+three-field admin page:
+
+- **API URL** — the base URL of your reeflex-core instance. Mandatory; without
+  it Reeflex fails closed on every action.
+- **Token** — the bearer token for the Authorization header. Optional.
+- **Verify TLS certificate** — verify the core's TLS certificate. On by default;
+  uncheck only for dev/staging endpoints with untrusted certs (e.g. `api-dev.reeflex.io`).
+
+Settings are stored in `wp_options` under the option `reeflex_gate_options`.
+
+### wp-config.php constants
+
+Constants defined in `wp-config.php` always take precedence over the Settings
+page values and lock those fields read-only. Use constants for production
+deployments where you need a server-side trust anchor an admin cannot override.
+The mu-plugin is configured exclusively through constants.
 
 No secrets are accepted inline — reference them via environment or Vault.
 
 | Constant             | Required     | Default                                    | Description |
 |----------------------|--------------|--------------------------------------------|-------------|
-| `REEFLEX_CORE_URL`   | **Yes**      | `''` (fail-closed until set)              | Base URL of `reeflex-core`. Must be `https://` in production. `http://` is accepted only for loopback hosts (`127.0.0.1`, `localhost`, `::1`) or when `REEFLEX_ENV=dev`. Any other `http://` URL is rejected as a misconfiguration and every call fails closed. No filter override is possible (the URL is a trust anchor; a later-loading plugin cannot redirect decisions). Standard-plugin equivalent: the "API URL" field in Settings. |
+| `REEFLEX_CORE_URL`   | **Yes**      | `''` (fail-closed until set)              | Base URL of `reeflex-core`. Must be `https://` in production. `http://` is accepted only for loopback hosts (`127.0.0.1`, `localhost`, `::1`); any other `http://` URL is rejected unconditionally and every call fails closed. No filter override is possible (the URL is a trust anchor; a later-loading plugin cannot redirect decisions). Standard-plugin equivalent: the "API URL" field in Settings. |
 | `REEFLEX_CORE_TOKEN` | No           | `''`                                       | Bearer token sent to `reeflex-core` when its auth is enabled. Standard-plugin equivalent: the "Token" field in Settings. Keep it out of version control — reference from environment or Vault. |
 | `REEFLEX_VERIFY_SSL` | No           | `true`                                     | Whether to verify the TLS certificate of the core endpoint. **Keep `true` in production.** Set `false` only for development endpoints with untrusted certificates (e.g. `api-dev.reeflex.io`, which uses a Let's Encrypt staging cert). Standard-plugin equivalent: the "Verify TLS certificate" checkbox in Settings. |
 | `REEFLEX_ENV`        | No           | `production`                               | Environment label written into every envelope's `target.environment`. Values: `production`, `staging`, `dev`. |
@@ -220,8 +232,10 @@ No secrets are accepted inline — reference them via environment or Vault.
 | `REEFLEX_AUDIT_LOG`  | No           | `WP_CONTENT_DIR/reeflex-audit.jsonl`      | Absolute filesystem path for the append-only JSONL audit log. The default is outside `uploads/` so the file is not web-accessible. Paths containing `..` are rejected; a path inside `uploads/` generates a warning. |
 | `REEFLEX_TIMEOUT`    | No           | `5`                                        | HTTP timeout in seconds for `POST /v1/decide`. Short is correct — the fail-closed path fires on timeout; a long timeout only delays the deny. |
 
-`REEFLEX_CORE_URL` has no built-in default remote host. If the constant is
-unset, every decision fails closed immediately. Set it explicitly.
+`REEFLEX_CORE_URL` has no built-in default remote host. If neither the constant
+nor the Settings page value is set, every decision fails closed immediately.
+Set it explicitly — via the Settings page for a standard plugin install, or via
+the constant for a mu-plugin install or any production deployment.
 
 ---
 
