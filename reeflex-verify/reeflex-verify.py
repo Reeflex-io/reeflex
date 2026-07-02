@@ -24,11 +24,21 @@ import argparse
 import base64
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+# Browser-like User-Agent. Some hosts (cPanel mod_security / anti-bot WAFs) reset or
+# cancel connections from non-browser clients like "Python-urllib"; presenting a browser
+# UA — and preferring the system `curl` transport below — lets an operator run this
+# against their own WAF-protected site.
+_BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36")
 
 # --------------------------------------------------------------------------
 # Terminal colors (enabled on Windows 10+ too).
@@ -36,6 +46,13 @@ import urllib.request
 def _enable_ansi():
     if os.name == "nt":
         os.system("")  # turns on VT processing in modern Windows terminals
+    # Ensure Unicode output (check marks, box-drawing) does not crash on a legacy
+    # Windows code page (e.g. cp1252): force UTF-8 with a safe replacement fallback.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001  (older Pythons / non-reconfigurable streams)
+            pass
 
 
 class C:
@@ -80,67 +97,93 @@ class WPClient:
         token = base64.b64encode(f"{user}:{app_password}".encode()).decode()
         self.auth_header = f"Basic {token}"
         self.timeout = timeout
-        self.ssl_ctx = None
-        if insecure:
-            import ssl
-            self.ssl_ctx = ssl.create_default_context()
-            self.ssl_ctx.check_hostname = False
-            self.ssl_ctx.verify_mode = ssl.CERT_NONE
+        self.insecure = insecure
+        # Prefer the system curl: its TLS handshake traverses WAF/anti-bot layers
+        # that reset Python's urllib. Fall back to urllib when curl is absent.
+        self._curl = shutil.which("curl")
 
     def _request(self, method, path, body=None):
-        """Return (http_status, parsed_body). Never raises on HTTP errors —
-        reads the error body so Reeflex verdicts (which may arrive as 403/503
-        or as a 2xx with an error-shaped body) are all captured uniformly."""
+        """Return (http_status, parsed_body). Never raises on transport/HTTP errors —
+        error bodies are captured so Reeflex verdicts (which may arrive as 403/503 or a
+        2xx with an error-shaped body) are all read uniformly. status == 0 means the
+        request could not be delivered at all (transport failure)."""
         url = self.base + path
-        data = None
-        headers = {
-            "Authorization": self.auth_header,
-            "Accept": "application/json",
-            # Some hosts (cPanel mod_security / anti-bot WAFs) reset or cancel
-            # connections from non-browser User-Agents like "Python-urllib".
-            # Present a browser UA so an operator's own site is not blocked.
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
-        }
-        if body is not None:
-            data = json.dumps(body).encode()
-            headers["Content-Type"] = "application/json"
-
-        # Retry transient transport failures (TLS reset / dropped connection) that a
-        # WAF or rate-limit can cause; an HTTP status (incl. 4xx/5xx) is a final answer.
-        last_err = None
-        raw = b""
-        status = 0
-        for attempt in range(3):
-            req = urllib.request.Request(url, data=data, headers=headers, method=method)
-            try:
-                resp = urllib.request.urlopen(req, timeout=self.timeout, context=self.ssl_ctx)
-                raw = resp.read()
-                status = resp.status
-                break
-            except urllib.error.HTTPError as e:
-                raw = e.read()
-                status = e.code
-                break
-            except Exception as e:  # noqa: BLE001  (URLError / RemoteDisconnected / reset / timeout)
-                last_err = e
-                if attempt < 2:
-                    time.sleep(2)
-                    continue
-                return 0, {"__neterror__": str(getattr(e, "reason", e))}
-
+        data = json.dumps(body).encode() if body is not None else None
+        status, raw = (self._via_curl(method, url, data) if self._curl
+                       else self._via_urllib(method, url, data))
+        if status == 0:
+            detail = raw.decode(errors="replace") if isinstance(raw, bytes) else str(raw)
+            return 0, {"__neterror__": detail or "request failed"}
         try:
             parsed = json.loads(raw.decode() or "null")
         except (ValueError, UnicodeDecodeError):
             parsed = {"__rawbody__": raw[:400].decode(errors="replace")}
         return status, parsed
 
+    def _via_curl(self, method, url, data):
+        """Transport via system curl (browser UA, Basic auth, retries). -> (status, raw bytes)."""
+        fd, tmp = tempfile.mkstemp(prefix="reeflex-verify-")
+        os.close(fd)
+        cmd = [self._curl, "-sS", "-o", tmp, "-w", "%{http_code}", "-X", method,
+               "-A", _BROWSER_UA, "-H", "Authorization: " + self.auth_header,
+               "-H", "Accept: application/json", "--max-time", str(self.timeout)]
+        if self.insecure:
+            cmd.append("-k")
+        if data is not None:
+            cmd += ["-H", "Content-Type: application/json", "--data-binary", data.decode()]
+        cmd.append(url)
+        last = ""
+        try:
+            for attempt in range(3):
+                p = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout + 15)
+                code = (p.stdout or "").strip()
+                if code.isdigit() and code != "000":
+                    with open(tmp, "rb") as fh:
+                        return int(code), fh.read()
+                last = (p.stderr or "").strip() or ("curl exit %d (http=%s)" % (p.returncode, code or "?"))
+                if attempt < 2:
+                    time.sleep(2)
+        except Exception as e:  # noqa: BLE001
+            last = str(e)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        return 0, last.encode()
+
+    def _via_urllib(self, method, url, data):
+        """Fallback transport via urllib (browser UA, retries). -> (status, raw bytes)."""
+        headers = {"Authorization": self.auth_header, "Accept": "application/json",
+                   "User-Agent": _BROWSER_UA}
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        ctx = None
+        if self.insecure:
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        last = ""
+        for attempt in range(3):
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+            try:
+                resp = urllib.request.urlopen(req, timeout=self.timeout, context=ctx)
+                return resp.status, resp.read()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read()
+            except Exception as e:  # noqa: BLE001  (URLError / RemoteDisconnected / reset / timeout)
+                last = str(getattr(e, "reason", e))
+                if attempt < 2:
+                    time.sleep(2)
+        return 0, last.encode()
+
     def list_abilities(self):
         return self._request("GET", "/wp-json/wp-abilities/v1/abilities")
 
     def run_ability(self, namespace, ability, input_dict):
         # No readonly/destructive annotation on the test abilities => POST + body.
-        path = f"/wp-json/wp-abilities/v1/{namespace}/{ability}/run"
+        path = f"/wp-json/wp-abilities/v1/abilities/{namespace}/{ability}/run"
         return self._request("POST", path, {"input": input_dict})
 
 
