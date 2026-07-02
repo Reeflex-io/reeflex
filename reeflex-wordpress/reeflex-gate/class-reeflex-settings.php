@@ -254,7 +254,7 @@ final class Reeflex_Settings {
 				// Operator explicitly requested token removal.
 				$out['core_token'] = '';
 			} else {
-				$submitted_token = isset( $input['core_token'] ) ? trim( strip_tags( (string) $input['core_token'] ) ) : '';
+				$submitted_token = isset( $input['core_token'] ) ? trim( wp_strip_all_tags( (string) $input['core_token'] ) ) : '';
 				// Strip control characters (C0, DEL) to prevent CRLF/NUL header injection (MED-2).
 				$submitted_token = (string) preg_replace( '/[\x00-\x1F\x7F]/', '', $submitted_token );
 

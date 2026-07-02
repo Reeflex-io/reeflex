@@ -12,7 +12,6 @@
  * License URI:  https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain:  reeflex-gate
  * Domain Path:  /languages
- * Update URI:   false
  */
 
 /**
@@ -139,21 +138,6 @@ Reeflex_Gate::register_hooks();
 // Settings page: attaches admin_menu + admin_init hooks.
 // Inert on the front end and in non-admin (CLI/cron) contexts.
 Reeflex_Settings::init();
-
-// ------------------------------------------------------------------
-// i18n — scaffold for future translations.
-//
-// No .mo files ship yet; this is a best-effort registration so that
-// any future /languages/<locale>.mo files are picked up automatically
-// without a code change. The call is harmless if no .mo exists.
-// ------------------------------------------------------------------
-
-add_action(
-	'init',
-	static function () {
-		load_plugin_textdomain( 'reeflex-gate', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
-	}
-);
 
 // ------------------------------------------------------------------
 // Settings row action link — standard-plugin form only.

@@ -142,11 +142,14 @@ final class Reeflex_Config {
 		}
 
 		// Source 3: no URL configured — fail-closed path.
-		error_log(
-			'[reeflex] WARN: No core URL is configured. ' .
-			'All governance decisions will fail-closed until a URL is set in ' .
-			'wp-config.php (REEFLEX_CORE_URL) or the Reeflex Gate settings page.'
-		);
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+			error_log(
+				'[reeflex] WARN: No core URL is configured. ' .
+				'All governance decisions will fail-closed until a URL is set in ' .
+				'wp-config.php (REEFLEX_CORE_URL) or the Reeflex Gate settings page.'
+			);
+		}
 		return '';
 	}
 
@@ -316,19 +319,25 @@ final class Reeflex_Config {
 
 		// Reject directory-traversal attempts in the configured path.
 		if ( false !== strpos( $configured, '..' ) ) {
-			error_log(
-				'[reeflex] WARN: REEFLEX_AUDIT_LOG contains ".." — rejected; using safe default.'
-			);
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+				error_log(
+					'[reeflex] WARN: REEFLEX_AUDIT_LOG contains ".." — rejected; using safe default.'
+				);
+			}
 			return $safe_default;
 		}
 
 		// Warn if the path is inside an uploads/ directory (web-accessible risk).
 		$uploads_dir = trailingslashit( WP_CONTENT_DIR ) . 'uploads';
 		if ( 0 === strpos( $configured, $uploads_dir ) ) {
-			error_log(
-				'[reeflex] WARN: REEFLEX_AUDIT_LOG is inside the uploads/ directory and may be ' .
-				'web-accessible. Move it outside uploads/ or add a .htaccess deny rule.'
-			);
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+				error_log(
+					'[reeflex] WARN: REEFLEX_AUDIT_LOG is inside the uploads/ directory and may be ' .
+					'web-accessible. Move it outside uploads/ or add a .htaccess deny rule.'
+				);
+			}
 		}
 
 		return $configured;
@@ -382,14 +391,17 @@ final class Reeflex_Config {
 	public static function sanitize_core_url( string $url, string $source = 'reeflex' ): string {
 		// Reject directory-traversal sequences regardless of source.
 		if ( false !== strpos( $url, '..' ) ) {
-			error_log(
-				'[reeflex] WARN: ' . $source . ' contains ".." — rejected as misconfigured.'
-			);
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+				error_log(
+					'[reeflex] WARN: ' . $source . ' contains ".." — rejected as misconfigured.'
+				);
+			}
 			return '';
 		}
 
-		$scheme = strtolower( (string) parse_url( $url, PHP_URL_SCHEME ) );
-		$host   = strtolower( (string) parse_url( $url, PHP_URL_HOST ) );
+		$scheme = strtolower( (string) wp_parse_url( $url, PHP_URL_SCHEME ) );
+		$host   = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
 
 		if ( 'https' === $scheme ) {
 			// https is always acceptable.
@@ -401,18 +413,24 @@ final class Reeflex_Config {
 			if ( in_array( $host, self::LOOPBACK_HOSTS, true ) ) {
 				return $url;
 			}
-			error_log(
-				'[reeflex] WARN: ' . $source . ' uses http:// with a non-loopback host — ' .
-				'rejected (SSRF / token-exfiltration risk). Use https://, or set ' .
-				'REEFLEX_CORE_URL as a wp-config.php constant for non-loopback http://.'
-			);
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+				error_log(
+					'[reeflex] WARN: ' . $source . ' uses http:// with a non-loopback host — ' .
+					'rejected (SSRF / token-exfiltration risk). Use https://, or set ' .
+					'REEFLEX_CORE_URL as a wp-config.php constant for non-loopback http://.'
+				);
+			}
 			return '';
 		}
 
-		error_log(
-			'[reeflex] WARN: ' . $source . ' has an unrecognised scheme "' .
-			$scheme . '" — rejected as misconfigured.'
-		);
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+			error_log(
+				'[reeflex] WARN: ' . $source . ' has an unrecognised scheme "' .
+				$scheme . '" — rejected as misconfigured.'
+			);
+		}
 		return '';
 	}
 }

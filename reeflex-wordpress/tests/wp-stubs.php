@@ -70,7 +70,21 @@ function wp_generate_uuid4() {
 	return vsprintf( '%s%s-%s-%s-%s-%s%s%s', str_split( bin2hex( $d ), 4 ) );
 }
 function wp_json_encode( $data, $flags = 0, $depth = 512 ) { return json_encode( $data, $flags, $depth ); }
-function sanitize_text_field( $s ) { return trim( preg_replace( '/[\r\n\t]+/', ' ', (string) $s ) ); }
+if ( ! function_exists( 'absint' ) ) {
+	function absint( $n ) { return abs( (int) $n ); }
+}
+if ( ! function_exists( 'sanitize_text_field' ) ) {
+	function sanitize_text_field( $str ) { return trim( preg_replace( '/[\r\n\t ]+/', ' ', strip_tags( (string) $str ) ) ); }
+}
+if ( ! function_exists( 'wp_parse_url' ) ) {
+	function wp_parse_url( $url, $component = -1 ) { return parse_url( $url, $component ); }
+}
+if ( ! function_exists( 'wp_strip_all_tags' ) ) {
+	function wp_strip_all_tags( $string ) { return trim( strip_tags( (string) $string ) ); }
+}
+if ( ! function_exists( 'wp_unslash' ) ) {
+	function wp_unslash( $value ) { return is_string( $value ) ? stripslashes( $value ) : $value; }
+}
 
 // WordPress options API: the harness has no DB, so an option returns its default.
 // Reeflex_Config::stored_options() calls get_option( 'reeflex_gate_options', array() );
