@@ -230,6 +230,10 @@ three-field admin page:
 - **Token** — the bearer token for the Authorization header. Optional.
 - **Verify TLS certificate** — verify the core's TLS certificate. On by default;
   uncheck only for dev/staging endpoints with untrusted certs (e.g. `api-dev.reeflex.io`).
+- **Enforcement mode** — `enforce` (default) or `observe`. In observe mode every
+  verdict is recorded but nothing is enforced; see [Observe mode](#observe-mode)
+  below. The `REEFLEX_MODE` constant, when defined, takes precedence and locks
+  this field read-only.
 
 Settings are stored in `wp_options` under the option `reeflex_gate_options`.
 
@@ -251,6 +255,7 @@ No secrets are accepted inline — reference them via environment or Vault.
 | `REEFLEX_AGENT_ID`   | No           | `agent:wordpress`                          | Agent identity string for `agent.id` in the envelope. |
 | `REEFLEX_AUDIT_LOG`  | No           | `WP_CONTENT_DIR/reeflex-audit.jsonl`      | Absolute filesystem path for the append-only JSONL audit log. The default is outside `uploads/` so the file is not web-accessible. Paths containing `..` are rejected; a path inside `uploads/` generates a warning. |
 | `REEFLEX_TIMEOUT`    | No           | `5`                                        | HTTP timeout in seconds for `POST /v1/decide`. Short is correct — the fail-closed path fires on timeout; a long timeout only delays the deny. |
+| `REEFLEX_MODE`       | No           | `enforce`                                  | `enforce`\|`observe`. In observe mode the gate records every verdict to the audit log (annotated `mode=observe`) but never enforces — the action always proceeds — and a core outage **fails OPEN** (never blocks the site) (HIL-DESIGN §8). In enforce mode (default) core outages fail closed as usual. Standard-plugin equivalent: the "Enforcement mode" dropdown in Settings. |
 
 `REEFLEX_CORE_URL` has no built-in default remote host. If neither the constant
 nor the Settings page value is set, every decision fails closed immediately.
@@ -283,6 +288,43 @@ When core returns `allow` with obligations, the adapter:
 - Fires `do_action('reeflex_obligation', $obligation, $envelope, $decision)` for each obligation, so operators can hook custom handlers.
 - Acknowledges `audit:full` (the audit record is already written before enforcement).
 - Logs a warning for any obligation it does not recognize, so nothing passes silently.
+
+---
+
+## Observe mode
+
+Observe mode records every verdict to the audit log but enforces nothing — the action always proceeds. Use it to see what Reeflex would have stopped before you turn enforcement on. In observe, a core outage does NOT block the site: the gate fails OPEN (the opposite of enforce's fail-closed), because observe must never break a production site.
+
+> **Every verdict recorded, nothing enforced — see what Reeflex would have stopped, before you turn it on.**
+
+> **IMPORTANT — fail-closed is deliberately suspended in observe.** In enforce mode a core outage denies the action (fail-closed). In observe mode a core outage _allows_ the action (fail-OPEN). This is intentional: observe is a monitoring mode and must never block a production site. Switch to `enforce` when you are ready to protect.
+
+### Enabling observe mode
+
+**Via `wp-config.php` (mu-plugin or standard plugin):**
+
+```php
+define( 'REEFLEX_MODE', 'observe' );
+```
+
+**Via the Settings page (standard plugin):**
+
+Go to **Settings > Reeflex Gate** and set **Enforcement mode** to `observe`. When `REEFLEX_MODE` is defined as a constant it takes precedence and locks this field read-only, consistent with the precedence rules for all other constants.
+
+### What observe mode does
+
+- The adapter still intercepts every ability call and POSTs the Action Envelope to `reeflex-core /v1/decide`.
+- The audit log entry is written with `"mode": "observe"` and the would-be verdict (`allow`, `deny`, or `require_approval`).
+- Regardless of the verdict, the ability is allowed to proceed — no `WP_Error` is returned.
+- If core is unreachable (timeout, non-200, invalid JSON), the gate **fails OPEN**: the ability proceeds and the outage is recorded in the audit log. This is the reverse of enforce's fail-closed behaviour.
+
+### Recommended workflow
+
+1. Deploy with `REEFLEX_MODE=observe` (or set the dropdown).
+2. Run your normal agent workload for a period.
+3. Review the audit log: identify which actions Reeflex would have denied or held.
+4. Adjust policy as needed (see [SPEC.md](../reeflex-spec/SPEC.md)).
+5. Switch to `REEFLEX_MODE=enforce` (or `enforce` in the dropdown) when confident. Enforce behaviour and fail-closed guarantees take effect immediately.
 
 ---
 

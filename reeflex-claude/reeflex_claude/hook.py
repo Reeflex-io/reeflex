@@ -18,7 +18,7 @@ OUTPUT CONTRACT (Claude Code PreToolUse modern form):
                            "permissionDecision":"<allow|deny|ask>",
                            "permissionDecisionReason":"<text>"}}
 
-FAIL-CLOSED CRITICAL INVARIANT:
+FAIL-CLOSED CRITICAL INVARIANT (enforce mode, the default):
   A non-zero exit from a PreToolUse hook makes Claude Code CONTINUE the tool
   anyway -- silent allow!  Therefore:
   * We ALWAYS exit(0).
@@ -30,6 +30,9 @@ FAIL-CLOSED CRITICAL INVARIANT:
     them in isolation.
   * Every stdout print is wrapped in try/except Exception to handle BrokenPipe
     (which would otherwise propagate and cause a non-zero exit -> silent allow).
+
+When REEFLEX_MODE=observe, the hook records the would-be verdict but always
+emits allow, and fails OPEN on error (never blocks) -- HIL-DESIGN §8.
 
 OBLIGATIONS (SPEC §5 / §7 M5):
   Supported obligations: {"audit:full"} -- honored by construction (we always
@@ -46,6 +49,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 # Obligations we can honor by construction.
@@ -99,6 +103,25 @@ def _safe_print(msg: str) -> None:
         pass
 
 
+def _mode() -> str:
+    """Return the current operating mode: 'observe' or 'enforce' (default)."""
+    m = os.environ.get("REEFLEX_MODE", "enforce").strip().lower()
+    return "observe" if m == "observe" else "enforce"
+
+
+def _fail_output(reason: str) -> str:
+    """
+    Build the error/failure hookSpecificOutput JSON string.
+
+    enforce: deny (fail-closed) -- a failure must never silently allow.
+    observe: allow (fail-open)  -- observe must never block the user.
+    HIL-DESIGN §8.
+    """
+    if _mode() == "observe":
+        return _output("allow", "Reeflex observe (fail-open): " + reason)
+    return _deny_output(reason)
+
+
 def main() -> None:
     """
     Main entry point.  Reads stdin, runs the full INTERCEPT->NORMALIZE->
@@ -112,11 +135,18 @@ def main() -> None:
         _run_pipeline()
     except Exception as exc:  # noqa: BLE001
         # Belt-and-suspenders: something escaped every inner guard.
-        # Emit deny and exit 0 -- NEVER exit non-zero.
-        msg = _deny_output(
-            f"Reeflex: unexpected hook error -- failing closed: "
-            f"{_trunc_err(exc)} [rule=reeflex.core/fail_closed]"
-        )
+        # enforce: emit deny (fail-closed).  observe: emit allow (fail-open).
+        # NEVER exit non-zero.
+        err_text = f"{_trunc_err(exc)} [rule=reeflex.core/fail_closed]"
+        if _mode() == "observe":
+            msg = _output(
+                "allow",
+                f"Reeflex observe (fail-open): unexpected hook error: {err_text}",
+            )
+        else:
+            msg = _deny_output(
+                f"Reeflex: unexpected hook error -- failing closed: {err_text}"
+            )
         _safe_print(msg)
         # Best-effort stderr (non-fatal)
         try:
@@ -144,7 +174,7 @@ def _run_pipeline() -> None:
         raw_stdin = sys.stdin.read()
         hook_payload = json.loads(raw_stdin)
     except Exception as exc:
-        _safe_print(_deny_output(
+        _safe_print(_fail_output(
             f"Reeflex: could not parse hook stdin -- failing closed: "
             f"{_trunc_err(exc)} [rule=reeflex.core/fail_closed]"
         ))
@@ -155,7 +185,7 @@ def _run_pipeline() -> None:
     # ------------------------------------------------------------------
     session_id = hook_payload.get("session_id") or ""
     if not session_id:
-        _safe_print(_deny_output(
+        _safe_print(_fail_output(
             "Reeflex: session_id missing in hook payload -- failing closed "
             "[rule=reeflex.core/fail_closed]"
         ))
@@ -174,7 +204,7 @@ def _run_pipeline() -> None:
         cls      = classify(tool_name, tool_input)
         envelope = build_envelope(hook_payload, cls)
     except Exception as exc:
-        _safe_print(_deny_output(
+        _safe_print(_fail_output(
             f"Reeflex: envelope build failed -- failing closed: "
             f"{_trunc_err(exc)} [rule=reeflex.core/fail_closed]"
         ))
@@ -194,6 +224,8 @@ def _run_pipeline() -> None:
     # we cannot satisfy, OVERRIDE to deny rather than silently proceeding.
     # deny/ask: action is not running so unsupported obligations are not
     # a safety gap -- audit them and pass through.
+    # Note: obligations check runs on the would-be decision in both modes;
+    # in observe mode the would-be deny is recorded but allow is emitted.
     # ------------------------------------------------------------------
     if permission_decision == "allow" and obligations:
         unsupported = [o for o in obligations if o not in SUPPORTED_OBLIGATIONS]
@@ -205,8 +237,13 @@ def _run_pipeline() -> None:
                 f"[rule=adapter/unsupported_obligation]"
             )
 
+    # Determine operating mode AFTER computing the would-be verdict above.
+    mode = _mode()
+
     # ------------------------------------------------------------------
-    # Step 6: AUDIT -- best-effort, never changes the decision
+    # Step 6: AUDIT -- best-effort, never changes the decision.
+    # We pass the WOULD-BE permission_decision so the audit trail always
+    # reflects what enforcement would have done (HIL-DESIGN §8).
     # ------------------------------------------------------------------
     from .audit import emit as audit_emit
     try:
@@ -217,6 +254,7 @@ def _run_pipeline() -> None:
             reason=reason_text,
             core_reachable=core_reachable,
             obligations=obligations,
+            mode=mode,
         )
     except Exception as exc:  # noqa: BLE001
         # Audit failure MUST NOT affect the decision
@@ -228,8 +266,18 @@ def _run_pipeline() -> None:
 
     # ------------------------------------------------------------------
     # Step 7: Emit hookSpecificOutput
+    # In observe mode: always emit allow (fail-open); record the would-be
+    # verdict in the reason so the operator can see it.
+    # In enforce mode: emit the computed decision unchanged.
     # ------------------------------------------------------------------
-    _safe_print(_output(permission_decision, reason_text))
+    if mode == "observe":
+        _safe_print(_output(
+            "allow",
+            f"Reeflex observe -- would be '{permission_decision}' {reason_text}; "
+            f"not enforced (observe mode)",
+        ))
+    else:
+        _safe_print(_output(permission_decision, reason_text))
 
 
 if __name__ == "__main__":

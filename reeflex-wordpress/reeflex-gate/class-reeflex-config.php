@@ -70,6 +70,14 @@ defined( 'ABSPATH' ) || exit;
  *                        untrusted certs (e.g. api-dev.reeflex.io). Never
  *                        disable in production — MITM protection for the
  *                        governance decision call.
+ *   REEFLEX_MODE       — 'enforce'|'observe'; default 'enforce'. In observe the
+ *                        gate audits but never enforces (HIL-DESIGN §8). Every
+ *                        decision is recorded to the audit log with mode=observe,
+ *                        but the action always proceeds — even when core is
+ *                        unreachable (fail-open). Use observe to see what Reeflex
+ *                        would have stopped before turning enforcement on. When
+ *                        defined, it wins over any DB/Settings value and the
+ *                        Settings select is rendered disabled.
  *   REEFLEX_ENV        — target environment label; default 'production'.
  *   REEFLEX_AGENT_ID   — agent identity string; default 'agent:wordpress'.
  *   REEFLEX_AUDIT_LOG  — absolute path to JSONL audit log.
@@ -242,6 +250,48 @@ final class Reeflex_Config {
 		return defined( 'REEFLEX_VERIFY_SSL' );
 	}
 
+	/**
+	 * Enforcement mode: 'enforce' (default) or 'observe'.
+	 *
+	 * Precedence:
+	 *   1. REEFLEX_MODE constant (defined) — trust anchor; wins always.
+	 *   2. DB option reeflex_gate_options['mode'].
+	 *   3. 'enforce' — safe default (full enforcement on).
+	 *
+	 * In 'observe' mode the gate audits every decision (with mode=observe in the
+	 * record) but NEVER enforces — the action always proceeds. Core outages do NOT
+	 * block the site in observe (fail-open). Use observe to see what Reeflex would
+	 * have stopped before turning enforcement on. See HIL-DESIGN §8.
+	 *
+	 * Any value other than 'observe' (case-insensitive, trimmed) resolves to
+	 * 'enforce' so the safe default is maintained on misconfiguration.
+	 *
+	 * @return string 'enforce'|'observe'
+	 */
+	public static function mode(): string {
+		// Source 1: constant (trust anchor).
+		if ( defined( 'REEFLEX_MODE' ) ) {
+			$c = strtolower( trim( (string) REEFLEX_MODE ) );
+			return 'observe' === $c ? 'observe' : 'enforce';
+		}
+
+		// Source 2: DB option (Settings page).
+		$options = self::stored_options();
+		return 'observe' === $options['mode'] ? 'observe' : 'enforce';
+	}
+
+	/**
+	 * Whether the enforcement mode is locked by a wp-config.php constant.
+	 *
+	 * True when REEFLEX_MODE is defined (any value). When true the Settings
+	 * select renders disabled; the DB value is ignored at runtime.
+	 *
+	 * @return bool
+	 */
+	public static function mode_is_locked(): bool {
+		return defined( 'REEFLEX_MODE' );
+	}
+
 	// ------------------------------------------------------------------
 	// Raw stored option (for pre-filling the Settings form only)
 	// ------------------------------------------------------------------
@@ -250,9 +300,10 @@ final class Reeflex_Config {
 	 * Return the raw stored options array from the DB (unvalidated).
 	 *
 	 * Used only by the Settings UI to pre-fill form fields.  Never use this
-	 * in the decision path — use core_url(), core_token(), and verify_ssl() instead.
+	 * in the decision path — use core_url(), core_token(), verify_ssl(), and
+	 * mode() instead.
 	 *
-	 * @return array{core_url: string, core_token: string, verify_ssl: bool}
+	 * @return array{core_url: string, core_token: string, verify_ssl: bool, mode: string}
 	 */
 	public static function stored_options(): array {
 		$raw = get_option( self::OPTION_NAME, array() );
@@ -265,6 +316,8 @@ final class Reeflex_Config {
 			// array_key_exists so a deliberately saved false is preserved; a never-saved
 			// key defaults to true (verification ON — secure default).
 			'verify_ssl' => array_key_exists( 'verify_ssl', $raw ) ? (bool) $raw['verify_ssl'] : true,
+			// Any value other than 'observe' falls back to 'enforce' (safe default).
+			'mode'       => ( isset( $raw['mode'] ) && 'observe' === $raw['mode'] ) ? 'observe' : 'enforce',
 		);
 	}
 

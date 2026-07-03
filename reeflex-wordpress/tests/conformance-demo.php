@@ -18,6 +18,12 @@
  *     core_url defaults to http://127.0.0.1:8099
  *     point it at a DEAD port (e.g. http://127.0.0.1:9) to prove fail-closed
  *
+ *   OBSERVE mode (HIL-DESIGN §8):
+ *     REEFLEX_MODE=observe php tests/conformance-demo.php [core_url]
+ *       All scenarios must resolve to PROCEED — regardless of the would-be verdict.
+ *     REEFLEX_MODE=observe php tests/conformance-demo.php http://127.0.0.1:9
+ *       Core down + observe → all still PROCEED; each outage is audited (fail-open).
+ *
  * Exit code 0 = all scenarios pass, 1 = a scenario failed, 2 = harness error.
  *
  * @package ReeflexWordPress
@@ -34,6 +40,9 @@ require __DIR__ . '/wp-stubs.php';
 if ( ! defined( 'REEFLEX_CORE_URL' ) ) { define( 'REEFLEX_CORE_URL', $core_url ); }
 if ( ! defined( 'REEFLEX_ENV' ) )      { define( 'REEFLEX_ENV', 'production' ); }
 if ( ! defined( 'REEFLEX_AUDIT_LOG' ) ){ define( 'REEFLEX_AUDIT_LOG', sys_get_temp_dir() . '/reeflex-harness-audit.jsonl' ); }
+// REEFLEX_MODE: honour env var so observe tests can be run without editing this file.
+// e.g.:  REEFLEX_MODE=observe php tests/conformance-demo.php <core_url>
+if ( ! defined( 'REEFLEX_MODE' ) )     { define( 'REEFLEX_MODE', getenv( 'REEFLEX_MODE' ) ?: 'enforce' ); }
 
 require $adapter_dir . '/reeflex-gate/class-reeflex-config.php';
 require $adapter_dir . '/reeflex-gate/class-reeflex-normalizer.php';
@@ -67,12 +76,19 @@ $scenarios = array(
 	'7. verb collision: fetch-and-delete 30 posts'   => array( 'core/fetch-and-delete-posts', array( 'ids' => range( 1, 30 ) ),                                                 'reeflex_hold' ),
 );
 
-// A dead/refused port means every decision must fail-closed.
+// A dead/refused port means every decision must fail-closed (enforce) or
+// fail-open/proceed (observe — core outage does NOT block the site).
 $fail_closed_run = (bool) preg_match( '#:9(\D|$)#', $core_url ) && false === strpos( $core_url, ':8099' );
+
+// Determine running mode (constant is now defined above from env var or default).
+$observe_mode = ( 'observe' === REEFLEX_MODE );
 
 $bar = str_repeat( '-', 100 );
 echo $bar . "\n";
-printf( "reeflex-wordpress conformance demo   CORE=%s%s\n", $core_url, $fail_closed_run ? '   (expect fail-closed everywhere)' : '' );
+$mode_label = $observe_mode ? '   MODE=observe (all PROCEED expected)' : '';
+$fc_label   = ( ! $observe_mode && $fail_closed_run ) ? '   (expect fail-closed everywhere)' : '';
+$down_label = ( $observe_mode && $fail_closed_run )   ? '   core DOWN — outage audited, site proceeds' : '';
+printf( "reeflex-wordpress conformance demo   CORE=%s%s%s%s\n", $core_url, $mode_label, $fc_label, $down_label );
 echo $bar . "\n";
 printf( "%-50s | %-26s | %s\n", 'SCENARIO (agent action in WordPress)', 'ENFORCED OUTCOME', 'RESULT' );
 echo $bar . "\n";
@@ -80,7 +96,15 @@ echo $bar . "\n";
 $all_pass = true;
 foreach ( $scenarios as $label => $spec ) {
 	list( $ability, $input, $expected ) = $spec;
-	if ( $fail_closed_run ) { $expected = 'reeflex_unavailable'; }
+
+	if ( $observe_mode ) {
+		// In observe mode EVERY scenario must PROCEED — regardless of would-be verdict
+		// and regardless of whether core is reachable.
+		$expected = 'allow';
+	} elseif ( $fail_closed_run ) {
+		// Enforce + dead core: every decision must fail-closed.
+		$expected = 'reeflex_unavailable';
+	}
 
 	list( $outcome, $code ) = run_ability( $hookA, $ability, $input );
 	$got  = ( 'PROCEED' === $outcome ) ? 'allow' : $code;

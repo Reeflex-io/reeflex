@@ -139,3 +139,24 @@ tests spin a local stub server).
   the human clicks allow; Claude Code retries the tool — the adapter then
   re-intercepts with the same payload, at which point the policy must be
   configured to allow with approval present).
+
+## Observe mode
+
+Observe mode is a dry-run / monitoring mode. Set `REEFLEX_MODE=observe` in the
+hook's environment and the adapter will **always emit `allow`** — Claude Code
+proceeds with the tool call — while still writing an audit record annotated with
+`"mode": "observe"` and the would-be verdict from core.
+
+```bash
+export REEFLEX_MODE=observe
+```
+
+**Fail-OPEN rule:** in observe mode any error (core unreachable, timeout, invalid
+response) also results in `allow` — it never blocks. This is the opposite of
+enforce mode's fail-closed invariant, and it is intentional: observe must never
+interrupt a Claude Code session.
+
+Use observe mode for dry-run calibration before enabling enforcement: run your
+normal Claude Code workflows, inspect the JSONL audit log for `deny` and
+`require_approval` records, tune policy as needed, then remove `REEFLEX_MODE` (or
+set it to `enforce`) to activate full fail-closed enforcement.

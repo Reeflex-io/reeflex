@@ -124,6 +124,7 @@ final class Reeflex_Settings {
 					'core_url'   => '',
 					'core_token' => '',
 					'verify_ssl' => true,
+					'mode'       => 'enforce',
 				),
 			)
 		);
@@ -155,6 +156,14 @@ final class Reeflex_Settings {
 			'reeflex_verify_ssl',
 			esc_html__( 'Verify TLS certificate', 'reeflex-gate' ),
 			array( self::class, 'render_field_verify_ssl' ),
+			'reeflex-gate',
+			self::SECTION_ID
+		);
+
+		add_settings_field(
+			'reeflex_mode',
+			esc_html__( 'Enforcement mode', 'reeflex-gate' ),
+			array( self::class, 'render_field_mode' ),
 			'reeflex-gate',
 			self::SECTION_ID
 		);
@@ -196,6 +205,7 @@ final class Reeflex_Settings {
 			'core_url'   => $current['core_url'],
 			'core_token' => $current['core_token'],
 			'verify_ssl' => $current['verify_ssl'],
+			'mode'       => $current['mode'],
 		);
 
 		if ( ! is_array( $input ) ) {
@@ -279,6 +289,16 @@ final class Reeflex_Settings {
 			// An unchecked checkbox sends no key in the POST array → false.
 			// This is correct explicit-uncheck behaviour (unlike the token blank-keep rule).
 			$out['verify_ssl'] = ! empty( $input['verify_ssl'] );
+		}
+
+		// --- mode ---
+		if ( Reeflex_Config::mode_is_locked() ) {
+			// Constant wins; ignore submitted value; keep existing DB value as-is.
+			// (The DB value is irrelevant at runtime when the constant is set, but
+			// we preserve it so the field doesn't change when the lock is later removed.)
+			$out['mode'] = $current['mode'];
+		} else {
+			$out['mode'] = ( isset( $input['mode'] ) && 'observe' === $input['mode'] ) ? 'observe' : 'enforce';
 		}
 
 		return $out;
@@ -620,6 +640,8 @@ final class Reeflex_Settings {
 		$token_source   = self::get_token_source_label();
 		$ssl_source     = self::get_ssl_source_label();
 		$ssl_effective  = Reeflex_Config::verify_ssl();
+		$mode_effective = Reeflex_Config::mode();
+		$mode_source    = self::get_mode_source_label();
 
 		?>
 		<div class="notice notice-info" style="margin-left:0;">
@@ -651,6 +673,17 @@ final class Reeflex_Settings {
 							<?php echo esc_html__( 'ON', 'reeflex-gate' ); ?>
 						<?php else : ?>
 							<span style="color:#d63638;font-weight:bold;"><?php echo esc_html__( 'OFF', 'reeflex-gate' ); ?></span>
+						<?php endif; ?>
+					</td>
+				</tr>
+				<tr>
+					<td style="padding-right:16px;"><strong><?php echo esc_html__( 'Enforcement mode:', 'reeflex-gate' ); ?></strong></td>
+					<td><?php echo esc_html( $mode_source ); ?></td>
+					<td style="padding-left:16px;">
+						<?php if ( 'observe' === $mode_effective ) : ?>
+							<span><?php echo esc_html__( 'Observe (enforcement OFF)', 'reeflex-gate' ); ?></span>
+						<?php else : ?>
+							<?php echo esc_html__( 'Enforce', 'reeflex-gate' ); ?>
 						<?php endif; ?>
 					</td>
 				</tr>
@@ -736,6 +769,84 @@ final class Reeflex_Settings {
 	private static function get_ssl_source_label(): string {
 		if ( Reeflex_Config::verify_ssl_is_locked() ) {
 			return __( 'wp-config.php constant (REEFLEX_VERIFY_SSL)', 'reeflex-gate' );
+		}
+		return __( 'Settings page (database)', 'reeflex-gate' );
+	}
+
+	// ------------------------------------------------------------------
+	// Render: Enforcement mode field
+	// ------------------------------------------------------------------
+
+	/**
+	 * Render the Enforcement mode settings field.
+	 *
+	 * A <select> with two options: 'enforce' (default) and 'observe'.
+	 *
+	 * Locked state: if REEFLEX_MODE is defined, the select is disabled and a
+	 * "Locked" notice is shown reflecting the constant value.
+	 *
+	 * Observe notice: when the effective mode is 'observe', an informational
+	 * (not red) notice reminds the operator that enforcement is OFF.
+	 *
+	 * @return void
+	 */
+	public static function render_field_mode(): void {
+		$locked    = Reeflex_Config::mode_is_locked();
+		$effective = Reeflex_Config::mode();
+		$field_id  = 'reeflex_mode';
+
+		$field_name = Reeflex_Config::OPTION_NAME . '[mode]';
+		?>
+		<select
+			id="<?php echo esc_attr( $field_id ); ?>"
+			name="<?php echo esc_attr( $field_name ); ?>"
+			<?php if ( $locked ) : ?>disabled<?php endif; ?>
+			aria-describedby="<?php echo esc_attr( $field_id . '-desc' ); ?>"
+		>
+			<option value="enforce" <?php selected( $effective, 'enforce' ); ?>>
+				<?php echo esc_html__( 'Enforce — block/hold risky actions (default)', 'reeflex-gate' ); ?>
+			</option>
+			<option value="observe" <?php selected( $effective, 'observe' ); ?>>
+				<?php echo esc_html__( 'Observe — record verdicts, enforce nothing', 'reeflex-gate' ); ?>
+			</option>
+		</select>
+
+		<?php if ( $locked ) : ?>
+			<p class="description" id="<?php echo esc_attr( $field_id . '-desc' ); ?>">
+				<strong><?php echo esc_html__( 'Locked — defined in wp-config.php (REEFLEX_MODE).', 'reeflex-gate' ); ?></strong>
+				<?php echo esc_html__( 'To change this value, update the constant in wp-config.php.', 'reeflex-gate' ); ?>
+			</p>
+		<?php else : ?>
+			<p class="description" id="<?php echo esc_attr( $field_id . '-desc' ); ?>">
+				<?php echo esc_html__(
+					'Observe: every verdict is recorded to the audit log, but nothing is enforced — the action always proceeds. Use it to see what Reeflex would have stopped before turning enforcement on. In observe, a core outage does NOT block the site (fail-open).',
+					'reeflex-gate'
+				); ?>
+			</p>
+		<?php endif; ?>
+
+		<?php if ( 'observe' === $effective ) : ?>
+			<p class="description" style="margin-top:6px;">
+				<?php echo esc_html__(
+					'Enforcement is OFF. All agent actions are proceeding unchecked. Switch to Enforce when you are ready to apply governance.',
+					'reeflex-gate'
+				); ?>
+			</p>
+		<?php endif; ?>
+
+		<?php
+		// Source label for transparency.
+		self::render_source_label( $locked ? 'constant' : 'settings' );
+	}
+
+	/**
+	 * Human-readable source label for enforcement mode (for status block).
+	 *
+	 * @return string
+	 */
+	private static function get_mode_source_label(): string {
+		if ( Reeflex_Config::mode_is_locked() ) {
+			return __( 'wp-config.php constant (REEFLEX_MODE)', 'reeflex-gate' );
 		}
 		return __( 'Settings page (database)', 'reeflex-gate' );
 	}

@@ -23,6 +23,7 @@ Record fields (one per decision):
   obligations        list[str]   -- obligations from the core Decision (SPEC §5)
   permission_decision string (allow|deny|ask -- the mapped value)
   core_reachable     bool
+  mode               string (enforce|observe) -- HIL-DESIGN §8
 """
 
 from __future__ import annotations
@@ -57,6 +58,7 @@ def emit(
     reason: str,
     core_reachable: bool,
     obligations: List[str] = None,
+    mode: str = "enforce",
 ) -> None:
     """
     Append one JSONL audit record derived from the envelope + decision result.
@@ -65,6 +67,9 @@ def emit(
     obligations: list of obligation strings from the core Decision (SPEC §5).
                  Included in the audit record regardless of permission_decision
                  so the audit trail shows what was required.
+    mode: "enforce" (default) or "observe" (HIL-DESIGN §8).  In observe mode
+          the permission_decision passed here is the WOULD-BE verdict; the
+          emitted hook output is "allow" but the audit records the real verdict.
     """
     if obligations is None:
         obligations = []
@@ -76,6 +81,7 @@ def emit(
             reason=reason,
             core_reachable=core_reachable,
             obligations=obligations,
+            mode=mode,
         )
         line = json.dumps(record, separators=(",", ":")) + "\n"
         log_path = _audit_log_path()
@@ -101,6 +107,7 @@ def _build_record(
     reason: str,
     core_reachable: bool,
     obligations: List[str],
+    mode: str = "enforce",
 ) -> dict:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -133,5 +140,6 @@ def _build_record(
         "obligations":        obligations,
         "permission_decision": permission_decision,
         "core_reachable":     core_reachable,
+        "mode":               mode,
         "nonce":              meta.get("nonce"),
     }
