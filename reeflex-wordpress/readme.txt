@@ -1,5 +1,5 @@
 === Reeflex Gate ===
-Contributors: reeflex
+Contributors: reeflexio
 Tags: security, ai-agents, governance, woocommerce, abilities-api
 Requires at least: 6.9
 Tested up to: 7.0
@@ -106,7 +106,8 @@ production).
 
 **Service information.**
 
-* Project home and service terms/privacy: https://reeflex.io
+* Privacy policy: https://reeflex.io/privacy — Terms of use: https://reeflex.io/terms
+* Project home: https://reeflex.io
 * Source code, the exact Action Envelope schema, and documentation:
   https://github.com/Reeflex-io/reeflex
 * `reeflex-core` is open source (Apache-2.0) and can be self-hosted, so the data
