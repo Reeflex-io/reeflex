@@ -176,4 +176,35 @@ real impact can be computed rather than trusted.
 | What's the hard part? | Real row-count magnitude — reliable only at the resource, which is why we govern there. |
 | Is it built? | Yes, in two reference adapters (Claude Code, WordPress). Database/GraphQL magnitude is the next adapter surface. |
 
+---
+
+## Where these rules come from
+
+No industry standard exists yet for governing agent *actions* — the category is too new. But none of these rules is invented from thin air: each is a decades-old safety principle applied to a new domain.
+
+| Rule | Established principle | Where it comes from |
+|---|---|---|
+| R1 — high-risk changes require approval | Change-advisory board (CAB) at machine speed | Change management / ITIL |
+| R2 — catastrophic actions are not approved, they are re-scoped | Actions beyond a severity threshold cannot be waved through | Safety engineering (aviation, nuclear) |
+| R3 — what leaves the system gets checked; there is no unsend | Outbound data is inspected before egress | DLP / egress control |
+| R4 — above a threshold, a second signature | Large transactions require a second authorisation | Transaction thresholds (finance) |
+| R5 — split-up transactions are caught; agents fragment deletes the same way banks have watched for 50 years | Structuring / "smurfing" detection on velocity | Fraud-detection velocity checks |
+| The axes (reversibility × blast radius × externality) | Severity × scope × reversibility | Classic risk assessment |
+
+New rules for a new domain; old, proven principles underneath.
+
+---
+
+## What the base policy does not catch
+
+Honesty over promises. The base policy governs structural, destructive impact — it is not a claim to catch every possible harm. Known limits:
+
+- **Exfiltration through reads.** 10,000 customer-record reads classify as read / reversible / internal → allowed. A mass-read guard is a natural data-protection pack candidate, not part of the base policy.
+- **Semantic damage.** One product set to the wrong price is single / reversible → allowed. Content *correctness* is not an impact axis.
+- **Slow-burn abuse across sessions.** The cumulative ledger is per-session over a rolling window; rotating sessions dilutes it.
+
+The axes are universal; the base rules are a strong start, not a ceiling. The policy is plain Rego — read it in a minute, extend it in an afternoon.
+
+---
+
 *Reeflex — a seatbelt for the AI acting on your systems.*

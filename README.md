@@ -15,7 +15,7 @@ blocked. Across any backend, with no LLM in the decision path.
 [![WordPress](https://img.shields.io/badge/WordPress-6.9%2B-21759b.svg)](reeflex-wordpress/)
 [![Release](https://img.shields.io/github/v/release/Reeflex-io/reeflex?sort=semver&color=6a4c93)](https://github.com/Reeflex-io/reeflex/releases)
 
-[Quickstart](QUICKSTART.md) · [How it works](#how-it-works) ·
+[Why Reeflex](docs/why-reeflex.md) · [Quickstart](QUICKSTART.md) · [How it works](#how-it-works) ·
 [WordPress adapter](reeflex-wordpress/) · [Claude Code adapter](reeflex-claude/) ·
 [Spec](reeflex-spec/SPEC.md) · [Whitepaper](docs/Reeflex_Architecture.pdf) ·
 [Contributing](CONTRIBUTING.md)
@@ -114,6 +114,11 @@ Decisions are also **cumulative per session**: an agent that splits
 big call. Each batch looks innocent on its own; the session total doesn't —
 so fragmenting a dangerous action doesn't evade the gate.
 ([How impact is computed →](reeflex-spec/IMPACT-MODEL.md))
+
+The whole base policy is **five rules you can read in one minute** — each a
+decades-old safety principle applied to agent actions, with its limits
+[documented honestly](reeflex-spec/IMPACT-MODEL.md#what-the-base-policy-does-not-catch).
+Universal axes, readable rules, yours to extend.
 
 The engine knows nothing about WordPress, Postgres, or S3. It decides on
 **actions** — normalized, structured, and risk-profiled. Adapters are the
