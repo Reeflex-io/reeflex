@@ -298,9 +298,14 @@ def cmd_wp(args):
     print_header(f"Reeflex verify · WordPress · {url}")
     print(color(f" Session: {sid}  ({'pinned' if args.session_id else 'fresh per run'})", C.DIM))
     expect_fc = args.expect_fail_closed
+    expect_obs = args.expect_observe
     if expect_fc:
         print(color(" Mode: --expect-fail-closed — every action should be BLOCKED.", C.YELLOW))
         print(color(" (Point the plugin at a dead core URL first, then run this.)\n", C.DIM))
+    if expect_obs:
+        print(color(" Mode: --expect-observe — every action should PROCEED (allow).", C.YELLOW))
+        print(color(" (Set the plugin to observe mode first: REEFLEX_MODE=observe or the "
+                    "Settings 'Enforcement mode' dropdown. Verdicts are recorded, nothing enforced.)\n", C.DIM))
 
     # --- Precheck: can we reach the site, auth, and see the test abilities? --
     status, body = client.list_abilities()
@@ -338,7 +343,7 @@ def cmd_wp(args):
     rows = []
     passed = 0
     for title, ability, payload, expected_normal, why in wp_scenarios():
-        expected = FAIL_CLOSED if expect_fc else expected_normal
+        expected = FAIL_CLOSED if expect_fc else ( ALLOW if expect_obs else expected_normal )
         status, resp = client.run_ability(ns, ability, payload)
         verdict, detail = classify(status, resp)
 
@@ -402,6 +407,10 @@ def build_parser():
     wp.add_argument("--expect-fail-closed", action="store_true",
                     help="Assert that EVERY action is blocked (use after pointing "
                          "the plugin at a dead core URL to test fail-closed).")
+    wp.add_argument("--expect-observe", action="store_true",
+                    help="Assert that EVERY action PROCEEDS (allow) — use after setting "
+                         "the plugin to observe mode (REEFLEX_MODE=observe or the Settings "
+                         "'Enforcement mode' dropdown). Verdicts are recorded, nothing enforced.")
     wp.add_argument("--insecure", action="store_true",
                     help="Skip TLS certificate verification (self-signed dev sites).")
     wp.add_argument("--verbose", action="store_true", help="Show why + HTTP detail.")

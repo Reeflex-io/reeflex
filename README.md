@@ -107,6 +107,8 @@ flowchart TD
 The adapter enforces the decision faithfully and **fails closed** — if the
 engine is unreachable, nothing goes through.
 
+**Observe mode** — run in dry-run first: every verdict is recorded, nothing enforced, so you can see what Reeflex would have stopped before turning it on. (WordPress: `REEFLEX_MODE=observe` constant or the Settings dropdown. Claude adapter: `REEFLEX_MODE=observe` env var. In observe a core outage fails OPEN — never blocks.)
+
 Decisions are also **cumulative per session**: an agent that splits
 "delete 500" into a hundred small batches trips the same budget as the single
 big call. Each batch looks innocent on its own; the session total doesn't —

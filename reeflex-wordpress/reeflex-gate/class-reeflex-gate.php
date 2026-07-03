@@ -176,6 +176,10 @@ final class Reeflex_Gate {
 			// Normalize $input to array for Reeflex processing.
 			$input_arr = is_array( $input ) ? $input : array();
 
+			// Initialise $envelope so the catch block can reference it even if
+			// normalize() throws before the assignment completes.
+			$envelope = array();
+
 			// Step 3: gate in a try/catch so any unexpected exception fails CLOSED (NEW-2).
 			try {
 				// Step 3a: normalize → envelope (approval always false in v0.1, P0-1).
@@ -183,6 +187,12 @@ final class Reeflex_Gate {
 
 				// Step 3b: POST to /v1/decide.
 				$decision = Reeflex_Core_Client::decide( $envelope );
+
+				// OBSERVE (HIL-DESIGN §8): record the would-be verdict, never enforce, always proceed.
+				if ( 'observe' === Reeflex_Config::mode() ) {
+					Reeflex_Audit::record( $envelope, $decision, 'observe' );
+					return true;   // action always proceeds in observe mode.
+				}
 
 				// Step 3c: audit before enforcement (record always exists even on fatal).
 				$nonce   = $envelope['meta']['nonce'] ?? 'unknown';
@@ -213,7 +223,21 @@ final class Reeflex_Gate {
 				return self::enforce_from_permission_callback( $decision );
 
 			} catch ( \Throwable $e ) {
-				// Unexpected exception: fail CLOSED (NEW-2). Log and deny.
+				// OBSERVE fail-open (HIL-DESIGN §8): never break the site in observe mode.
+				if ( 'observe' === Reeflex_Config::mode() ) {
+					if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+						// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+						error_log( '[reeflex] observe: exception, failing OPEN (action proceeds): ' . $e->getMessage() );
+					}
+					Reeflex_Audit::record(
+						$envelope,
+						Reeflex_Core_Client::fail_closed( 'exception in observe (failed open): ' . $e->getMessage() ),
+						'observe'
+					);
+					return true;   // action always proceeds in observe mode.
+				}
+
+				// ENFORCE: unexpected exception: fail CLOSED (NEW-2). Log and deny.
 				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
 					error_log( '[reeflex] unexpected exception in permission gate, failing closed: ' . $e->getMessage() );
@@ -285,12 +309,22 @@ final class Reeflex_Gate {
 			return $args;
 		}
 
+		// Initialise $envelope so the catch block can reference it even if
+		// normalize() throws before the assignment completes.
+		$envelope = array();
+
 		// Gate in a try/catch so any unexpected exception fails CLOSED (NEW-2).
 		try {
 			// Normalize (approval always false in v0.1, P0-1).
 			$envelope = Reeflex_Normalizer::normalize( $ability_name, $parameters );
 
 			$decision = Reeflex_Core_Client::decide( $envelope );
+
+			// OBSERVE (HIL-DESIGN §8): record the would-be verdict, never enforce, always proceed.
+			if ( 'observe' === Reeflex_Config::mode() ) {
+				Reeflex_Audit::record( $envelope, $decision, 'observe' );
+				return $args;   // action always proceeds in observe mode.
+			}
 
 			// Audit before enforcement.
 			$nonce   = $envelope['meta']['nonce'] ?? 'unknown';
@@ -321,7 +355,21 @@ final class Reeflex_Gate {
 			return self::enforce_as_wp_error_for_mcp( $decision );
 
 		} catch ( \Throwable $e ) {
-			// Unexpected exception: fail CLOSED (NEW-2). Log and deny.
+			// OBSERVE fail-open (HIL-DESIGN §8): never break the site in observe mode.
+			if ( 'observe' === Reeflex_Config::mode() ) {
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+					error_log( '[reeflex] observe: exception, failing OPEN (action proceeds): ' . $e->getMessage() );
+				}
+				Reeflex_Audit::record(
+					$envelope,
+					Reeflex_Core_Client::fail_closed( 'exception in observe (failed open): ' . $e->getMessage() ),
+					'observe'
+				);
+				return $args;   // action always proceeds in observe mode.
+			}
+
+			// ENFORCE: unexpected exception: fail CLOSED (NEW-2). Log and deny.
 			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
 				error_log( '[reeflex] unexpected exception in MCP gate, failing closed: ' . $e->getMessage() );

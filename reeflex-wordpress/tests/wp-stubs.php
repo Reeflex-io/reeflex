@@ -124,3 +124,15 @@ function wp_remote_post( $url, $args = array() ) {
 }
 function wp_remote_retrieve_response_code( $r ) { return is_array( $r ) ? ( $r['response']['code'] ?? 0 ) : 0; }
 function wp_remote_retrieve_body( $r )          { return is_array( $r ) ? ( $r['body'] ?? '' ) : ''; }
+
+// selected() is a WordPress template helper used by the Settings page select field.
+// Returns ' selected="selected"' when $selected == $current, mirroring WP core behaviour.
+if ( ! function_exists( 'selected' ) ) {
+	function selected( $selected, $current = true, $echo = true ) {
+		$result = ( (string) $selected === (string) $current ) ? ' selected="selected"' : '';
+		if ( $echo ) {
+			echo $result; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- mirrors WP core; value is a fixed attribute string.
+		}
+		return $result;
+	}
+}

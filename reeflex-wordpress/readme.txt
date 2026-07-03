@@ -4,7 +4,7 @@ Tags: security, ai-agents, governance, woocommerce, abilities-api
 Requires at least: 6.9
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.1.2
+Stable tag: 0.1.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -67,6 +67,17 @@ go through the Abilities API.
   cannot be deactivated from wp-admin. Distributed from the project's GitHub
   releases, for hardened production installs.
 
+**Observe mode — calibrate before you enforce**
+
+Observe mode records every verdict to the audit log but enforces nothing — the
+action always proceeds. Use it to see what Reeflex would have stopped before you
+turn enforcement on. In observe, a core outage does NOT block the site: the gate
+fails OPEN (the opposite of enforce's fail-closed), because observe must never
+break a production site. Enable it with `REEFLEX_MODE=observe` in `wp-config.php`
+or via the **Enforcement mode** dropdown in Settings > Reeflex Gate (default:
+`enforce`). *Every verdict recorded, nothing enforced — see what Reeflex would
+have stopped, before you turn it on.*
+
 **Open-core & licensing**
 
 This plugin is free and open source, licensed GPLv2-or-later. `reeflex-core` and
@@ -125,7 +136,11 @@ production).
 5. Leave **Verify TLS certificate** on for any real deployment. Turn it off only
    when pointing at the public dev endpoint `https://api-dev.reeflex.io`, which
    carries a staging certificate.
-6. Save. The gate now intercepts and decides on every ability call.
+6. Optionally set **Enforcement mode** — `enforce` (default, fail-closed) or
+   `observe` (records verdicts but never blocks; gate fails OPEN on a core
+   outage so it never breaks your site). Start with `observe` to see what
+   Reeflex would have stopped, then switch to `enforce` when ready.
+7. Save. The gate now intercepts and decides on every ability call.
 
 To try it without deploying core first, set the API URL to
 `https://api-dev.reeflex.io` and uncheck **Verify TLS certificate**.
@@ -174,6 +189,19 @@ Uninstall deletes the stored settings (including the token) from `wp_options`. I
 does not delete the audit log file (`wp-content/reeflex-audit.jsonl`), because that
 is an append-only governance record; remove it manually if you no longer need it.
 
+= What is observe mode? =
+
+Observe mode records every verdict to the audit log but enforces nothing — the
+action always proceeds. Use it to see what Reeflex would have stopped before you
+turn enforcement on. In observe, a core outage does NOT block the site: the gate
+fails OPEN (the opposite of enforce's fail-closed), because observe must never
+break a production site.
+
+Enable it via the `REEFLEX_MODE` constant in `wp-config.php` (set to `observe`)
+or via the **Enforcement mode** dropdown in Settings > Reeflex Gate. The default
+is `enforce`. Switching back to `enforce` re-enables fail-closed behaviour
+immediately — no other changes needed.
+
 == Screenshots ==
 
 1. Settings > Reeflex Gate — configure the decision engine URL, optional token,
@@ -182,6 +210,9 @@ is an append-only governance record; remove it manually if you no longer need it
    force-deletes are held for a human, and a site-wide wipe is denied.
 
 == Changelog ==
+
+= 0.1.3 =
+* Observe mode: a new Enforcement mode (enforce default / observe) via the REEFLEX_MODE constant or the Settings dropdown. In observe, every verdict is recorded to the audit log with mode=observe but nothing is enforced — the action always proceeds — and a core outage fails OPEN (never blocks the site). Enforce behaviour is unchanged.
 
 = 0.1.2 =
 
@@ -215,6 +246,9 @@ is an append-only governance record; remove it manually if you no longer need it
 * Append-only JSONL audit log written before enforcement.
 
 == Upgrade Notice ==
+
+= 0.1.3 =
+Adds observe mode: record verdicts without enforcing, so you can calibrate before enabling enforce. No change to enforce behaviour — safe to update.
 
 = 0.1.2 =
 

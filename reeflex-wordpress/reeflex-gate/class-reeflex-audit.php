@@ -163,6 +163,7 @@ final class Reeflex_Audit {
 			'rule'         => self::sanitize_field( (string) ( $decision['rule'] ?? 'unknown' ) ),
 			'reason'       => self::sanitize_field( (string) ( $decision['reason'] ?? '' ) ),
 			'obligations'  => $decision['obligations'] ?? array(),
+			'mode'         => Reeflex_Config::mode(),
 			'applied'      => self::sanitize_field( $applied ),
 		);
 	}

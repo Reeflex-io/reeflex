@@ -3,6 +3,12 @@
 All notable changes to Reeflex are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project is pre-release.
 
+## [0.1.3] - Unreleased
+
+### Added
+- **Observe mode (HIL-DESIGN §8, Phase 0)** in both adapters. WordPress: `REEFLEX_MODE` constant (`enforce`|`observe`, default `enforce`) + a Settings "Enforcement mode" dropdown (same locked-field precedence). Claude adapter: `REEFLEX_MODE=observe` env var. In observe, the adapter requests the decision and writes an audit record annotated `mode=observe` with the would-be verdict, but never enforces (the action always proceeds); a core outage **fails open** (never blocks). Enforce behaviour is unchanged. Zero core changes.
+- Conformance harness gains observe scenarios (all actions proceed; core-down proceeds + outage audited); Claude adapter gains observe unit tests.
+
 ## [0.1.2] - Unreleased
 
 ### Changed
