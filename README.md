@@ -224,6 +224,7 @@ spec — [CONTRIBUTING.md](CONTRIBUTING.md) walks through it.
 - Fail-closed on any OPA error or unreachable core — never a silent allow
 - Anti-fragmentation: a per-session cumulative ledger defeats split-batch evasion
 - Two conformance-tested reference adapters (Claude Code, WordPress)
+- **SIEM-ready**: every decision streams as syslog (RFC 5424, JSON or CEF) — Splunk, QRadar, Wazuh, Graylog, Loki and friends consume it with zero vendor connectors. The SOC sees the attempt, not just the aftermath. See [docs/siem.md](docs/siem.md).
 
 **On the roadmap:** ed25519 envelope signing, Postgres-backed audit, a live
 WordPress install, database/GraphQL adapters, and a hosted tier. Full list in

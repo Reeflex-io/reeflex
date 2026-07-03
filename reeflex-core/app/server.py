@@ -36,6 +36,7 @@ import os
 import sys
 
 from .decide import process
+from .telemetry import get_emitter
 
 _MAX_BODY_BYTES = int(os.environ.get("REEFLEX_MAX_BODY_BYTES", str(256 * 1024)))
 
@@ -194,9 +195,25 @@ def run() -> None:
 
     server = http.server.HTTPServer((host, port), _DecideHandler)
     print(f"[reeflex-core] listening on http://{host}:{port}/v1/decide", file=sys.stderr)
+
+    # Lifecycle telemetry: start.
+    # INVARIANT: telemetry is fire-and-forget; any failure here is swallowed.
+    emitter = get_emitter()
+    emitter.start()
+    try:
+        emitter.emit_lifecycle("start")
+    except Exception:  # noqa: BLE001
+        pass
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("[reeflex-core] shutdown", file=sys.stderr)
     finally:
+        # Lifecycle telemetry: stop (best-effort; stop() is already safe).
+        try:
+            emitter.emit_lifecycle("stop")
+            emitter.stop(timeout_s=2.0)
+        except Exception:  # noqa: BLE001
+            pass
         server.server_close()

@@ -10,6 +10,17 @@ services:
     environment:
       REEFLEX_HOST: "0.0.0.0"
       REEFLEX_PORT: "8080"
+      # ---------------------------------------------------------------------------
+      # SIEM / syslog telemetry — disabled by default.
+      # Uncomment and set REEFLEX_SYSLOG_ADDRESS to enable.
+      # Full guide: docs/siem.md
+      # ---------------------------------------------------------------------------
+      # REEFLEX_SYSLOG_ENABLED: "true"       # Master switch (default: false)
+      # REEFLEX_SYSLOG_ADDRESS: "collector:514" # host:port of your syslog receiver
+      # REEFLEX_SYSLOG_PROTOCOL: "udp"       # udp | tcp | tls  (default: udp)
+      # REEFLEX_SYSLOG_FORMAT: "json"        # json | cef        (default: json)
+      # REEFLEX_SYSLOG_FACILITY: "local0"    # syslog facility   (default: local0)
+      # REEFLEX_SYSLOG_TLS_VERIFY: "true"    # tls only: verify CA (default: true)
     ports:
       - "${REEFLEX_HOST_PORT:-8080}:8080"
     healthcheck:

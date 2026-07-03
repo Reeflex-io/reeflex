@@ -14,6 +14,7 @@ Working. The engine is complete and functional:
 - Fail-closed on any OPA error, connection failure, or unexpected exception.
 - Append-only JSONL audit of every decision (cryptographic record signing is on the roadmap — see SPEC §6).
 - Per-session cumulative action ledger for fragmentation-resistance (SPEC §4.1).
+- Every decision can stream to a SIEM as syslog — see [`../docs/siem.md`](../docs/siem.md).
 
 ## Hard constraints (see ADR-0002)
 
@@ -57,6 +58,20 @@ The server binds to `127.0.0.1:8080` by default. Environment variables:
 | `REEFLEX_AUDIT_LOG` | `./audit/decisions.jsonl` | Audit log path |
 | `REEFLEX_WINDOW_SECONDS` | `3600` | Ledger rolling window in seconds |
 | `REEFLEX_OPA_TIMEOUT` | `10` | OPA subprocess timeout in seconds |
+
+### SIEM / syslog environment variables
+
+Disabled by default — set `REEFLEX_SYSLOG_ENABLED=true` to activate.
+Full integration guide: [`../docs/siem.md`](../docs/siem.md).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `REEFLEX_SYSLOG_ENABLED` | `false` | Master switch. Any value other than `"true"` (case-insensitive) leaves the emitter as a no-op. |
+| `REEFLEX_SYSLOG_ADDRESS` | _(unset)_ | Collector endpoint as `host:port`. Required when enabled; if omitted a one-time warning is printed and the emitter stays silent. |
+| `REEFLEX_SYSLOG_PROTOCOL` | `udp` | Transport: `udp` (one datagram per message), `tcp` (RFC 6587 octet-counted, persistent connection), or `tls` (RFC 5425, TCP + TLS). |
+| `REEFLEX_SYSLOG_FORMAT` | `json` | Wire format of the syslog MSG body: `json` (single-line JSON) or `cef` (CEF:0 string). |
+| `REEFLEX_SYSLOG_FACILITY` | `local0` | RFC 5424 syslog facility name (e.g. `local0`–`local7`). |
+| `REEFLEX_SYSLOG_TLS_VERIFY` | `true` | TLS only. `true` = verify server certificate using the system CA bundle (respects `SSL_CERT_FILE`). `false` = no-verify (self-signed collectors). |
 
 Verify the server is running:
 

@@ -3,6 +3,16 @@
 All notable changes to Reeflex are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project is pre-release.
 
+## [0.1.4] - Unreleased
+
+### Added
+- **SIEM / syslog telemetry.** `reeflex-core` can stream every decision to a configured syslog endpoint — RFC 5424 over UDP (default), TCP (RFC 6587 octet-counted framing), or TLS (RFC 5425) — as structured JSON (default) or CEF. Consumed by Splunk, QRadar, Wazuh, FortiSIEM, Graylog, Grafana Loki, Datadog and friends with zero vendor connectors. Also emits engine lifecycle events; a kill-switch event type is designed for Phase 1. Disabled by default (`REEFLEX_SYSLOG_ENABLED=false`); configured entirely by env (`REEFLEX_SYSLOG_ADDRESS`/`_PROTOCOL`/`_FORMAT`/`_FACILITY`/`_TLS_VERIFY`). Python stdlib only — no new dependencies.
+- **The telemetry invariant:** emission is fire-and-forget — a bounded in-memory queue, drop-on-overflow with a dropped-events counter, all socket I/O on a background daemon thread. It can never block or fail `/v1/decide`. "Fail-closed for decisions, fail-open for telemetry." The append-only audit JSONL stays authoritative. Verified: a dead / slow / unreachable endpoint adds zero decision latency.
+- `docs/siem.md` — quickstart, the decision-event JSON schema, the CEF mapping + severity tables, and short consuming guides for 11 platforms (Splunk, QRadar, Wazuh, FortiSIEM, Graylog, Loki/promtail, Datadog, Logstash, Filebeat, Fluentd, and a Fluentd/Logstash/Vector → Kafka bridge). Guides only — no vendor code.
+
+### Notes
+- Adapters unchanged: the core emits, and observe-mode decisions flow through the same channel (observe + SIEM = "monitor mode").
+
 ## [0.1.3] - Unreleased
 
 ### Added
