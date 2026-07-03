@@ -180,16 +180,16 @@ real impact can be computed rather than trusted.
 
 ## Where these rules come from
 
-No industry standard exists yet for governing agent *actions* — the category is too new. But none of these rules is invented from thin air: each is a decades-old safety principle applied to a new domain.
+No industry standard exists yet for governing agent *actions* — the category is too new. But none of these rules is invented from thin air: each applies a decades-old safety principle to a new domain. Here is the base pack **exactly as it ships** (R1–R5 in [`reeflex.rego`](../reeflex-core/policy/reeflex.rego)), and the discipline each rule descends from:
 
-| Rule | Established principle | Where it comes from |
+| Base rule (as it ships) | What it decides | Rooted in |
 |---|---|---|
-| R1 — high-risk changes require approval | Change-advisory board (CAB) at machine speed | Change management / ITIL |
-| R2 — catastrophic actions are not approved, they are re-scoped | Actions beyond a severity threshold cannot be waved through | Safety engineering (aviation, nuclear) |
-| R3 — what leaves the system gets checked; there is no unsend | Outbound data is inspected before egress | DLP / egress control |
-| R4 — above a threshold, a second signature | Large transactions require a second authorisation | Transaction thresholds (finance) |
-| R5 — split-up transactions are caught; agents fragment deletes the same way banks have watched for 50 years | Structuring / "smurfing" detection on velocity | Fraud-detection velocity checks |
-| The axes (reversibility × blast radius × externality) | Severity × scope × reversibility | Classic risk assessment |
+| **R1** · read-only → *allow* | reversible reads pass untouched | reversibility-first — a read is not a risk |
+| **R2** · irreversible + broad, in production → *require approval* | a high-risk change waits for a human | change management / ITIL — a change-advisory board at machine speed |
+| **R3** · irreversible + systemic, in production → *deny* | catastrophic actions are refused, not waved through | safety engineering (aviation, nuclear) — past a severity line you re-scope, you don't approve |
+| **R4** · default → *allow* | govern by exception, not by blanket block | least astonishment / default-permit |
+| **R5** · cumulative delete budget → *require approval* | split-up deletes are caught together — the way banks have watched structured transactions for 50 years | fraud-detection velocity checks (structuring / "smurfing") |
+| **The three axes** · reversibility × blast radius × externality | severity × scope × reversibility, scored on every action | classic risk assessment — and the same axes make **egress control** (externality) and **transaction thresholds** (magnitude) expressible as ready extension packs |
 
 New rules for a new domain; old, proven principles underneath.
 
