@@ -13,9 +13,19 @@ exact 3 values (Core URL / API Token / Ignore SSL Issues) and the 2-minute
 import steps. **This demo also needs the credential attached to the two
 HTTP Request nodes** ("Resolve hold" and "Resubmit to /v1/decide"), not just
 the Reeflex Gate node — they use the same "Reeflex Core API" credential via
-n8n's **Authentication: Predefined Credential Type → Reeflex API**, so
-`{{$credentials.coreUrl}}` resolves inside those nodes too and no URL/token
-is duplicated in the workflow.
+n8n's **Authentication: Predefined Credential Type → Reeflex API**, so the
+Bearer **token** is injected from that credential and no secret is duplicated
+in the workflow.
+
+> **n8n specifics for the two HTTP Request nodes** (verified on n8n 2.28):
+> - The **core host is hardcoded** to `https://api-dev.reeflex.io` in both
+>   HTTP node URLs, because n8n does **not** expose credential fields like
+>   `{{$credentials.coreUrl}}` to an HTTP Request node's URL under
+>   `predefinedCredentialType` (the Reeflex Gate node reads its URL from the
+>   credential internally; raw HTTP Request nodes cannot). If you point the
+>   credential at your own core, **edit these two URLs to match.**
+> - The resubmit node **regenerates `meta.nonce`** (see step 4) — required, or
+>   core rejects the reused nonce as a replay (`400`).
 
 > Disclaimer: Eval token for api-dev.reeflex.io — dev endpoint, staging
 > cert (set verify_ssl=false / Ignore SSL Issues on), may reset anytime; not
@@ -46,13 +56,19 @@ is duplicated in the workflow.
    returns `403 actor_is_approver` — the approver can never be the actor.
    This step records the approval; it does **not** re-run the guarded action.
 4. **Resubmit to /v1/decide** — a second HTTP Request node reuses
-   `reeflex.envelope` from the Reeflex Gate node verbatim (spreads it, then
-   sets `approval.present = true` and `approval.hold_id`). `action`, `axes`,
+   `reeflex.envelope` from the Reeflex Gate node (spreads it, then sets
+   `approval.present = true` and `approval.hold_id`). `action`, `axes`,
    `magnitude`, and `target` stay byte-identical to the original, because
    core's hash binding is computed over exactly those fields
    (`reeflex-core/README.md`, "The hash binding") — a resubmission with a
    modified action would come back `deny` with
-   `reeflex_hold_envelope_mismatch`.
+   `reeflex_hold_envelope_mismatch`. **One field is deliberately NOT reused:
+   `meta.nonce` is regenerated.** Core's replay protection rejects a repeated
+   nonce with `400 invalid_envelope "replay: nonce already seen"`, so a naive
+   verbatim spread (which still carries the first call's nonce) fails at this
+   step; regenerating `meta.nonce` keeps the hash-bound action fields intact
+   while satisfying replay protection — exactly what reeflex-core's own HIL
+   resubmit tests do.
 5. **Resubmission approved?** (IF node) — checks `decision == "allow"`
    before treating the loop as successful. Never assume; always check.
 
