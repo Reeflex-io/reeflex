@@ -10,7 +10,7 @@ blocked. Across any backend, with no LLM in the decision path.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-v0.1%20preview-orange.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-127%20core%20%C2%B7%209%2F9%20policy-brightgreen.svg)](#status--v01-preview)
+[![Tests](https://img.shields.io/badge/tests-207%20core%20%C2%B7%209%2F9%20policy-brightgreen.svg)](#status--v01-preview)
 [![CI](https://github.com/Reeflex-io/reeflex/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Reeflex-io/reeflex/actions/workflows/ci.yml)
 [![WordPress](https://img.shields.io/badge/WordPress-6.9%2B-21759b.svg)](reeflex-wordpress/)
 [![Release](https://img.shields.io/github/v/release/Reeflex-io/reeflex?sort=semver&color=6a4c93)](https://github.com/Reeflex-io/reeflex/releases)
@@ -219,7 +219,7 @@ spec — [CONTRIBUTING.md](CONTRIBUTING.md) walks through it.
 
 **Shipping today:**
 
-- `reeflex-core` decision engine (`POST /v1/decide`) — Python + OPA/Rego, **127** unit tests (1 platform-specific skip), **9/9** policy tests
+- `reeflex-core` decision engine (`POST /v1/decide`) — Python + OPA/Rego, **207** unit tests (1 platform-specific skip), **9/9** policy tests
 - Base policy pack (R1–R5): read-only allow, irreversible-broad-prod approval, irreversible-systemic-prod deny, default allow, session delete-budget
 - Fail-closed on any OPA error or unreachable core — never a silent allow
 - Anti-fragmentation: a per-session cumulative ledger defeats split-batch evasion
