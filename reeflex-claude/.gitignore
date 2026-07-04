@@ -3,3 +3,8 @@
 *.jsonl
 __pycache__/
 *.pyc
+
+# python packaging build byproducts (python -m build / pip install -e .)
+build/
+dist/
+*.egg-info/

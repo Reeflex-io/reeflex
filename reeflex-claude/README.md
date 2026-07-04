@@ -36,25 +36,97 @@ flowchart LR
 
 ## Install / wire up
 
-**1. Get the code.** The adapter is plain Python (stdlib only, no pip install) and
-lives in this repository:
+**1. Install.**
+
+```bash
+pip install reeflex-claude
+```
+
+**2. Have a reachable core.** Either run `reeflex-core` locally
+(`docker compose up -d` from the repo root gives you `http://127.0.0.1:8080`)
+or point at an existing deployment.
+
+**3. Wire the hook and verify it, in two commands:**
+
+```bash
+reeflex-claude setup   # writes/merges the PreToolUse hook entry, fail-CLOSED by default
+reeflex-claude check   # verifies: deny scenario -> hook exits correctly
+```
+
+`setup` targets the current project's `./.claude/settings.json` by default
+(created, with parent directories, if absent); pass `--global` to target
+`~/.claude/settings.json` instead. It **merges** — an existing settings file
+keeps every unrelated key; only the `reeflex-claude hook` PreToolUse entry
+and the `REEFLEX_*` keys in the `env` block are written or updated. A
+corrupt existing `settings.json` is left untouched and `setup` exits `1`
+with an explanation — it never guesses or overwrites.
+
+Non-interactive flags (all optional; omitted ones fall back to an
+interactive prompt when running in a terminal, otherwise to the default
+shown):
+
+| Flag           | Default                  | Meaning                                              |
+|----------------|---------------------------|-------------------------------------------------------|
+| `--core-url`   | `http://127.0.0.1:8080`   | reeflex-core endpoint                                 |
+| `--token`      | none                      | optional bearer token — prefer `REEFLEX_CORE_TOKEN` via env instead; see the warning `setup` prints if you use this flag |
+| `--verify-ssl` | `true`                    | `false` only for dev/self-signed endpoints, at your own risk |
+| `--mode`       | `enforce` (fail-closed)   | `observe` = fail-open calibration mode (recommended for a first dry run) |
+| `--env`        | `production`              | `production` \| `staging` \| `dev`                     |
+
+Expected `reeflex-claude setup` output (abridged):
+
+```
+[reeflex-claude] Wrote new PreToolUse hook entry in /path/to/.claude/settings.json
+[reeflex-claude]   matcher: Bash|Write|Edit|MultiEdit|Read|Glob|Grep|LS|NotebookEdit|WebFetch|WebSearch
+[reeflex-claude]   command: reeflex-claude hook  (timeout 30s)
+[reeflex-claude]   env: {"REEFLEX_CORE_URL": "http://127.0.0.1:8080", "REEFLEX_MODE": "enforce", ...}
+[reeflex-claude] Mode: ENFORCE (fail-closed) -- the safe default for a governance gate.
+[reeflex-claude] Now run: reeflex-claude check
+```
+
+Expected `reeflex-claude check` output (PASS):
+
+```
+[reeflex-claude] probing hook command: ['/path/to/venv/Scripts/reeflex-claude', 'hook']
+======================================================================
+PASS -- fail-closed verified
+======================================================================
+hook denied the probe and exited 0 (fail-closed verified). stdout=...
+[reeflex-claude] settings OK: /path/to/.claude/settings.json contains the reeflex-claude PreToolUse hook.
+```
+
+`check` forces the probe's own `REEFLEX_MODE=enforce` and points it at an
+unreachable core address regardless of your real configuration — it is
+testing the **adapter's** fail-closed plumbing (installed correctly,
+resolvable on `PATH`, denies when core is unreachable), not your policy
+configuration (that is core's job, exercised by `demo/run_demo.py` or a real
+`/v1/decide` call). Exit code `0` = PASS, `1` = FAIL.
+
+**Why this structurally fixes the old fail-open bug:** once installed via
+pip, `reeflex-claude hook` is a console entry point resolved from `PATH` —
+there is no absolute path to get wrong and no cwd-dependent `python -m`
+import that fails with `No module named reeflex_claude` when Claude Code
+runs the hook from the project's working directory instead of
+`reeflex-claude/`. See "Development install" below for the git-clone path,
+where that failure mode remains possible if the hook command is misconfigured.
+
+**4. Restart Claude Code.** From the next tool call on, every action passes
+through the gate.
+
+## Development install
+
+For contributors working from a git clone (no pip install), the adapter is
+plain Python (stdlib only) and lives in this repository:
 
 ```bash
 git clone https://github.com/Reeflex-io/reeflex.git
 cd reeflex/reeflex-claude
 ```
 
-(Or download the source from the [latest release](https://github.com/Reeflex-io/reeflex/releases)
-and unpack it — the adapter is the `reeflex-claude/` directory.)
-
-**2. Have a reachable core.** Either run `reeflex-core` locally
-(`docker compose up -d` from the repo root gives you `http://127.0.0.1:8080`)
-or point at an existing deployment.
-
-**3. Wire the hook into Claude Code.** Add to your Claude Code `settings.json`
-(a full sample is in [`examples/settings.sample.json`](examples/settings.sample.json)) —
-use the **absolute path** to `hook_entry.py` so it works regardless of the
-working directory Claude Code runs from:
+Wire it into Claude Code's `settings.json` (a full sample is in
+[`examples/settings.sample.json`](examples/settings.sample.json)) using the
+**absolute path** to `hook_entry.py` so it works regardless of the working
+directory Claude Code runs from:
 
 ```json
 {
@@ -86,7 +158,9 @@ directory is `reeflex-claude/` — the absolute-path form is the reliable one.)
 > **runs the tool anyway** — the gate is silently bypassed. `hook_entry.py`
 > is written to always exit `0` and print an explicit `allow`/`deny`/`ask`
 > decision, so it fails **closed** instead. After wiring the hook, always
-> run the verify command below before trusting it.
+> run the verify command below before trusting it. (This is exactly the
+> failure class that the pip-installed `reeflex-claude check` command above
+> structurally eliminates — no absolute paths, no cwd-dependent import.)
 
 **Verify the wiring.** Run this once, with the same absolute path you put in
 `settings.json` (core does not need to be running — the point of this check
@@ -124,8 +198,9 @@ failure mode directly: `No module named reeflex_claude` printed to stderr
 and a **non-zero exit** — confirming the fail-open gap this section warns
 about.
 
-**4. Set the environment variables** (below) and restart Claude Code. From the
-next tool call on, every action passes through the gate.
+**Set the environment variables** (below) and restart Claude Code, or run
+`reeflex-claude setup` from within the git clone (it works the same way —
+`pip install -e .` first, or run it via `python -m reeflex_claude.cli setup`).
 
 ## Environment variables
 
@@ -143,9 +218,32 @@ next tool call on, every action passes through the gate.
 Setting `REEFLEX_CLAUDE_ENVIRONMENT=dev` or `staging` relaxes the base policy
 (R2/R3 are production-scoped), letting dev workflows through without approvals.
 
+`reeflex-claude setup` writes these into your Claude Code `settings.json`
+`env` block for you (see "Install / wire up" above); the table is the
+reference for what each variable does and for the git-clone / manual-export
+path.
+
 ### Trying it against api-dev.reeflex.io
 
 To point the adapter at a staging/dev core endpoint instead of a local instance:
+
+```bash
+reeflex-claude setup --core-url https://api-dev.reeflex.io --verify-ssl false \
+  --token <your token> --mode observe
+reeflex-claude check
+```
+
+`--verify-ssl false` is only needed because the staging endpoint uses a
+self-signed/untrusted certificate; never set it against a production core.
+Starting with `--mode observe` lets you watch decisions land in the audit log
+without the adapter enforcing them, so a policy misconfiguration or
+connectivity issue can't block your Claude Code session. Note that
+`reeflex-claude check` always probes with an intentionally unreachable core
+address regardless of `--core-url` — it verifies the adapter's fail-closed
+plumbing, not connectivity to api-dev itself; use the demo or a manual
+`curl .../v1/decide` to confirm the staging endpoint responds.
+
+For the git-clone / manual-export path, the equivalent is:
 
 ```bash
 export REEFLEX_CORE_URL=https://api-dev.reeflex.io
@@ -153,12 +251,6 @@ export REEFLEX_VERIFY_SSL=false   # staging cert is not a publicly-trusted CA ce
 export REEFLEX_CORE_TOKEN=<your token>
 export REEFLEX_MODE=observe       # recommended for a first run — see below
 ```
-
-`REEFLEX_VERIFY_SSL=false` is only needed because the staging endpoint uses a
-self-signed/untrusted certificate; never set it against a production core.
-Starting with `REEFLEX_MODE=observe` lets you watch decisions land in the
-audit log without the adapter enforcing them, so a policy misconfiguration
-or connectivity issue can't block your Claude Code session.
 
 ## Decision mapping
 
@@ -187,7 +279,11 @@ python -m unittest discover -s tests -v
 ```
 
 No network required for unit tests (classify + envelope are pure; enforce
-tests spin a local stub server).
+tests spin a local stub server). `test_setup_settings.py` and `test_cli.py`
+cover `setup`'s merge semantics (fresh write, merge-preserving, corrupt-JSON
+refusal) and `check`'s deny-scenario probe (healthy install, missing binary,
+non-zero exit, malformed output, wrong decision) without touching your real
+`~/.claude` or `./.claude` directories.
 
 ## Limits / upgrade paths
 

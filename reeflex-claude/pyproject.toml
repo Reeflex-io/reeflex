@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reeflex-claude"
+version = "0.1.6"
+description = "Reeflex Claude Code adapter: deterministic PreToolUse governance hook (allow/deny/require_approval), fail-closed by construction."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.8"
+keywords = ["reeflex", "governance", "claude-code", "ai-agent-safety", "pretooluse-hook"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://reeflex.io"
+Source = "https://github.com/Reeflex-io/reeflex"
+Issues = "https://github.com/Reeflex-io/reeflex/issues"
+Documentation = "https://github.com/Reeflex-io/reeflex/tree/main/reeflex-claude"
+Changelog = "https://github.com/Reeflex-io/reeflex/blob/main/CHANGELOG.md"
+
+[project.scripts]
+reeflex-claude = "reeflex_claude.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["reeflex_claude*"]

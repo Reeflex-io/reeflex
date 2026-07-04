@@ -209,7 +209,7 @@ conformance-tested reference adapters ship in this repo — see below.
 | Adapter | Boundary | Status |
 |---|---|---|
 | [`reeflex-mock`](reeflex-mock/) | in-memory reference | worked example + 5-scenario demo |
-| [`reeflex-claude`](reeflex-claude/) | Claude Code (source-side) | conformance-tested · 133 tests |
+| [`reeflex-claude`](reeflex-claude/) | Claude Code (source-side) | `pip install reeflex-claude` · conformance-tested · 133 tests |
 | [`reeflex-wordpress`](reeflex-wordpress/) | WordPress Abilities API (resource-side) | conformance-tested end-to-end |
 | `reeflex-postgres` | database wire-protocol | on the roadmap |
 | `reeflex-graphql` | GraphQL resolvers | on the roadmap |
