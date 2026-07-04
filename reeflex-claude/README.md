@@ -78,6 +78,52 @@ working directory Claude Code runs from:
 (`python -m reeflex_claude` also works, but only if Claude Code's working
 directory is `reeflex-claude/` — the absolute-path form is the reliable one.)
 
+> ⚠ **A misconfigured hook fails OPEN.** Claude Code only treats a
+> PreToolUse hook's exit code **2** as "block". Any other non-zero exit
+> (for example, the `No module named reeflex_claude` you get from
+> `python -m reeflex_claude` when the working directory is not
+> `reeflex-claude/`) is treated as a probe failure, and Claude Code
+> **runs the tool anyway** — the gate is silently bypassed. `hook_entry.py`
+> is written to always exit `0` and print an explicit `allow`/`deny`/`ask`
+> decision, so it fails **closed** instead. After wiring the hook, always
+> run the verify command below before trusting it.
+
+**Verify the wiring.** Run this once, with the same absolute path you put in
+`settings.json` (core does not need to be running — the point of this check
+is that a destructive command gets an explicit `deny`, not a crash):
+
+```bash
+echo '{"session_id":"verify-1","tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' | python /ABSOLUTE/PATH/TO/reeflex/reeflex-claude/hook_entry.py
+```
+
+Expected stdout (one JSON line; the exact wording of the connection error
+varies by OS):
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Reeflex: core unreachable or error -- failing closed: ... [rule=reeflex.core/fail_closed]"}}
+```
+
+Then check the exit code — it MUST be `0` even though the decision is
+`deny` (that is fail-closed working correctly; a non-zero exit here is
+exactly the fail-open bug described above):
+
+```bash
+# POSIX (bash/zsh)
+echo $?
+
+# Windows (cmd.exe)
+echo %ERRORLEVEL%
+
+# Windows (PowerShell)
+$LASTEXITCODE
+```
+
+If you instead ran the unqualified `python -m reeflex_claude` form from a
+directory other than `reeflex-claude/`, this same check will show the
+failure mode directly: `No module named reeflex_claude` printed to stderr
+and a **non-zero exit** — confirming the fail-open gap this section warns
+about.
+
 **4. Set the environment variables** (below) and restart Claude Code. From the
 next tool call on, every action passes through the gate.
 

@@ -149,9 +149,14 @@ curl http://localhost:8080/healthz
 > **No clone needed?** Pull the prebuilt image straight from GHCR:
 >
 > ```bash
-> docker run -d -p 8080:8080 ghcr.io/reeflex-io/reeflex-core:v0.1.2
+> docker run -d -p 8080:8080 ghcr.io/reeflex-io/reeflex-core:latest
 > curl http://localhost:8080/healthz   # {"status":"ok"}
 > ```
+>
+> `:latest` tracks the newest published image. To pin an explicit version
+> instead — e.g. `:v0.1.5` at the time of writing — check the
+> [Releases page](https://github.com/Reeflex-io/reeflex/releases) for the
+> current tag.
 
 That's the whole engine — stateless, self-contained, fail-closed. Put it behind
 your reverse proxy for TLS, point your adapter at it, and you're governing

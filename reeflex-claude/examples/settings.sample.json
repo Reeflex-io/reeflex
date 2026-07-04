@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python -m reeflex_claude",
+            "command": "python /ABSOLUTE/PATH/TO/reeflex/reeflex-claude/hook_entry.py",
             "timeout": 30
           }
         ]

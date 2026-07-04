@@ -178,6 +178,28 @@ This is the discrete-decision equivalent of the cumulative-cost idea at the proj
 
 Every decision is deterministic: same envelope in, same decision out. No LLM in this path.
 
+**Additive fields since core v0.1.5 (HIL Phase 1):** when `decision` is
+`require_approval` and hold creation succeeds, the response additionally
+carries `hold_id` (string) and `expires_ts` (ISO 8601 UTC timestamp) —
+see §5.1 below for full semantics. These two fields are absent on `allow`
+and `deny` responses, and absent everywhere on cores older than v0.1.5.
+Consumers MUST tolerate unknown/absent fields on the Decision object rather
+than rejecting on strict shape — this is a forward-compatible, additive
+extension, not a breaking change to the `decision`/`reason`/`rule`/
+`obligations`/`modulation` contract above:
+
+```jsonc
+{
+  "decision": "require_approval",
+  "reason": "irreversible bulk delete in production requires human approval",
+  "rule": "reeflex.policy/irreversible_broad_prod",
+  "obligations": [],
+  "modulation": null,
+  "hold_id": "b2bece3cf6ff45f7b738ee3f48978c4e",   // present only on require_approval + hold created (v0.1.5+)
+  "expires_ts": "2026-07-04T20:07:04Z"              // ISO 8601 UTC; hold TTL default 4h
+}
+```
+
 ---
 
 ## 5.1 Approval object semantics (HIL Phase 1)

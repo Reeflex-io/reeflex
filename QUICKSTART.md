@@ -7,6 +7,64 @@ production, with no prior knowledge of the codebase.
 
 ---
 
+## Fastest path — zero to verdict without a clone
+
+If you just want a verdict right now and already have Docker, skip the clone
+and the source setup entirely:
+
+```bash
+docker run -d -p 8080:8080 ghcr.io/reeflex-io/reeflex-core:latest
+```
+
+(`:latest` tracks the newest published image. To pin a specific version instead
+— e.g. `:v0.1.5` at the time of writing — check the
+[Releases page](https://github.com/Reeflex-io/reeflex/releases) for the current tag.)
+
+```bash
+curl http://localhost:8080/healthz
+# {"status":"ok"}
+```
+
+Now send one decision request — a bulk delete of 50 posts in production
+(irreversible, broad blast radius):
+
+```bash
+curl -s -X POST http://localhost:8080/v1/decide \
+  -H 'content-type: application/json' \
+  -d '{
+    "action":    { "verb": "delete", "ability": "wordpress/delete-post" },
+    "axes":      { "reversibility": "irreversible", "blast_radius": "broad", "externality": "internal" },
+    "magnitude": { "count": 50 },
+    "target":    { "environment": "production" },
+    "agent":     { "session_id": "sess-quickstart-1" }
+  }'
+```
+
+Expected response (core v0.1.5+; `hold_id` and `expires_ts` are additive HIL
+fields — see [SPEC.md §5](reeflex-spec/SPEC.md#5-the-decision) — an older core
+image returns the same `decision`/`reason`/`rule`/`obligations`/`modulation`
+without them). Your own `hold_id` and `expires_ts` will differ — they are a
+freshly generated ID and a timestamp 4 hours from your request:
+
+```json
+{
+  "decision": "require_approval",
+  "reason": "irreversible broad change in production requires human approval",
+  "rule": "reeflex.policy/irreversible_broad_prod",
+  "obligations": [],
+  "modulation": null,
+  "hold_id": "b2bece3cf6ff45f7b738ee3f48978c4e",
+  "expires_ts": "2026-07-04T20:07:04Z"
+}
+```
+
+That is the whole engine: one HTTP call, a deterministic verdict, zero LLM
+anywhere in the decision path. The rest of this guide walks the same result
+from source, plus the fail-closed and fragmentation-resistance scenarios the
+one-shot `curl` above doesn't show.
+
+---
+
 ## Step 0 — get the code (30 seconds)
 
 ```bash
@@ -34,8 +92,18 @@ opa version
 
 Expected: a line beginning `Version: 1.18.` (the binary prints `Version: 1.18.0`; a compatible 1.x release is also acceptable).
 
-If OPA is not installed, see [INSTALL.md](INSTALL.md) for per-OS download
-instructions (it is a single static binary — no package manager required).
+### If OPA is not installed, install it now (1 minute)
+
+OPA is a single static binary — no package manager required.
+
+1. Download it for your OS:
+   - **Windows:** `https://openpolicyagent.org/downloads/latest/opa_windows_amd64.exe` — rename the downloaded file to `opa.exe`.
+   - **Linux:** `curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static`
+   - **macOS:** `curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_darwin_amd64`
+2. Make it executable and put it on your `PATH` (Linux/macOS: `chmod +x opa && sudo mv opa /usr/local/bin/opa`; Windows: place `opa.exe` in a folder already on your user `PATH`, e.g. `C:\tools\`). If you cannot install to a system location, skip this and just remember the full path — you will pass it as `REEFLEX_OPA_BIN` in the next step.
+3. Re-run `opa version` to confirm.
+
+Full per-OS detail and troubleshooting: [INSTALL.md](INSTALL.md).
 
 ---
 
@@ -71,6 +139,13 @@ the binary (e.g. `C:\tools\opa.exe` on Windows, `/home/user/bin/opa` on Linux).
 ---
 
 ## Run the demo (1 minute)
+
+Note on ports: this demo starts its own `reeflex-core` subprocess on **8181**
+(and a second throwaway instance on 8182 for the fail-closed scenario) — this
+is separate from the **8080** default used by a standalone or Docker-run core
+(as in the "Fastest path" section above). If you `curl` your own `/v1/decide`
+call while the demo is running, make sure you target the port for the core
+instance you actually mean to hit.
 
 From the repo root:
 

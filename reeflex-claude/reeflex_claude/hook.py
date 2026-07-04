@@ -42,8 +42,11 @@ OBLIGATIONS (SPEC §5 / §7 M5):
   is not running so no mandatory side-effect can be missed).
 
 Usage:
-  python -m reeflex_claude             (preferred -- works from any cwd)
-  python hook_entry.py                 (convenience shim at repo root)
+  python /abs/path/to/hook_entry.py    (preferred -- hooks run from the project
+                                        cwd, so always wire the absolute-path shim)
+  python -m reeflex_claude             (ONLY if cwd is reeflex-claude/; from any
+                                        other cwd the import fails with exit 1,
+                                        which a PreToolUse hook treats as FAIL-OPEN)
 """
 
 from __future__ import annotations
