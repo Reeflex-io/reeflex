@@ -130,8 +130,11 @@ picture, or [SPEC.md](reeflex-spec/SPEC.md) for the contract.
 
 ## Deploy on-prem in one command
 
-Everything runs inside your own infrastructure. No decision data ever leaves
-your network.
+Everything runs inside your own infrastructure. In the on-prem deployment — the
+only production-supported one — no decision data ever leaves your network. (The
+one exception is entirely opt-in: if you point an adapter at our public
+`api-dev.reeflex.io` evaluation endpoint to try it out, envelopes go there
+instead. It's for dev/eval only — self-host for anything real.)
 
 ```bash
 git clone https://github.com/Reeflex-io/reeflex.git
