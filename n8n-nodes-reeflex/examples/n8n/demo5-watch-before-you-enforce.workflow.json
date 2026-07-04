@@ -1,0 +1,106 @@
+{
+  "name": "Reeflex Demo 5 - Watch Before You Enforce (observe posture)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "d5000005-0001-4005-8005-000000000001",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 400],
+      "notes": "Stand-in for whatever actually triggers this (a schedule, a webhook, an agent tool call)."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Two actions that would each be blocked in enforce posture: one trips R2\n// (would HOLD), one trips R3 (would terminal DENY). This demo runs both\n// through Reeflex Gate, LOGS the verdict reeflex-core actually returned,\n// and then lets the workflow proceed regardless -- a deliberate dry-run /\n// shadow-mode pattern for rolling out a new policy pack safely before\n// flipping a workflow to actually block on it.\nreturn [\n  {\n    json: {\n      table: 'customers',\n      count: 50,\n      reversibility: 'irreversible',\n      blastRadius: 'broad',\n      environment: 'production',\n      externality: 'internal',\n      wouldBe: 'require_approval (R2) - would HOLD in enforce posture'\n    }\n  },\n  {\n    json: {\n      table: 'core_schema',\n      count: 1,\n      reversibility: 'irreversible',\n      blastRadius: 'systemic',\n      environment: 'production',\n      externality: 'internal',\n      wouldBe: 'deny (R3) - would be a terminal DENY in enforce posture'\n    }\n  }\n];"
+      },
+      "id": "d5000005-0002-4005-8005-000000000002",
+      "name": "Two would-be-blocked actions (observe posture sample data)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 400],
+      "notes": "Stand-in for your real upstream data. Replace with the real actions you want to shadow-test a policy change against before enforcing it."
+    },
+    {
+      "parameters": {
+        "ability": "postgres/delete-rows",
+        "verb": "delete",
+        "environment": "={{$json.environment}}",
+        "reversibility": "={{$json.reversibility}}",
+        "blastRadius": "={{$json.blastRadius}}",
+        "externality": "={{$json.externality}}",
+        "count": "={{$json.count}}",
+        "targetSystem": "={{$json.table}}",
+        "sessionId": "={{$execution.id}}-{{$json.table}}",
+        "agentId": "agent:n8n-demo5-observe-posture",
+        "additionalFields": {}
+      },
+      "id": "d5000005-0003-4005-8005-000000000003",
+      "name": "Reeflex Gate",
+      "type": "n8n-nodes-reeflex.reeflexGate",
+      "typeVersion": 1,
+      "position": [660, 400],
+      "credentials": {
+        "reeflexApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Reeflex Core API account"
+        }
+      },
+      "notes": "reeflex-core has no server-side 'observe mode' -- every call here is a normal, real /v1/decide call and gets a real verdict (this is NOT a mock). What makes this demo 'observe' is entirely what THIS WORKFLOW does with the verdict afterwards: it logs it and proceeds anyway instead of branching to a block/hold path. See demo5-README.md."
+    },
+    {
+      "parameters": {},
+      "id": "d5000005-0004-4005-8005-000000000004",
+      "name": "Audit: would-be HOLD logged (does not block)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [900, 260],
+      "notes": "PLACEHOLDER - replace with a real logging/metrics node (write {{$json.reeflex.reason}}, {{$json.reeflex.rule}} to your SIEM/log store). In an ENFORCE posture this is where the workflow would stop and wait for a human. In this OBSERVE posture it is a log line, then the workflow keeps going -- see the next node."
+    },
+    {
+      "parameters": {},
+      "id": "d5000005-0005-4005-8005-000000000005",
+      "name": "Audit: would-be DENY logged (does not block)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [900, 540],
+      "notes": "PLACEHOLDER - replace with a real logging/metrics node (write {{$json.reeflex.reason}}, {{$json.reeflex.rule}} to your SIEM/log store). In an ENFORCE posture this action would be terminally blocked (see demo4). In this OBSERVE posture it is a log line, then the workflow keeps going -- see the next node."
+    },
+    {
+      "parameters": {},
+      "id": "d5000005-0006-4005-8005-000000000006",
+      "name": "Proceed (action runs regardless of verdict - OBSERVE POSTURE)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1140, 400],
+      "notes": "PLACEHOLDER - not a real action. All three Reeflex Gate outputs (Allowed directly, Held via the audit log, Denied via the audit log) converge here and the workflow proceeds -- this is the entire point of 'observe': you get the same real verdicts as enforce posture, logged, but the workflow never blocks on them. This is a WORKFLOW CHOICE (which output wires do), not a reeflex-core mode -- core does not know or care that this workflow ignores its verdict."
+    }
+  ],
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [[{ "node": "Two would-be-blocked actions (observe posture sample data)", "type": "main", "index": 0 }]]
+    },
+    "Two would-be-blocked actions (observe posture sample data)": {
+      "main": [[{ "node": "Reeflex Gate", "type": "main", "index": 0 }]]
+    },
+    "Reeflex Gate": {
+      "main": [
+        [{ "node": "Proceed (action runs regardless of verdict - OBSERVE POSTURE)", "type": "main", "index": 0 }],
+        [{ "node": "Audit: would-be HOLD logged (does not block)", "type": "main", "index": 0 }],
+        [{ "node": "Audit: would-be DENY logged (does not block)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Audit: would-be HOLD logged (does not block)": {
+      "main": [[{ "node": "Proceed (action runs regardless of verdict - OBSERVE POSTURE)", "type": "main", "index": 0 }]]
+    },
+    "Audit: would-be DENY logged (does not block)": {
+      "main": [[{ "node": "Proceed (action runs regardless of verdict - OBSERVE POSTURE)", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "description": "Reeflex n8n demo 5/5 (examples/n8n/, see top-level README.md for the index + credential setup). Teaches: 'observe' is a WORKFLOW POSTURE, not a reeflex-core mode -- the Gate node returns a real verdict either way, an audit/log node records what WOULD have happened (a would-be HOLD or DENY), and the workflow proceeds regardless, never blocking. Two sample actions (one would-be R2 hold, one would-be R3 deny), both logged, both proceed. Fully works against the live api-dev eval endpoint -- see demo5-README.md."
+  }
+}

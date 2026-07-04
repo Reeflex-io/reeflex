@@ -1,0 +1,100 @@
+{
+  "name": "Reeflex Demo 1 - Bulk Delete Guard (real risk, not row count)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "d1000001-0001-4001-8001-000000000001",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "notes": "Stand-in for whatever actually triggers this (a schedule, a webhook, an agent tool call)."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Two realistic bulk-delete requests. Same gate, same ability, two\n// different real-world shapes -- a small targeted cleanup of soft-deletable\n// rows, and a large untargeted wipe of a live table. The point of this demo\n// is that Reeflex routes on the DECLARED RISK AXES (reversibility / blast\n// radius / externality), not on the row count alone -- count is informational\n// (magnitude.count) and feeds the separate fragmentation-budget check (see\n// demo 2), it is not itself what R2 keys on.\nreturn [\n  {\n    json: {\n      table: 'stale_carts',\n      count: 3,\n      reversibility: 'recoverable',\n      blastRadius: 'single',\n      environment: 'production',\n      externality: 'internal',\n      story: 'small, soft-deletable, targeted cleanup -> expect ALLOWED'\n    }\n  },\n  {\n    json: {\n      table: 'customers',\n      count: 50,\n      reversibility: 'irreversible',\n      blastRadius: 'broad',\n      environment: 'production',\n      externality: 'internal',\n      story: 'large hard-delete of a live production table -> expect HELD FOR APPROVAL'\n    }\n  }\n];"
+      },
+      "id": "d1000001-0002-4001-8001-000000000002",
+      "name": "Two realistic bulk-delete requests",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "notes": "Stand-in for your real upstream data (two queries that found different candidate sets). Replace with your real data source -- keep the same idea: describe each request's TRUE risk axes, do not just vary count."
+    },
+    {
+      "parameters": {
+        "ability": "postgres/delete-rows",
+        "verb": "delete",
+        "environment": "={{$json.environment}}",
+        "reversibility": "={{$json.reversibility}}",
+        "blastRadius": "={{$json.blastRadius}}",
+        "externality": "={{$json.externality}}",
+        "count": "={{$json.count}}",
+        "targetSystem": "={{$json.table}}",
+        "sessionId": "={{$execution.id}}-{{$json.table}}",
+        "agentId": "agent:n8n-demo1-bulk-delete-guard",
+        "additionalFields": {}
+      },
+      "id": "d1000001-0003-4001-8001-000000000003",
+      "name": "Reeflex Gate",
+      "type": "n8n-nodes-reeflex.reeflexGate",
+      "typeVersion": 1,
+      "position": [700, 300],
+      "credentials": {
+        "reeflexApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Reeflex Core API account"
+        }
+      },
+      "notes": "One gate node, two input items -> two separate /v1/decide calls (one per item), each with its own session id (execution id + table name) so the two rows don't share a fragmentation budget. See demo1-README.md for the credential setup (preconfigured against the public api-dev eval endpoint)."
+    },
+    {
+      "parameters": {},
+      "id": "d1000001-0004-4001-8001-000000000004",
+      "name": "Execute delete (ALLOWED - recoverable, single, low risk)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [960, 180],
+      "notes": "PLACEHOLDER - not a real delete. Reached for the stale_carts row: recoverable + single blast radius is genuinely low risk, so reeflex-core allows it."
+    },
+    {
+      "parameters": {},
+      "id": "d1000001-0005-4001-8001-000000000005",
+      "name": "Would notify approver (HELD - irreversible, broad, production)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [960, 320],
+      "notes": "PLACEHOLDER - replace with a real Slack/Email/ticketing node. Reached for the customers row: irreversible + broad + production trips R2 (reeflex.policy/irreversible_broad_prod). This demo stops here -- see demo3-the-approval-loop for what happens after this point (resolve the hold, resubmit, get allow)."
+    },
+    {
+      "parameters": {},
+      "id": "d1000001-0006-4001-8001-000000000006",
+      "name": "Unexpected deny (should not fire in this demo)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [960, 460],
+      "notes": "PLACEHOLDER - wired for completeness/robustness. Neither sample row should trip R3 (irreversible+systemic+production) -- see demo4-nothing-gets-through for that case."
+    }
+  ],
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [[{ "node": "Two realistic bulk-delete requests", "type": "main", "index": 0 }]]
+    },
+    "Two realistic bulk-delete requests": {
+      "main": [[{ "node": "Reeflex Gate", "type": "main", "index": 0 }]]
+    },
+    "Reeflex Gate": {
+      "main": [
+        [{ "node": "Execute delete (ALLOWED - recoverable, single, low risk)", "type": "main", "index": 0 }],
+        [{ "node": "Would notify approver (HELD - irreversible, broad, production)", "type": "main", "index": 0 }],
+        [{ "node": "Unexpected deny (should not fire in this demo)", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "description": "Reeflex n8n demo 1/5 (examples/n8n/, see top-level README.md for the index + credential setup). Teaches: the SAME Reeflex Gate node routes two bulk-delete requests differently based on their TRUE risk axes, not their row count. Two sample rows in one run: a 3-row soft-deletable cleanup (recoverable+single) comes back ALLOWED; a 50-row hard delete of a live table (irreversible+broad+production) comes back HELD FOR APPROVAL. Fully works against the live api-dev eval endpoint -- see demo1-README.md."
+  }
+}

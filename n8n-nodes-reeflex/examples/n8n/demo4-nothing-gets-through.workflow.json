@@ -1,0 +1,110 @@
+{
+  "name": "Reeflex Demo 4 - Nothing Gets Through (terminal DENY)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "d4000004-0001-4004-8004-000000000001",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "notes": "Stand-in for whatever actually triggers this (a schedule, a webhook, an agent tool call)."
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            { "id": "a1", "name": "table", "value": "core_schema", "type": "string" },
+            { "id": "a2", "name": "count", "value": 1, "type": "number" },
+            { "id": "a3", "name": "environment", "value": "production", "type": "string" },
+            { "id": "a4", "name": "reversibility", "value": "irreversible", "type": "string" },
+            { "id": "a5", "name": "blastRadius", "value": "systemic", "type": "string" },
+            { "id": "a6", "name": "externality", "value": "internal", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d4000004-0002-4004-8004-000000000002",
+      "name": "Systemic schema change (irreversible+systemic+prod)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 300],
+      "notes": "Stand-in for your real upstream data. count=1 on purpose: R3 does not care about magnitude at all, only the axes -- a single DROP SCHEMA is just as systemic as a thousand-row wipe. This is what makes R3 different from R2 (demo1/3): it is not a bigger version of a holdable action, it is a different CATEGORY of action."
+    },
+    {
+      "parameters": {
+        "ability": "postgres/drop-schema",
+        "verb": "delete",
+        "environment": "={{$json.environment}}",
+        "reversibility": "={{$json.reversibility}}",
+        "blastRadius": "={{$json.blastRadius}}",
+        "externality": "={{$json.externality}}",
+        "count": "={{$json.count}}",
+        "targetSystem": "={{$json.table}}",
+        "sessionId": "={{$execution.id}}",
+        "agentId": "agent:n8n-demo4-nothing-gets-through",
+        "additionalFields": {}
+      },
+      "id": "d4000004-0003-4004-8004-000000000003",
+      "name": "Reeflex Gate",
+      "type": "n8n-nodes-reeflex.reeflexGate",
+      "typeVersion": 1,
+      "position": [700, 300],
+      "credentials": {
+        "reeflexApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Reeflex Core API account"
+        }
+      },
+      "notes": "irreversible + systemic + production trips R3 (reeflex.policy/irreversible_systemic_prod) -- deny, NO hold_id, NO expires_ts (see reeflex-core README: 'irreversible_systemic_prod is resolvable by no principal -- its deny is terminal'). There is nothing downstream to resolve because reeflex-core never creates a hold for this rule in the first place."
+    },
+    {
+      "parameters": {},
+      "id": "d4000004-0004-4004-8004-000000000004",
+      "name": "Unexpected allow (should never fire for R3)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [960, 160],
+      "notes": "PLACEHOLDER - wired for completeness/robustness. Should not fire with these axes."
+    },
+    {
+      "parameters": {},
+      "id": "d4000004-0005-4004-8004-000000000005",
+      "name": "Unexpected hold (should never fire for R3 - no hold is ever created)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [960, 300],
+      "notes": "PLACEHOLDER - wired for completeness/robustness. R3 is a direct deny; unlike R2/R5 it never goes through the Held output, so there is no hold_id to resolve for this action, ever."
+    },
+    {
+      "parameters": {},
+      "id": "d4000004-0006-4004-8004-000000000006",
+      "name": "Terminal DENY - not resolvable by any principal",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [960, 440],
+      "notes": "PLACEHOLDER - replace with a real alert node. This is where every run of this demo ends up: rule reeflex.policy/irreversible_systemic_prod, reason 'irreversible systemic change in production is not allowed even with approval'. No human, agent, or automation principal can approve this -- see demo4-README.md for the freeze (REEFLEX_FREEZE) half of this story, which cannot be shown against the shared api-dev endpoint."
+    }
+  ],
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [[{ "node": "Systemic schema change (irreversible+systemic+prod)", "type": "main", "index": 0 }]]
+    },
+    "Systemic schema change (irreversible+systemic+prod)": {
+      "main": [[{ "node": "Reeflex Gate", "type": "main", "index": 0 }]]
+    },
+    "Reeflex Gate": {
+      "main": [
+        [{ "node": "Unexpected allow (should never fire for R3)", "type": "main", "index": 0 }],
+        [{ "node": "Unexpected hold (should never fire for R3 - no hold is ever created)", "type": "main", "index": 0 }],
+        [{ "node": "Terminal DENY - not resolvable by any principal", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "description": "Reeflex n8n demo 4/5 (examples/n8n/, see top-level README.md for the index + credential setup). Teaches: R3 (irreversible+systemic+production) is a TERMINAL deny -- no hold is ever created, no principal can approve it (reeflex-core README: 'irreversible_systemic_prod is resolvable by no principal'). Live and honest against the shared api-dev eval endpoint. Does NOT attempt to demonstrate REEFLEX_FREEZE (the operator-side kill-switch) -- that env var lives on the core server, not something an importer of this workflow can flip on a shared endpoint; see demo4-README.md for how to see it against your own core."
+  }
+}
