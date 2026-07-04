@@ -225,11 +225,15 @@ path.
 
 ### Trying it against api-dev.reeflex.io
 
-To point the adapter at a staging/dev core endpoint instead of a local instance:
+`https://api-dev.reeflex.io` is a public evaluation endpoint. Use the public
+eval token below — no signup needed:
+
+> **Eval token:** `reeflex-eval-public-2026` — dev endpoint, staging cert (set
+> `verify_ssl=false`), rate-limited, **may reset anytime; not for production.**
 
 ```bash
 reeflex-claude setup --core-url https://api-dev.reeflex.io --verify-ssl false \
-  --token <your token> --mode observe
+  --token reeflex-eval-public-2026 --mode observe
 reeflex-claude check
 ```
 
@@ -247,9 +251,9 @@ For the git-clone / manual-export path, the equivalent is:
 
 ```bash
 export REEFLEX_CORE_URL=https://api-dev.reeflex.io
-export REEFLEX_VERIFY_SSL=false   # staging cert is not a publicly-trusted CA cert
-export REEFLEX_CORE_TOKEN=<your token>
-export REEFLEX_MODE=observe       # recommended for a first run — see below
+export REEFLEX_VERIFY_SSL=false             # staging cert is not a publicly-trusted CA cert
+export REEFLEX_CORE_TOKEN=reeflex-eval-public-2026   # public eval token (may reset anytime)
+export REEFLEX_MODE=observe                 # recommended for a first run — see below
 ```
 
 ## Decision mapping
