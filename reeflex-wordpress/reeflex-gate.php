@@ -117,6 +117,7 @@ require_once $reeflex_dir . 'class-reeflex-audit.php';
 require_once $reeflex_dir . 'class-reeflex-holds-store.php';
 require_once $reeflex_dir . 'class-reeflex-gate.php';
 require_once $reeflex_dir . 'class-reeflex-settings.php';
+require_once $reeflex_dir . 'class-reeflex-admin.php';
 
 unset( $reeflex_dir );
 
@@ -142,6 +143,10 @@ Reeflex_Gate::register_hooks();
 // Settings page: attaches admin_menu + admin_init hooks.
 // Inert on the front end and in non-admin (CLI/cron) contexts.
 Reeflex_Settings::init();
+
+// HIL Phase 2 (T2): "Reeflex — Pending approvals" wp-admin surface — attaches
+// admin_menu + admin_post_{action} hooks. Inert on the front end and CLI.
+Reeflex_Admin::init();
 
 // ------------------------------------------------------------------
 // Settings row action link — standard-plugin form only.

@@ -18,7 +18,9 @@ if ( ! defined( 'ABSPATH' ) )          { define( 'ABSPATH', __DIR__ . '/' ); }
 if ( ! defined( 'WP_CONTENT_DIR' ) )   { define( 'WP_CONTENT_DIR', getenv( 'REEFLEX_HARNESS_TMP' ) ?: sys_get_temp_dir() ); }
 if ( ! defined( 'AUTH_SALT' ) )        { define( 'AUTH_SALT', 'harness-auth-salt' ); }
 if ( ! defined( 'LOGGED_IN_COOKIE' ) ) { define( 'LOGGED_IN_COOKIE', 'wordpress_logged_in_harness' ); }
+if ( ! defined( 'MINUTE_IN_SECONDS' ) ){ define( 'MINUTE_IN_SECONDS', 60 ); }
 if ( ! defined( 'HOUR_IN_SECONDS' ) )  { define( 'HOUR_IN_SECONDS', 3600 ); }
+if ( ! defined( 'DAY_IN_SECONDS' ) )   { define( 'DAY_IN_SECONDS', 86400 ); }
 
 // --- Filter/action registry ------------------------------------------------
 $GLOBALS['__filters'] = array();
@@ -35,6 +37,9 @@ function apply_filters( $hook, $value, ...$rest ) {
 	return $value;
 }
 function do_action( $hook, ...$args ) { /* no-op in the harness */ }
+// add_action is a plain alias of add_filter in real WordPress core; mirrored here
+// so Reeflex_Admin::init() (admin_menu, admin_post_{action}) can register.
+function add_action( $hook, $cb, $prio = 10, $args = 1 ) { return add_filter( $hook, $cb, $prio, $args ); }
 
 // --- WP_Error --------------------------------------------------------------
 class WP_Error {
@@ -192,4 +197,126 @@ if ( ! function_exists( 'selected' ) ) {
 		}
 		return $result;
 	}
+}
+
+// -----------------------------------------------------------------------
+// Admin-surface shims (HIL Phase 2 T2 — Reeflex_Admin). Added only because
+// class-reeflex-admin.php is now exercised by tests/admin-holds-demo.php.
+// These are deliberately simplified versions of the real WordPress functions
+// (e.g. esc_url() here is a plain htmlspecialchars, not WP's full URL
+// sanitizer) — good enough for a CLI test harness that never renders in a
+// real browser; NOT a substitute for testing against real WordPress.
+// -----------------------------------------------------------------------
+
+// --- Capability check --------------------------------------------------
+// Toggle via $GLOBALS['__current_user_can'] = false; in a test to exercise
+// the fail-closed "no permission" path. Defaults to true (admin user).
+if ( ! function_exists( 'current_user_can' ) ) {
+	function current_user_can( $capability ) {
+		return $GLOBALS['__current_user_can'] ?? true;
+	}
+}
+
+// --- wp_die(): throws instead of terminating the process ---------------
+// Mirrors the well-established wp-phpunit convention (WPDieException) so a
+// capability/nonce failure can be asserted with a try/catch instead of
+// killing the whole CLI test run.
+class Reeflex_Test_WPDieException extends \Exception {}
+if ( ! function_exists( 'wp_die' ) ) {
+	function wp_die( $message = '', $title = '', $args = array() ) {
+		throw new Reeflex_Test_WPDieException( is_string( $message ) ? $message : 'wp_die' );
+	}
+}
+
+// --- Escaping / i18n (simplified) ---------------------------------------
+if ( ! function_exists( 'esc_html' ) ) {
+	function esc_html( $text ) { return htmlspecialchars( (string) $text, ENT_QUOTES, 'UTF-8' ); }
+}
+if ( ! function_exists( 'esc_attr' ) ) {
+	function esc_attr( $text ) { return htmlspecialchars( (string) $text, ENT_QUOTES, 'UTF-8' ); }
+}
+if ( ! function_exists( 'esc_url' ) ) {
+	function esc_url( $url ) { return htmlspecialchars( (string) $url, ENT_QUOTES, 'UTF-8' ); }
+}
+if ( ! function_exists( '__' ) ) {
+	function __( $text, $domain = 'default' ) { return $text; }
+}
+if ( ! function_exists( 'esc_html__' ) ) {
+	function esc_html__( $text, $domain = 'default' ) { return esc_html( __( $text, $domain ) ); }
+}
+if ( ! function_exists( 'esc_attr__' ) ) {
+	function esc_attr__( $text, $domain = 'default' ) { return esc_attr( __( $text, $domain ) ); }
+}
+
+// --- Nonces (deterministic, NOT cryptographically equivalent to WP core) ---
+if ( ! function_exists( 'wp_create_nonce' ) ) {
+	function wp_create_nonce( $action = -1 ) {
+		return substr( hash( 'sha256', 'nonce:' . $action . ':' . AUTH_SALT ), 0, 10 );
+	}
+}
+if ( ! function_exists( 'wp_nonce_field' ) ) {
+	function wp_nonce_field( $action = -1, $name = '_wpnonce', $referer = true, $echo = true ) {
+		$field = '<input type="hidden" name="' . esc_attr( $name ) . '" value="' . esc_attr( wp_create_nonce( $action ) ) . '" />';
+		if ( $echo ) {
+			echo $field; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- already esc_attr()'d above.
+		}
+		return $field;
+	}
+}
+if ( ! function_exists( 'check_admin_referer' ) ) {
+	function check_admin_referer( $action = -1, $query_arg = '_wpnonce' ) {
+		$sent = $_REQUEST[ $query_arg ] ?? '';
+		if ( ! hash_equals( wp_create_nonce( $action ), (string) $sent ) ) {
+			wp_die( 'invalid nonce' );
+		}
+		return true;
+	}
+}
+
+// --- Admin URL / redirect / menu (recorded, not "real") ------------------
+if ( ! function_exists( 'admin_url' ) ) {
+	function admin_url( $path = '' ) { return 'https://harness.example.test/wp-admin/' . ltrim( (string) $path, '/' ); }
+}
+if ( ! function_exists( 'wp_safe_redirect' ) ) {
+	function wp_safe_redirect( $location, $status = 302 ) {
+		$GLOBALS['__last_redirect'] = $location;
+		return true;
+	}
+}
+if ( ! function_exists( 'add_menu_page' ) ) {
+	function add_menu_page( $page_title, $menu_title, $capability, $menu_slug, $callback = '', $icon_url = '', $position = null ) {
+		$GLOBALS['__admin_menu'][ $menu_slug ] = compact( 'page_title', 'menu_title', 'capability', 'menu_slug', 'callback', 'icon_url', 'position' );
+		return $menu_slug;
+	}
+}
+
+// --- Current user id + transients (in-memory, per-process) ---------------
+if ( ! function_exists( 'get_current_user_id' ) ) {
+	function get_current_user_id() {
+		$u = wp_get_current_user();
+		return ( $u && $u->exists() ) ? (int) $u->ID : 0;
+	}
+}
+$GLOBALS['__transients'] = array();
+if ( ! function_exists( 'set_transient' ) ) {
+	function set_transient( $key, $value, $expiration = 0 ) {
+		$GLOBALS['__transients'][ $key ] = $value;
+		return true;
+	}
+}
+if ( ! function_exists( 'get_transient' ) ) {
+	function get_transient( $key ) {
+		return $GLOBALS['__transients'][ $key ] ?? false;
+	}
+}
+if ( ! function_exists( 'delete_transient' ) ) {
+	function delete_transient( $key ) {
+		unset( $GLOBALS['__transients'][ $key ] );
+		return true;
+	}
+}
+
+// --- Additional sanitizer used by the admin surface -----------------------
+if ( ! function_exists( 'sanitize_textarea_field' ) ) {
+	function sanitize_textarea_field( $str ) { return trim( (string) $str ); }
 }
