@@ -3,6 +3,11 @@
 All notable changes to Reeflex are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project is pre-release.
 
+## [Unreleased]
+
+### Added
+- **reeflex-claude: `REEFLEX_VERIFY_SSL` + `REEFLEX_CORE_TOKEN`** — TLS-verify opt-out (user's risk, default on) and bearer auth, at parity with the WordPress adapter; enables dev/self-signed + authenticated core endpoints (e.g. `api-dev.reeflex.io`).
+
 ## [0.1.5] - Unreleased
 
 ### Added

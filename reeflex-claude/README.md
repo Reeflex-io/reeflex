@@ -91,9 +91,28 @@ next tool call on, every action passes through the gate.
 | `REEFLEX_CLAUDE_PRINCIPAL`  | null                                | on_behalf_of value in the envelope           |
 | `REEFLEX_CLAUDE_AUDIT_LOG`  | `<tempdir>/reeflex-claude-audit.jsonl`| adapter-side audit log path                |
 | `REEFLEX_CLAUDE_TIMEOUT`    | `5`                                 | HTTP timeout to core in seconds              |
+| `REEFLEX_VERIFY_SSL`        | `true` (full TLS verification)     | set to `0`/`false`/`no`/`off` (case-insensitive) to **disable** TLS certificate verification on the call to core. Insecure — dev/self-signed endpoints only, at the operator's own risk. Same env name as the WordPress adapter. |
+| `REEFLEX_CORE_TOKEN`        | unset                               | optional bearer token; when set, adds `Authorization: Bearer <token>` to the `/v1/decide` request. Never logged. Same env name as the WordPress adapter. |
 
 Setting `REEFLEX_CLAUDE_ENVIRONMENT=dev` or `staging` relaxes the base policy
 (R2/R3 are production-scoped), letting dev workflows through without approvals.
+
+### Trying it against api-dev.reeflex.io
+
+To point the adapter at a staging/dev core endpoint instead of a local instance:
+
+```bash
+export REEFLEX_CORE_URL=https://api-dev.reeflex.io
+export REEFLEX_VERIFY_SSL=false   # staging cert is not a publicly-trusted CA cert
+export REEFLEX_CORE_TOKEN=<your token>
+export REEFLEX_MODE=observe       # recommended for a first run — see below
+```
+
+`REEFLEX_VERIFY_SSL=false` is only needed because the staging endpoint uses a
+self-signed/untrusted certificate; never set it against a production core.
+Starting with `REEFLEX_MODE=observe` lets you watch decisions land in the
+audit log without the adapter enforcing them, so a policy misconfiguration
+or connectivity issue can't block your Claude Code session.
 
 ## Decision mapping
 

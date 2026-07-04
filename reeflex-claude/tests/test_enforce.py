@@ -19,6 +19,7 @@ from __future__ import annotations
 import http.server
 import json
 import os
+import ssl
 import subprocess
 import sys
 import threading
@@ -73,6 +74,45 @@ def _start_stub_server(response_body: bytes, status: int = 200) -> tuple:
 def _stop_stub_server(server):
     server.shutdown()
     server.server_close()
+
+
+class _CapturingHandler(http.server.BaseHTTPRequestHandler):
+    """Stub handler that records the last request's headers for assertions
+    (e.g. presence/absence of the Authorization header)."""
+
+    response_body: bytes = b'{"decision":"allow","reason":"ok","rule":"stub/allow","obligations":[]}'
+    response_status: int = 200
+    last_headers: dict = {}
+
+    def log_message(self, fmt, *args):
+        pass  # suppress test noise
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        _ = self.rfile.read(length)
+        self.__class__.last_headers = dict(self.headers.items())
+        body = self.__class__.response_body
+        self.send_response(self.__class__.response_status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def _start_capturing_stub_server(response_body: bytes, status: int = 200) -> tuple:
+    """Start a header-capturing stub HTTP server on a random port.
+    Returns (server, port, thread, handler_class)."""
+    class CustomCapturingHandler(_CapturingHandler):
+        pass
+    CustomCapturingHandler.response_body = response_body
+    CustomCapturingHandler.response_status = status
+    CustomCapturingHandler.last_headers = {}
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), CustomCapturingHandler)
+    port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    return server, port, t, CustomCapturingHandler
 
 
 # ---------------------------------------------------------------------------
@@ -608,6 +648,229 @@ class TestBrokenPipeResilience(unittest.TestCase):
         msg = _deny_output("some error: <broken pipe>")
         parsed = json.loads(msg)
         self.assertEqual(parsed["hookSpecificOutput"]["permissionDecision"], "deny")
+
+
+# ---------------------------------------------------------------------------
+# REEFLEX_CORE_TOKEN -- bearer auth header
+# ---------------------------------------------------------------------------
+
+class TestBearerToken(unittest.TestCase):
+    """REEFLEX_CORE_TOKEN -> 'Authorization: Bearer <token>' header on the
+    /v1/decide request; unset (or blank) -> no Authorization header at all."""
+
+    _ALLOW_BODY = json.dumps({
+        "decision": "allow", "reason": "ok", "rule": "stub/allow", "obligations": [],
+    }).encode("utf-8")
+
+    def setUp(self):
+        self._orig_token = os.environ.get("REEFLEX_CORE_TOKEN")
+        self._orig_url = os.environ.get("REEFLEX_CORE_URL")
+
+    def tearDown(self):
+        for name, val in (("REEFLEX_CORE_TOKEN", self._orig_token),
+                          ("REEFLEX_CORE_URL", self._orig_url)):
+            if val is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = val
+
+    def test_token_set_adds_authorization_header(self):
+        server, port, _, handler_cls = _start_capturing_stub_server(self._ALLOW_BODY)
+        try:
+            os.environ["REEFLEX_CORE_TOKEN"] = "s3cr3t-test-token"
+            os.environ["REEFLEX_CORE_URL"] = f"http://127.0.0.1:{port}"
+            perm, reason, rule, reachable, obligations = call_core_and_map(_minimal_envelope())
+            self.assertEqual(perm, "allow")
+            self.assertEqual(handler_cls.last_headers.get("Authorization"),
+                             "Bearer s3cr3t-test-token")
+        finally:
+            _stop_stub_server(server)
+
+    def test_token_unset_omits_authorization_header(self):
+        server, port, _, handler_cls = _start_capturing_stub_server(self._ALLOW_BODY)
+        try:
+            os.environ.pop("REEFLEX_CORE_TOKEN", None)
+            os.environ["REEFLEX_CORE_URL"] = f"http://127.0.0.1:{port}"
+            perm, reason, rule, reachable, obligations = call_core_and_map(_minimal_envelope())
+            self.assertEqual(perm, "allow")
+            self.assertNotIn("Authorization", handler_cls.last_headers)
+        finally:
+            _stop_stub_server(server)
+
+    def test_blank_token_omits_authorization_header(self):
+        """A whitespace-only token is treated as unset (token.strip() falsy)."""
+        server, port, _, handler_cls = _start_capturing_stub_server(self._ALLOW_BODY)
+        try:
+            os.environ["REEFLEX_CORE_TOKEN"] = "   "
+            os.environ["REEFLEX_CORE_URL"] = f"http://127.0.0.1:{port}"
+            call_core_and_map(_minimal_envelope())
+            self.assertNotIn("Authorization", handler_cls.last_headers)
+        finally:
+            _stop_stub_server(server)
+
+
+# ---------------------------------------------------------------------------
+# REEFLEX_VERIFY_SSL -- toggle parsing (unit-level, via enforce._verify_ssl)
+# ---------------------------------------------------------------------------
+
+class TestVerifySSLParsing(unittest.TestCase):
+    """REEFLEX_VERIFY_SSL parsing: falsy values (0/false/no/off, case-insensitive)
+    turn verification OFF; unset / 'true' / anything else keeps it ON (default)."""
+
+    def setUp(self):
+        self._orig = os.environ.get("REEFLEX_VERIFY_SSL")
+
+    def tearDown(self):
+        if self._orig is None:
+            os.environ.pop("REEFLEX_VERIFY_SSL", None)
+        else:
+            os.environ["REEFLEX_VERIFY_SSL"] = self._orig
+
+    def test_falsy_values_disable_verification(self):
+        from reeflex_claude import enforce
+        for val in ("0", "false", "no", "off", "FALSE", "Off", "NO", "0 "):
+            os.environ["REEFLEX_VERIFY_SSL"] = val
+            self.assertFalse(enforce._verify_ssl(), f"expected verification OFF for {val!r}")
+
+    def test_unset_defaults_to_verification_on(self):
+        from reeflex_claude import enforce
+        os.environ.pop("REEFLEX_VERIFY_SSL", None)
+        self.assertTrue(enforce._verify_ssl())
+
+    def test_truthy_and_other_values_keep_verification_on(self):
+        from reeflex_claude import enforce
+        for val in ("1", "true", "yes", "on", "TRUE", "anything-else", ""):
+            os.environ["REEFLEX_VERIFY_SSL"] = val
+            self.assertTrue(enforce._verify_ssl(), f"expected verification ON for {val!r}")
+
+
+# ---------------------------------------------------------------------------
+# REEFLEX_VERIFY_SSL -- SSL context construction (enforce._build_ssl_context)
+# ---------------------------------------------------------------------------
+
+class TestBuildSSLContext(unittest.TestCase):
+    """_build_ssl_context: https + verify-off -> CERT_NONE/no-hostname-check
+    context; https + verify-on (default) -> None (urllib's secure default);
+    http target -> always None regardless of the flag."""
+
+    def setUp(self):
+        self._orig = os.environ.get("REEFLEX_VERIFY_SSL")
+
+    def tearDown(self):
+        if self._orig is None:
+            os.environ.pop("REEFLEX_VERIFY_SSL", None)
+        else:
+            os.environ["REEFLEX_VERIFY_SSL"] = self._orig
+
+    def test_https_with_verify_off_returns_cert_none_context(self):
+        from reeflex_claude import enforce
+        os.environ["REEFLEX_VERIFY_SSL"] = "false"
+        ctx = enforce._build_ssl_context("https://api-dev.reeflex.io")
+        self.assertIsNotNone(ctx)
+        self.assertEqual(ctx.verify_mode, ssl.CERT_NONE)
+        self.assertFalse(ctx.check_hostname)
+
+    def test_https_with_verify_on_default_returns_none(self):
+        from reeflex_claude import enforce
+        os.environ.pop("REEFLEX_VERIFY_SSL", None)
+        ctx = enforce._build_ssl_context("https://api-dev.reeflex.io")
+        self.assertIsNone(ctx)
+
+    def test_http_target_always_returns_none_regardless_of_flag(self):
+        from reeflex_claude import enforce
+        os.environ["REEFLEX_VERIFY_SSL"] = "false"
+        ctx = enforce._build_ssl_context("http://127.0.0.1:8080")
+        self.assertIsNone(ctx)
+
+
+# ---------------------------------------------------------------------------
+# TLS behavior, end-to-end through call_core_and_map.
+#
+# CHOICE: a real self-signed HTTPS stub (ssl.SSLContext server-side) is
+# deliberately NOT used here. Generating a throwaway self-signed cert with
+# stdlib only (no `cryptography`, no `openssl` binary guaranteed on Windows
+# CI) is fragile and would add real TLS-handshake timing to the suite --
+# exactly the kind of flakiness the anti-hang budget forbids. Instead this
+# monkeypatches urllib.request.urlopen to capture the `context` kwarg that
+# call_core_and_map() actually threads through, which deterministically
+# proves the wiring (env -> _build_ssl_context -> urlopen(context=...))
+# without touching a real socket or certificate.
+# ---------------------------------------------------------------------------
+
+class TestSSLContextThreadedToUrlopen(unittest.TestCase):
+    """call_core_and_map() must pass the ssl context built from
+    REEFLEX_VERIFY_SSL through to urlopen(..., context=...)."""
+
+    def setUp(self):
+        self._orig_verify = os.environ.get("REEFLEX_VERIFY_SSL")
+        self._orig_url = os.environ.get("REEFLEX_CORE_URL")
+
+    def tearDown(self):
+        for name, val in (("REEFLEX_VERIFY_SSL", self._orig_verify),
+                          ("REEFLEX_CORE_URL", self._orig_url)):
+            if val is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = val
+
+    class _FakeResponse:
+        status = 200
+
+        def read(self):
+            return json.dumps({
+                "decision": "allow", "reason": "ok",
+                "rule": "stub/allow", "obligations": [],
+            }).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def _patch_urlopen(self, captured: dict):
+        import urllib.request
+
+        def fake_urlopen(req, timeout=None, context=None):
+            captured["context"] = context
+            return self._FakeResponse()
+
+        orig = urllib.request.urlopen
+        urllib.request.urlopen = fake_urlopen
+        return orig
+
+    def _unpatch_urlopen(self, orig):
+        import urllib.request
+        urllib.request.urlopen = orig
+
+    def test_verify_off_threads_cert_none_context(self):
+        os.environ["REEFLEX_VERIFY_SSL"] = "false"
+        os.environ["REEFLEX_CORE_URL"] = "https://127.0.0.1:9"  # never dialed; urlopen is faked
+
+        captured = {}
+        orig = self._patch_urlopen(captured)
+        try:
+            perm, reason, rule, reachable, obligations = call_core_and_map(_minimal_envelope())
+        finally:
+            self._unpatch_urlopen(orig)
+
+        self.assertEqual(perm, "allow")
+        self.assertIsNotNone(captured["context"])
+        self.assertEqual(captured["context"].verify_mode, ssl.CERT_NONE)
+
+    def test_verify_on_default_threads_none_context(self):
+        os.environ.pop("REEFLEX_VERIFY_SSL", None)
+        os.environ["REEFLEX_CORE_URL"] = "https://127.0.0.1:9"  # never dialed; urlopen is faked
+
+        captured = {}
+        orig = self._patch_urlopen(captured)
+        try:
+            perm, reason, rule, reachable, obligations = call_core_and_map(_minimal_envelope())
+        finally:
+            self._unpatch_urlopen(orig)
+
+        self.assertEqual(perm, "allow")
+        self.assertIsNone(captured["context"])
 
 
 if __name__ == "__main__":
