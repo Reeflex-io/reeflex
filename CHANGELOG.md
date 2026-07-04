@@ -8,7 +8,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 ### Added
 - **reeflex-claude: `REEFLEX_VERIFY_SSL` + `REEFLEX_CORE_TOKEN`** — TLS-verify opt-out (user's risk, default on) and bearer auth, at parity with the WordPress adapter; enables dev/self-signed + authenticated core endpoints (e.g. `api-dev.reeflex.io`).
 
-## [0.1.5] - Unreleased
+## [0.1.5] - 2026-07-04
 
 ### Added
 
@@ -28,7 +28,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 - Zero LLM in the decision path is unchanged. The `agent` principal type in the resolution policy is AIL: an AI judge the operator explicitly designates, recorded in the audit trail — the first decision (OPA/Rego) remains fully deterministic and LLM-free.
 - The `/v1/decide` response gains `hold_id` and `expires_ts` only when the verdict is `require_approval` and hold creation succeeds.
 
-## [0.1.4] - Unreleased
+## [0.1.4] - 2026-07-03
 
 ### Added
 - **SIEM / syslog telemetry.** `reeflex-core` can stream every decision to a configured syslog endpoint — RFC 5424 over UDP (default), TCP (RFC 6587 octet-counted framing), or TLS (RFC 5425) — as structured JSON (default) or CEF. Consumed by Splunk, QRadar, Wazuh, FortiSIEM, Graylog, Grafana Loki, Datadog and friends with zero vendor connectors. Also emits engine lifecycle events; a kill-switch event type is designed for Phase 1. Disabled by default (`REEFLEX_SYSLOG_ENABLED=false`); configured entirely by env (`REEFLEX_SYSLOG_ADDRESS`/`_PROTOCOL`/`_FORMAT`/`_FACILITY`/`_TLS_VERIFY`). Python stdlib only — no new dependencies.
@@ -38,13 +38,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 ### Notes
 - Adapters unchanged: the core emits, and observe-mode decisions flow through the same channel (observe + SIEM = "monitor mode").
 
-## [0.1.3] - Unreleased
+## [0.1.3] - 2026-07-03
 
 ### Added
 - **Observe mode (HIL-DESIGN §8, Phase 0)** in both adapters. WordPress: `REEFLEX_MODE` constant (`enforce`|`observe`, default `enforce`) + a Settings "Enforcement mode" dropdown (same locked-field precedence). Claude adapter: `REEFLEX_MODE=observe` env var. In observe, the adapter requests the decision and writes an audit record annotated `mode=observe` with the would-be verdict, but never enforces (the action always proceeds); a core outage **fails open** (never blocks). Enforce behaviour is unchanged. Zero core changes.
 - Conformance harness gains observe scenarios (all actions proceed; core-down proceeds + outage audited); Claude adapter gains observe unit tests.
 
-## [0.1.2] - Unreleased
+## [0.1.2] - 2026-07-02
 
 ### Changed
 - **`reeflex-verify` — fresh agent session per run.** The CLI now sends a unique `Mcp-Session-Id`
@@ -58,7 +58,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 - `reeflex-verify/README.md` now shows a real clean-run screenshot (`docs/img/reeflex-verify-output.png`).
 - `ROADMAP.md` records the open policy decision on R5 scope (all-verbs vs destructive-verbs-only).
 
-## [0.1.1] - Unreleased
+## [0.1.1] - 2026-07-02
 
 API hardening ahead of network exposure. The decision path is unchanged.
 
@@ -90,7 +90,7 @@ API hardening ahead of network exposure. The decision path is unchanged.
   55/55 engine + 9/9 policy tests all hold. Auth is off by default, so adapters and demos are unaffected.
 - TLS termination, rate limiting, and DNS are handled at the deployment edge (reverse proxy), not in-engine.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-07-02
 
 First public preview: the deterministic decision engine, its contract, a reference adapter, and onboarding.
 

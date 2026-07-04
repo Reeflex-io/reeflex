@@ -130,8 +130,9 @@ picture, or [SPEC.md](reeflex-spec/SPEC.md) for the contract.
 
 ## Deploy on-prem in one command
 
-Everything runs inside your own infrastructure. No decision data ever leaves
-your network.
+Everything runs inside your own infrastructure — no decision data leaves your
+network, except through the optional public dev/eval endpoint below
+(`api-dev.reeflex.io`), which is opt-in and for testing only.
 
 ```bash
 git clone https://github.com/Reeflex-io/reeflex.git
@@ -149,12 +150,13 @@ curl http://localhost:8080/healthz
 > **No clone needed?** Pull the prebuilt image straight from GHCR:
 >
 > ```bash
-> docker run -d -p 8080:8080 ghcr.io/reeflex-io/reeflex-core:latest
+> docker run -d -p 8080:8080 ghcr.io/reeflex-io/reeflex-core:v0.1.5
 > curl http://localhost:8080/healthz   # {"status":"ok"}
 > ```
 >
-> `:latest` tracks the newest published image. To pin an explicit version
-> instead — e.g. `:v0.1.5` at the time of writing — check the
+> `:v0.1.5` is the current release at the time of writing — pinned so this
+> quickstart stays reproducible. `:latest` also tracks the newest published
+> image if you'd rather always run the newest build; check the
 > [Releases page](https://github.com/Reeflex-io/reeflex/releases) for the
 > current tag.
 
