@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reeflex-holds"
+version = "0.1.0"
+description = "MCP server exposing reeflex-core's Human-in-the-Loop (HIL) holds API -- list, inspect, and resolve Reeflex governance holds from any MCP client."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Reeflex" }]
+keywords = ["reeflex", "mcp", "governance", "human-in-the-loop", "ai-agents"]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+# This is a thin MCP surface package (not reeflex-core, which stays
+# dependency-free by contract). The official MCP Python SDK is the standard
+# way to speak the protocol, so it is the ONE dependency here -- see
+# reeflex-holds/README.md "Why the mcp SDK" for the rationale.
+dependencies = [
+    "mcp>=1.2.0",
+]
+
+[project.urls]
+Homepage = "https://reeflex.io"
+Repository = "https://github.com/Reeflex-io/reeflex"
+
+[project.scripts]
+reeflex-holds = "reeflex_holds.server:main"
+
+[tool.setuptools.packages.find]
+include = ["reeflex_holds*"]
+
+# NOTE: this package is NOT yet published to PyPI, and the name "reeflex-holds"
+# is not yet reserved there (only reeflex / reeflex-core / reeflex-claude are).
+# This file makes it pip-installable from source (`pip install -e .`) so
+# `python -m reeflex_holds` and the `reeflex-holds` console script resolve
+# once installed. Publishing to PyPI is a GATE (human GO required) -- not
+# performed by this change.
