@@ -3,6 +3,26 @@
 All notable changes to Reeflex are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project is pre-release.
 
+## [0.1.5] - Unreleased
+
+### Added
+
+- **HIL Phase 1: holds queue and resolution API.** `reeflex-core` now materializes `require_approval` verdicts as persistent holds (`app/holds.py`): event-sourced, append-only JSONL store (`audit/holds.jsonl`), in-memory index rebuilt at boot, lazy expiry. Three new HTTP endpoints share the same bearer auth as `/v1/decide`: `GET /v1/holds` (paged list, expiry sweep on list), `GET /v1/holds/{id}` (full detail including envelope), `POST /v1/holds/{id}/resolve` (approve or reject, four-step validation chain).
+- **Approval principals: human, agent, automation.** All three types resolve holds via the same API. Shipped default: human-only for all rules (`REEFLEX_RESOLUTION_POLICY` absent). Operators configure allowed types per rule short-name via `REEFLEX_RESOLUTION_POLICY` (JSON string or file path). The `decided_by` field records `type:identity` verbatim (e.g. `human:leo`, `agent:triage-bot`, `automation:camunda-proc-123`) and is the EU AI Act Art. 14 oversight-allocation evidence.
+- **Actor != approver, enforced in core.** The agent whose action raised the hold cannot resolve it on any surface via any principal type. Enforced both at resolve time (`POST /v1/holds/{id}/resolve` returns 403 `actor_is_approver`) and at resubmission time (`/v1/decide` returns deny `reeflex_hold_actor_is_approver`).
+- **Systemic deny stays terminal.** `irreversible_systemic_prod` is always a terminal `deny`; it never creates a hold and is rejected at resolve time with 403 `rule_not_resolvable`.
+- **Single-use, TTL-bound, action-hash binding.** Each hold stores the `sha256` of the action-defining projection (`action`, `axes`, `magnitude`, `target`). A modified action cannot ride an old approval. Holds expire after `REEFLEX_HOLD_TTL_SECONDS` (default 14400 s / 4 h). A consumed hold cannot be reused.
+- **Kill-switch / freeze.** `REEFLEX_FREEZE=true` (or `1` / `yes`) denies all non-read verbs immediately with reason `"frozen by operator"`, rule `reeflex.policy/frozen`. Hot-reloadable — no restart required. Read verbs pass through. Freeze flips are audited and fire a webhook event.
+- **Outbound hold webhook.** `REEFLEX_WEBHOOK_URL` (optional). Events: `hold.created`, `hold.resolved`, `hold.expired`, `freeze.flipped`. Fire-and-forget, bounded queue (default 1000 slots), drop-on-overflow, 3 s timeout, no retries, at-most-once. Never blocks `/v1/decide`. Enables BPMN/SOAR/n8n automation without vendor connectors — core builds the socket, not the engines.
+- **`app/holds.py`**, **`app/webhook.py`** — new modules (Python stdlib only, no new dependencies).
+- **`tests/test_hil.py`** — HIL Phase 1 test suite: T1 (hold store), T2a (freeze), T2b/T2c (approval decision path, OPA-dependent), T3 (holds HTTP API), T4 (webhook). OPA-dependent tests are skipped when OPA is absent, consistent with the existing pattern.
+
+### Notes
+
+- Core only. Adapters are unchanged in Phase 1. Phase 2 = adapter re-submission surfaces (WordPress admin, Slack notifier, CLI subcommands).
+- Zero LLM in the decision path is unchanged. The `agent` principal type in the resolution policy is AIL: an AI judge the operator explicitly designates, recorded in the audit trail — the first decision (OPA/Rego) remains fully deterministic and LLM-free.
+- The `/v1/decide` response gains `hold_id` and `expires_ts` only when the verdict is `require_approval` and hold creation succeeds.
+
 ## [0.1.4] - Unreleased
 
 ### Added

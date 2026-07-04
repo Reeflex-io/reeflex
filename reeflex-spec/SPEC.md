@@ -57,9 +57,8 @@ The normalized representation every adapter MUST produce. JSON. This is the cont
   },
 
   "approval": {
-    "present": false,                     // has a human already approved?
-    "by": null,                           // principal who approved
-    "role": null                          // their role at approval time
+    "present": false,                     // true on resubmission after hold resolution
+    "hold_id": null                       // hold_id from the require_approval response (Phase 1)
   },
 
   "trajectory_ref": "traj_01H...",        // pointer to cumulative action path (optional in v0.1)
@@ -180,6 +179,43 @@ This is the discrete-decision equivalent of the cumulative-cost idea at the proj
 Every decision is deterministic: same envelope in, same decision out. No LLM in this path.
 
 ---
+
+## 5.1 Approval object semantics (HIL Phase 1)
+
+<!-- doc-version: HIL-Phase-1, source: app/holds.py app/decide.py app/server.py design/HIL-DESIGN.md §13,§16-18 -->
+
+### The `approval` field on the envelope
+
+The `approval` object on an Action Envelope has two fields used by core:
+
+```jsonc
+"approval": {
+  "present": false,    // set to true on resubmission after hold resolution
+  "hold_id": null      // the hold_id returned in the require_approval response
+}
+```
+
+**Normal submission** (`present: false`): core evaluates the action via OPA/Rego. If the verdict is `require_approval`, core creates a persistent hold and returns `hold_id` and `expires_ts` in the response. The action does not execute.
+
+**Resubmission** (`present: true`, `hold_id` set): core validates the hold and, if all checks pass, returns `allow`. The adapter then executes the action. Core never executes actions — it stays a pure decision engine with zero access to governed systems.
+
+### Single-use, TTL-bound, action-hash binding
+
+Each hold is bound to the `sha256` of the **action-defining projection** of the original envelope. The projection includes only the fields `action`, `axes`, `magnitude`, and `target`, sorted by key at every level. This hash is stored as `envelope_hash` in the hold record.
+
+On resubmission, core recomputes the hash over the same projection of the resubmitted envelope. The `approval` field is explicitly excluded from the projection, so the hash is stable across the original submission and the resubmission. A modified action — different verb, count, target, or axes — produces a different hash and is denied with reason `reeflex_hold_envelope_mismatch`.
+
+**A modified action cannot ride an old approval.**
+
+Holds are **single-use**: once a resubmission succeeds, the hold transitions to `consumed`. Any further resubmission with the same `hold_id` is denied with `reeflex_hold_consumed`.
+
+Holds have a TTL (default 4 hours, configurable via `REEFLEX_HOLD_TTL_SECONDS`). A hold past its `expires_ts` evaluates to `deny` with reason `reeflex_hold_expired`.
+
+### Adapter responsibility on approval
+
+The holds API (`GET /v1/holds`, `POST /v1/holds/{id}/resolve`) is core's output. Re-submission of the envelope after resolution is the adapter's responsibility. Core validates the approval and returns `allow`; only then does the adapter execute the original action in the governed system. This separation means core never touches the governed system regardless of the verdict.
+
+Phase 2 (adapter surfaces) will add re-submission logic to the WordPress adapter and other reference adapters. In Phase 1, core provides the mechanism; adapters must implement re-submission themselves.
 
 ## 6. The Adapter Contract
 

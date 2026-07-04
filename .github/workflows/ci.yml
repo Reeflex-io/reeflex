@@ -53,9 +53,9 @@ jobs:
           chmod +x opa
           sudo mv opa /usr/local/bin/opa
 
-      - name: "Run Python unit tests (core engine: decide + auth + hardening + telemetry)"
+      - name: "Run Python unit tests (core engine: decide + auth + hardening + telemetry + hil)"
         working-directory: reeflex-core
         env:
           REEFLEX_OPA_BIN: opa
           REEFLEX_POLICY_DIR: policy
-        run: python -m unittest tests.test_decide tests.test_auth tests.test_hardening tests.test_telemetry -v
+        run: python -m unittest tests.test_decide tests.test_auth tests.test_hardening tests.test_telemetry tests.test_hil -v
