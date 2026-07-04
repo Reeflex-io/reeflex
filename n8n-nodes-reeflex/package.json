@@ -1,0 +1,62 @@
+{
+	"name": "n8n-nodes-reeflex",
+	"version": "0.1.0",
+	"description": "n8n community node for Reeflex - deterministic governance for AI-agent actions. Calls reeflex-core POST /v1/decide and routes each item to Allowed, Held for Approval, or Denied.",
+	"license": "MIT",
+	"homepage": "https://reeflex.io",
+	"keywords": [
+		"n8n-community-node-package",
+		"reeflex",
+		"governance",
+		"ai-agents",
+		"guardrails",
+		"human-in-the-loop"
+	],
+	"author": {
+		"name": "Reeflex",
+		"email": "hello@reeflex.io"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Reeflex-io/reeflex.git",
+		"directory": "n8n-nodes-reeflex"
+	},
+	"bugs": {
+		"url": "https://github.com/Reeflex-io/reeflex/issues"
+	},
+	"scripts": {
+		"build": "n8n-node build",
+		"build:watch": "tsc --watch",
+		"dev": "n8n-node dev",
+		"lint": "n8n-node lint",
+		"lint:fix": "n8n-node lint --fix",
+		"test": "tsc -p tsconfig.test.json && node dist-test/test/reeflexGate.test.js",
+		"release": "n8n-node release",
+		"prepublishOnly": "n8n-node prerelease"
+	},
+	"files": [
+		"dist"
+	],
+	"n8n": {
+		"n8nNodesApiVersion": 1,
+		"strict": true,
+		"credentials": [
+			"dist/credentials/ReeflexApi.credentials.js"
+		],
+		"nodes": [
+			"dist/nodes/ReeflexGate/ReeflexGate.node.js"
+		]
+	},
+	"devDependencies": {
+		"@n8n/node-cli": "^0.23.1",
+		"eslint": "^9.39.4",
+		"prettier": "^3.8.3",
+		"typescript": "^5.9.3"
+	},
+	"peerDependencies": {
+		"n8n-workflow": "*"
+	},
+	"engines": {
+		"node": ">=20.15"
+	}
+}

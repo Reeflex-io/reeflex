@@ -1,0 +1,8 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"outDir": "./dist-test/",
+		"noUnusedLocals": false
+	},
+	"include": ["credentials/**/*", "nodes/**/*", "nodes/**/*.json", "test/**/*", "package.json"]
+}

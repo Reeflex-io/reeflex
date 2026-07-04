@@ -259,3 +259,13 @@ Reeflex is licensed under the [Apache License 2.0](LICENSE). The open core —
 engine, adapters, spec, and base policy packs — is free forever. A separate
 commercial compliance tier (EU/RO regulated reporting) is planned to fund the
 work; community contributions target the open core only.
+
+Two components carry a different license **only because their distribution
+channel requires it** — we hold the copyright and dual-license; the code is a
+thin, IP-free adapter in each case:
+
+| Component | License | Why |
+|---|---|---|
+| Core, spec, `reeflex-claude`, base policy packs | **Apache-2.0** | the project default |
+| `reeflex-wordpress` (the WordPress plugin) | **GPLv2-or-later** | WordPress.org directory requirement |
+| `n8n-nodes-reeflex` (the n8n community node) | **MIT** | n8n community-node verification requirement |

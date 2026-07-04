@@ -1,0 +1,18 @@
+{
+	"node": "n8n-nodes-reeflex.reeflexGate",
+	"nodeVersion": "1.0",
+	"codexVersion": "1.0",
+	"categories": ["Development", "Developer Tools"],
+	"resources": {
+		"credentialDocumentation": [
+			{
+				"url": "https://github.com/Reeflex-io/reeflex/tree/main/n8n-nodes-reeflex#credentials"
+			}
+		],
+		"primaryDocumentation": [
+			{
+				"url": "https://github.com/Reeflex-io/reeflex/tree/main/n8n-nodes-reeflex#readme"
+			}
+		]
+	}
+}

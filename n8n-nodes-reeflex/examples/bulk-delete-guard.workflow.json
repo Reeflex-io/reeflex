@@ -1,0 +1,212 @@
+{
+  "name": "Reeflex - Bulk Delete Guard (example)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "b1a1a1a1-0001-4a1a-8a1a-000000000001",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 400],
+      "notes": "Stand-in for whatever actually triggers your bulk-delete workflow (a schedule, a webhook, an agent tool call)."
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            { "id": "a1", "name": "table", "value": "customers", "type": "string" },
+            { "id": "a2", "name": "count", "value": 3, "type": "number" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b1a1a1a1-0002-4a1a-8a1a-000000000002",
+      "name": "Sample rows to delete",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 400],
+      "notes": "Stand-in for the real upstream data (e.g. a query that found 3 stale customer rows). Replace with your real data source."
+    },
+    {
+      "parameters": {
+        "ability": "postgres/delete-rows",
+        "verb": "delete",
+        "environment": "production",
+        "reversibility": "irreversible",
+        "blastRadius": "broad",
+        "externality": "internal",
+        "count": "={{$json.count}}",
+        "targetSystem": "={{$json.table}}",
+        "sessionId": "={{$execution.id}}",
+        "agentId": "agent:n8n-bulk-delete-guard-example",
+        "additionalFields": {}
+      },
+      "id": "b1a1a1a1-0003-4a1a-8a1a-000000000003",
+      "name": "Reeflex Gate",
+      "type": "n8n-nodes-reeflex.reeflexGate",
+      "typeVersion": 1,
+      "position": [680, 400],
+      "credentials": {
+        "reeflexApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Reeflex Core API account"
+        }
+      },
+      "notes": "Requires the n8n-nodes-reeflex package installed and a 'Reeflex Core API' credential configured (Core URL + API Token). See the package README."
+    },
+    {
+      "parameters": {},
+      "id": "b1a1a1a1-0004-4a1a-8a1a-000000000004",
+      "name": "Execute Delete (Allowed)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [960, 220],
+      "notes": "PLACEHOLDER - not a real delete. Replace with your real Postgres/WordPress/S3/etc. delete node. Only reached when reeflex-core returned decision=allow."
+    },
+    {
+      "parameters": {},
+      "id": "b1a1a1a1-0005-4a1a-8a1a-000000000005",
+      "name": "Notify approver (replace with Slack/Email)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [960, 400],
+      "notes": "PLACEHOLDER - replace with a real Slack/Email/ticketing node. Include {{$json.reeflex.reason}}, {{$json.reeflex.hold_id}}, and {{$json.reeflex.expires_ts}} in the message so the approver has context."
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "options": {}
+      },
+      "id": "b1a1a1a1-0006-4a1a-8a1a-000000000006",
+      "name": "Wait for approval",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "webhookId": "b1a1a1a1-0006-webhook-000000000006",
+      "position": [1180, 400],
+      "notes": "Pauses this execution and exposes a resume webhook URL (see the node's 'Webhooks' tab after import). Your approval procedure - or the resolve step below, chained after your own external approval signal - calls that URL to resume. See /docs/guides/n8n.md for the full pattern, including reeflex-core's optional REEFLEX_WEBHOOK_URL (hold.created) as the trigger for a SEPARATE approval workflow when one core instance serves many concurrent holds."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.REEFLEX_CORE_URL}}/v1/holds/{{$('Reeflex Gate').item.json.reeflex.hold_id}}/resolve",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{$env.REEFLEX_AUTH_TOKEN}}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { decision: \"approve\", principal: { type: \"automation\", id: \"n8n-bulk-delete-guard-example\" }, reason: \"approved via n8n example workflow\" } }}",
+        "options": {}
+      },
+      "id": "b1a1a1a1-0007-4a1a-8a1a-000000000007",
+      "name": "Resolve hold",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 400],
+      "notes": "Records the approval on reeflex-core (POST /v1/holds/{id}/resolve, 'automation' principal). This alone does NOT re-run the guarded action - see the next node."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.REEFLEX_CORE_URL}}/v1/decide",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{$env.REEFLEX_AUTH_TOKEN}}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {...$('Reeflex Gate').item.json.reeflex.envelope, approval: { present: true, hold_id: $('Reeflex Gate').item.json.reeflex.hold_id } } }}",
+        "options": {}
+      },
+      "id": "b1a1a1a1-0008-4a1a-8a1a-000000000008",
+      "name": "Resubmit to /v1/decide",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1620, 400],
+      "notes": "Reuses reeflex.envelope from the Reeflex Gate node verbatim (action/axes/magnitude/target byte-identical, per SPEC hash binding), just flips approval.present/hold_id. Returns allow if the hold was approved and hasn't expired/been consumed; deny otherwise (reeflex_hold_not_approved / reeflex_hold_expired / reeflex_hold_consumed - see reeflex-core README)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "leftValue": "={{$json.decision}}",
+              "rightValue": "allow",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b1a1a1a1-0009-4a1a-8a1a-000000000009",
+      "name": "Resubmission approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1840, 400],
+      "notes": "Never assume the resubmission succeeded. A resubmission can still come back deny (hold expired/rejected/already consumed) - always check the response, exactly like the first /v1/decide call."
+    },
+    {
+      "parameters": {},
+      "id": "b1a1a1a1-0010-4a1a-8a1a-000000000010",
+      "name": "Execute Delete (after approval)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2060, 300],
+      "notes": "PLACEHOLDER - not a real delete. Replace with the SAME real delete node used on the direct-Allowed path above."
+    },
+    {
+      "parameters": {},
+      "id": "b1a1a1a1-0011-4a1a-8a1a-000000000011",
+      "name": "Denied / rejected alert",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2060, 500],
+      "notes": "PLACEHOLDER - replace with a real alert node. Reached on a direct deny from Reeflex Gate, OR on a rejected/expired/already-consumed resubmission."
+    }
+  ],
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [[{ "node": "Sample rows to delete", "type": "main", "index": 0 }]]
+    },
+    "Sample rows to delete": {
+      "main": [[{ "node": "Reeflex Gate", "type": "main", "index": 0 }]]
+    },
+    "Reeflex Gate": {
+      "main": [
+        [{ "node": "Execute Delete (Allowed)", "type": "main", "index": 0 }],
+        [{ "node": "Notify approver (replace with Slack/Email)", "type": "main", "index": 0 }],
+        [{ "node": "Denied / rejected alert", "type": "main", "index": 0 }]
+      ]
+    },
+    "Notify approver (replace with Slack/Email)": {
+      "main": [[{ "node": "Wait for approval", "type": "main", "index": 0 }]]
+    },
+    "Wait for approval": {
+      "main": [[{ "node": "Resolve hold", "type": "main", "index": 0 }]]
+    },
+    "Resolve hold": {
+      "main": [[{ "node": "Resubmit to /v1/decide", "type": "main", "index": 0 }]]
+    },
+    "Resubmit to /v1/decide": {
+      "main": [[{ "node": "Resubmission approved?", "type": "main", "index": 0 }]]
+    },
+    "Resubmission approved?": {
+      "main": [
+        [{ "node": "Execute Delete (after approval)", "type": "main", "index": 0 }],
+        [{ "node": "Denied / rejected alert", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "description": "Reeflex n8n community node example: PART A demo referenced from n8n-nodes-reeflex/README.md. Simulates a bulk-delete step gated by the Reeflex Gate node. Allowed -> placeholder delete. Held for Approval -> notify, Wait node (resume on webhook), resolve the hold (POST /v1/holds/{id}/resolve, automation principal), resubmit the SAME envelope to /v1/decide with approval.present=true, then branch again on the result. Denied (direct or post-resubmission) -> placeholder alert. Every PLACEHOLDER node is a no-op by design - wire your real nodes in before running this against a real backend."
+  }
+}
