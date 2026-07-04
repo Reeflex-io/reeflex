@@ -230,9 +230,11 @@ spec — [CONTRIBUTING.md](CONTRIBUTING.md) walks through it.
 - Anti-fragmentation: a per-session cumulative ledger defeats split-batch evasion
 - Two conformance-tested reference adapters (Claude Code, WordPress)
 - **SIEM-ready**: every decision streams as syslog (RFC 5424, JSON or CEF) — Splunk, QRadar, Wazuh, Graylog, Loki and friends consume it with zero vendor connectors. The SOC sees the attempt, not just the aftermath. See [docs/siem.md](docs/siem.md).
+- **Human-in-the-loop, operational**: `require_approval` materializes a persistent hold with a resolution API (`/v1/holds`), approval principals (human/agent/automation, human-only by default), `actor != approver` enforced, single-use + TTL + action-hash binding, and a kill-switch. Surfaces: the WordPress "Pending approvals" admin page and the `reeflex-holds` MCP server (approve from Claude Desktop).
 
-**On the roadmap:** ed25519 envelope signing, Postgres-backed audit, a live
-WordPress install, database/GraphQL adapters, and a hosted tier. Full list in
+**On the roadmap:** ed25519 envelope signing, Postgres-backed audit,
+database/GraphQL adapters, Slack/CLI approval surfaces + daily digest,
+N-of-M quorum approvals, and a hosted tier. Full list in
 [ROADMAP.md](ROADMAP.md).
 
 ---

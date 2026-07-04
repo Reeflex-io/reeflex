@@ -58,21 +58,26 @@ infrastructure.
 
 ---
 
-## Approval flow (planned — not built)
+## Approval flow — SHIPPED (core v0.1.5)
 
-Human-in-the-loop async approval for `require_approval` decisions:
+Human-in-the-loop (and agent/automation) async approval for `require_approval`
+decisions is **implemented in core** (HIL Phase 1, v0.1.5):
 
-- An approval queue that holds actions pending human review.
-- A minimal review interface (email notification + one-click approve/reject,
-  or an API for integration with existing ticketing systems).
-- Multi-approver / quorum support: require N-of-M approvers for high-risk
-  actions.
-- Re-submission of the approved envelope with `approval.present = true` and
-  the approver principal recorded.
+- **Shipped:** the holds queue (event-sourced JSONL + in-memory index), the
+  resolution API (`GET /v1/holds`, `GET /v1/holds/{id}`, `POST
+  /v1/holds/{id}/resolve`), approval principals (human | agent | automation,
+  human-only by default, operator policy per rule), `actor != approver`
+  enforced, single-use + TTL + action-hash binding, the kill-switch
+  (`REEFLEX_FREEZE`), and the outbound hold webhook. Re-submission carries
+  `approval={present, hold_id}` and the ORIGINAL actor identity; the approver
+  is recorded as the resolver, never the actor.
+- **Shipped surfaces (Phase 2):** WordPress adapter re-submission +
+  "Reeflex — Pending approvals" wp-admin page; the `reeflex-holds` MCP server
+  (any MCP client, e.g. Claude Desktop, becomes a holds surface).
+- **Still planned:** Slack notifier + daily digest + a CLI (Phase 3); N-of-M /
+  quorum approvals (v2+); a core endpoint to read/flip freeze from a surface.
 
-Currently, `require_approval` decisions are returned correctly by the engine
-but the approval routing and queue are not implemented. An adapter integrating
-today handles the hold logic itself.
+SIEM/syslog telemetry (RFC 5424, JSON/CEF) shipped earlier, in core v0.1.4.
 
 ---
 

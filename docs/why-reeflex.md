@@ -24,7 +24,7 @@ Most of the stack answers the first two. Reeflex exists for the third.
 | Decision engine | rules on identity | ML classifiers (probabilistic) | authn/z + limits | **deterministic OPA/Rego — zero LLM in the decision path** |
 | Sees action scale? | no (delete 1 = delete 5,000) | no | rarely, per-call at best | **yes — count, reversibility, blast radius, externality** |
 | Split-batch evasion | not addressed | not addressed | not addressed | **cumulative per-session ledger — fragmentation buys nothing** |
-| Human approval | ticket systems, out of band | n/a | mostly absent | **designed in: hold → human decides → action runs (approval API shipping next)** |
+| Human approval | ticket systems, out of band | n/a | mostly absent | **built in: hold → your designated principal decides → action runs (shipped in core, v0.1.5)** |
 | Evidence | logs after the fact | flags after the fact | access logs | **pre-execution record of what the agent *attempted*** — streamed to your SIEM in real time |
 | If the engine is down | varies | fails open as a rule | varies | **fails closed — nothing goes through** |
 
