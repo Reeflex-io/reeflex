@@ -37,11 +37,18 @@
  *   is blocked, the exception message is logged, and a fail-closed deny is
  *   synthesized via Reeflex_Core_Client::fail_closed().
  *
- * Approval (P0-1):
- *   There is NO agent-controlled approval path in v0.1. require_approval
- *   decisions are always terminal — the action is held. See
- *   Reeflex_Normalizer::normalize() docblock for the roadmap design of the
- *   server-side approval flow that would safely implement re-submission.
+ * Approval (HIL Phase 2 — SPEC §5.1):
+ *   A require_approval decision is no longer terminal. Core (>= v0.1.5) returns
+ *   `hold_id` + `expires_ts` alongside the decision; both hooks store the pending
+ *   action (Reeflex_Holds_Store::save()) at the same moment they return the
+ *   `reeflex_hold` WP_Error, and surface hold_id + expires_ts in that error's data
+ *   so the caller/operator can route it to a human. Once a human resolves the hold
+ *   via core's holds API (`POST /v1/holds/{id}/resolve`), Reeflex_Gate::resubmit_hold()
+ *   re-runs the ORIGINAL ability with the ORIGINAL input through this SAME gate,
+ *   with the envelope's approval object set to {present:true, hold_id} for that one
+ *   call (see $active_resubmission_hold_id below). Core independently validates the
+ *   hold (single-use, TTL-bound, action-hash-bound) before ever allowing — this
+ *   adapter asserts nothing beyond "here is the hold_id a human resolved."
  *
  * WP_Error data (NEW-1):
  *   Public WP_Error data arrays carry ONLY 'status' and 'reeflex_decision'.
@@ -62,6 +69,40 @@ defined( 'ABSPATH' ) || exit;
  * Enforcement glue: wraps ability permission callbacks and gates MCP tool calls.
  */
 final class Reeflex_Gate {
+
+	/**
+	 * Request-scoped: the hold_id of the resubmission currently in flight, or null.
+	 *
+	 * Set ONLY by resubmit_hold() around its single ability->execute() call, and
+	 * always cleared in a finally block. Read by wrap_permission_callback()'s
+	 * closure at CALL time (not registration time) so the SAME already-registered
+	 * ability picks up the approval for exactly the one re-run that resubmit_hold()
+	 * triggers — every other concurrent/subsequent call to the same ability sees
+	 * null and gets a normal (approval.present = false) envelope.
+	 *
+	 * This is a static, not per-instance, because Reeflex_Gate has no instances —
+	 * every hook callback is a static method / closure over static state, matching
+	 * the rest of this class.
+	 *
+	 * @var string|null
+	 */
+	private static ?string $active_resubmission_hold_id = null;
+
+	/**
+	 * Request-scoped: the ORIGINAL agent identity {id, on_behalf_of, session_id}
+	 * for the resubmission currently in flight, or null.
+	 *
+	 * LOCKED DECISION (HIL Phase 2 T1.2, non-negotiable per brief): on a
+	 * resubmission the envelope MUST carry the ORIGINAL agent identity — the
+	 * actor stays the actor; the human/automation that resolved the hold (whose
+	 * own WordPress request is what triggers resubmit_hold()) must never become
+	 * the actor. Set alongside $active_resubmission_hold_id, from the identity
+	 * captured in the pending hold entry at hold-creation time
+	 * (Reeflex_Holds_Store), and always cleared in the same finally block.
+	 *
+	 * @var array{id:string,on_behalf_of:string,session_id:string}|null
+	 */
+	private static ?array $active_resubmission_agent = null;
 
 	// ------------------------------------------------------------------
 	// Hook registration
@@ -182,8 +223,17 @@ final class Reeflex_Gate {
 
 			// Step 3: gate in a try/catch so any unexpected exception fails CLOSED (NEW-2).
 			try {
-				// Step 3a: normalize → envelope (approval always false in v0.1, P0-1).
-				$envelope = Reeflex_Normalizer::normalize( $ability_name, $input_arr, $trusted_verb );
+				// Step 3a: normalize → envelope. approval.present is true, and the agent
+				// identity is the ORIGINAL actor's (not the live request's), ONLY when
+				// this call is the one resubmit_hold() is currently re-running (HIL
+				// Phase 2 T1.2 — LOCKED DECISION: actor stays actor).
+				$envelope = Reeflex_Normalizer::normalize(
+					$ability_name,
+					$input_arr,
+					$trusted_verb,
+					self::$active_resubmission_hold_id,
+					self::$active_resubmission_agent
+				);
 
 				// Step 3b: POST to /v1/decide.
 				$decision = Reeflex_Core_Client::decide( $envelope );
@@ -198,6 +248,13 @@ final class Reeflex_Gate {
 				$nonce   = $envelope['meta']['nonce'] ?? 'unknown';
 				$outcome = self::decision_to_outcome( $decision['decision'], $decision['rule'] ?? '' );
 				Reeflex_Audit::record( $envelope, $decision, $outcome );
+
+				// Step 3c.1: HIL Phase 2 — a fresh hold is stored at the SAME moment the
+				// reeflex_hold WP_Error is returned, so a human can resolve it later and
+				// the ORIGINAL call can be re-run byte-identical (resubmit_hold()).
+				if ( 'require_approval' === $decision['decision'] ) {
+					self::store_pending_hold( $ability_name, $input_arr, $envelope, $decision );
+				}
 
 				// Step 3d: dispatch obligations on allow (P2-11).
 				if ( 'allow' === $decision['decision'] ) {
@@ -315,7 +372,10 @@ final class Reeflex_Gate {
 
 		// Gate in a try/catch so any unexpected exception fails CLOSED (NEW-2).
 		try {
-			// Normalize (approval always false in v0.1, P0-1).
+			// Normalize. HIL Phase 2 (SPEC §5.1): resubmission always re-runs the ability
+			// directly via wp_get_ability()->execute() (Reeflex_Gate::resubmit_hold()), which
+			// only ever fires Hook A — this MCP tool-call layer is not part of that flow, so
+			// approval.present is always false here.
 			$envelope = Reeflex_Normalizer::normalize( $ability_name, $parameters );
 
 			$decision = Reeflex_Core_Client::decide( $envelope );
@@ -330,6 +390,15 @@ final class Reeflex_Gate {
 			$nonce   = $envelope['meta']['nonce'] ?? 'unknown';
 			$outcome = self::decision_to_outcome( $decision['decision'], $decision['rule'] ?? '' );
 			Reeflex_Audit::record( $envelope, $decision, $outcome );
+
+			// HIL Phase 2: store the pending action so it can be resolved + resubmitted later.
+			// See wrap_permission_callback()'s Step 3c.1 — same helper, same entry shape. Note
+			// (P1-5, pre-existing): an MCP-originated call also fires Hook A independently, which
+			// stores its OWN hold under a DIFFERENT hold_id from core; only Hook A's hold_id is
+			// resubmittable via resubmit_hold() (it is the one tied to wp_get_ability()->execute()).
+			if ( 'require_approval' === $decision['decision'] ) {
+				self::store_pending_hold( $ability_name, $parameters, $envelope, $decision );
+			}
 
 			// Log rule+reason server-side for operator correlation (NEW-1).
 			if ( 'allow' !== $decision['decision'] ) {
@@ -394,14 +463,18 @@ final class Reeflex_Gate {
 	 *
 	 * Error code semantics (P2-14):
 	 *   reeflex_denied      (403) — policy deny: a rule fired.
-	 *   reeflex_hold        (202) — require_approval: terminal hold in v0.1.
+	 *   reeflex_hold        (202) — require_approval: held pending human resolution
+	 *                                (HIL Phase 2 — see hold_error_data()).
 	 *   reeflex_unavailable (503) — fail-closed: core unreachable or infrastructure error.
 	 *
 	 * Public WP_Error data (NEW-1):
-	 *   ONLY 'status' and 'reeflex_decision' are included. WordPress REST API
+	 *   'status' and 'reeflex_decision' are always included. WordPress REST API
 	 *   serializes WP_Error data[] into the HTTP response body, so 'reeflex_rule'
 	 *   and 'reeflex_reason' are deliberately absent — they are logged server-side
-	 *   (error_log) and recorded in the audit JSONL instead.
+	 *   (error_log) and recorded in the audit JSONL instead. HIL Phase 2 (SPEC §5.1):
+	 *   on a hold, 'hold_id' and 'expires_ts' ARE included — unlike rule/reason they
+	 *   are not policy-internal detail; the caller/operator needs them to route the
+	 *   action to a human and later resubmit it.
 	 *
 	 * @param  array $decision   Decision from core (or fail-closed).
 	 * @return true|WP_Error
@@ -437,14 +510,13 @@ final class Reeflex_Gate {
 				);
 
 			case 'require_approval':
-				// Hold is TERMINAL in v0.1 (P0-1). No re-submission path.
+				// HIL Phase 2 (SPEC §5.1): held, not terminal — hold_id + expires_ts let
+				// the caller route this to a human and, once approved, resubmit it via
+				// Reeflex_Gate::resubmit_hold( $hold_id ).
 				return new WP_Error(
 					'reeflex_hold',
 					'Action requires human approval.',
-					array(
-						'status'           => 202,
-						'reeflex_decision' => 'require_approval',
-					)
+					self::hold_error_data( $decision )
 				);
 
 			default:
@@ -466,7 +538,8 @@ final class Reeflex_Gate {
 	 * Same semantics as enforce_from_permission_callback.
 	 * Always returns WP_Error (ToolsHandler checks is_wp_error() to short-circuit).
 	 *
-	 * Public data arrays carry ONLY 'status' and 'reeflex_decision' (NEW-1).
+	 * Public data arrays carry 'status' and 'reeflex_decision' (NEW-1); on a hold,
+	 * also 'hold_id' + 'expires_ts' (HIL Phase 2 — see hold_error_data()).
 	 *
 	 * @param  array $decision   Decision from core.
 	 * @return WP_Error
@@ -497,14 +570,13 @@ final class Reeflex_Gate {
 				);
 
 			case 'require_approval':
-				// Terminal hold in v0.1 (P0-1).
+				// HIL Phase 2 (SPEC §5.1): held, not terminal — see hold_error_data().
+				// Note (P1-5, pre-existing): this hold_id is Hook B's OWN hold, distinct
+				// from any hold Hook A independently created for the same MCP call.
 				return new WP_Error(
 					'reeflex_hold',
 					'Action requires human approval.',
-					array(
-						'status'           => 202,
-						'reeflex_decision' => 'require_approval',
-					)
+					self::hold_error_data( $decision )
 				);
 
 			default:
@@ -517,6 +589,277 @@ final class Reeflex_Gate {
 					)
 				);
 		}
+	}
+
+	/**
+	 * Build the public WP_Error data array for a require_approval decision.
+	 *
+	 * HIL Phase 2 (SPEC §5.1): 'hold_id' and 'expires_ts' are included whenever
+	 * core sent them (Reeflex_Core_Client::decide() passes them through). They
+	 * are deliberately public — unlike 'reeflex_rule'/'reeflex_reason' (NEW-1)
+	 * they are not policy-internal detail; the caller needs them to route the
+	 * hold to a human and, once approved, resubmit it via resubmit_hold().
+	 *
+	 * @param  array $decision  Decision from core.
+	 * @return array
+	 */
+	private static function hold_error_data( array $decision ): array {
+		$data = array(
+			'status'           => 202,
+			'reeflex_decision' => 'require_approval',
+		);
+		if ( isset( $decision['hold_id'] ) ) {
+			$data['hold_id'] = $decision['hold_id'];
+		}
+		if ( isset( $decision['expires_ts'] ) ) {
+			$data['expires_ts'] = $decision['expires_ts'];
+		}
+		return $data;
+	}
+
+	// ------------------------------------------------------------------
+	// HIL Phase 2 — hold storage & resubmission (T1)
+	// ------------------------------------------------------------------
+
+	/**
+	 * Store a pending hold so it can be resolved and re-run later.
+	 *
+	 * Called at the SAME moment a require_approval decision is turned into the
+	 * public reeflex_hold WP_Error, from both Hook A and Hook B. A no-op if core
+	 * did not include a hold_id (e.g. an older core without HIL support) — there
+	 * is nothing to key the entry by, and the hold remains terminal exactly as in
+	 * v0.1 for that call.
+	 *
+	 * @param  string $ability   Namespaced ability name.
+	 * @param  array  $input     The ORIGINAL input array passed to the ability
+	 *                           (stored verbatim for a byte-identical re-run).
+	 * @param  array  $envelope  The Action Envelope that produced the hold.
+	 * @param  array  $decision  The require_approval Decision (carries hold_id + expires_ts).
+	 * @return void
+	 */
+	private static function store_pending_hold(
+		string $ability,
+		array $input,
+		array $envelope,
+		array $decision
+	): void {
+		$hold_id = isset( $decision['hold_id'] ) ? (string) $decision['hold_id'] : '';
+		if ( '' === $hold_id ) {
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+				error_log(
+					'[reeflex] WARN: require_approval decision carried no hold_id — core may predate ' .
+					'HIL support (< v0.1.5). This hold is terminal; resubmit_hold() has nothing to key.'
+				);
+			}
+			return;
+		}
+
+		Reeflex_Holds_Store::save(
+			array(
+				'hold_id'       => $hold_id,
+				'ability'       => $ability,
+				'input'         => $input,
+				'envelope_hash' => Reeflex_Holds_Store::canonical_envelope_hash( $envelope ),
+				'rule_id'       => $decision['rule'] ?? 'unknown',
+				'created_ts'    => gmdate( 'Y-m-d\TH:i:s\Z' ),
+				'expires_ts'    => isset( $decision['expires_ts'] ) ? (string) $decision['expires_ts'] : '',
+				'session_id'    => $envelope['agent']['session_id'] ?? 'unknown',
+				// LOCKED DECISION (T1.2): the full ORIGINAL agent identity, so
+				// resubmit_hold() can put the actor back exactly as it was —
+				// never the identity of whoever resolves/resubmits the hold.
+				'agent'         => array(
+					'id'           => (string) ( $envelope['agent']['id'] ?? '' ),
+					'on_behalf_of' => (string) ( $envelope['agent']['on_behalf_of'] ?? '' ),
+					'session_id'   => (string) ( $envelope['agent']['session_id'] ?? '' ),
+				),
+			)
+		);
+	}
+
+	/**
+	 * Re-submit a previously-held action after a human has approved it.
+	 *
+	 * Flow (T1):
+	 *   a. Load the stored entry (Reeflex_Holds_Store::get()). Missing → 'reeflex_hold_unknown'.
+	 *      Locally past its own expires_ts → 'reeflex_hold_expired' (a fast local check; core
+	 *      is still the authority and would reach the same conclusion via hold validation).
+	 *   b. Re-execute the ORIGINAL ability with the ORIGINAL input via
+	 *      wp_get_ability( $ability )->execute( $input ). Around that single call,
+	 *      $active_resubmission_hold_id is set so the SAME gate (Hook A wraps
+	 *      permission_callback) builds this one envelope with
+	 *      approval = {present:true, hold_id} — everything else (action, axes,
+	 *      magnitude, target, agent identity) is built exactly as a fresh call
+	 *      would build it, and the ORIGINAL agent identity stays the actor (never
+	 *      the approver, which is never even read into the envelope here).
+	 *   c. Core validates the hold: allow → the wrapped permission_callback returns
+	 *      true → WP_Ability::execute() runs do_execute() → its result is returned.
+	 *      Deny (consumed/expired/mismatch/actor_is_approver/fail-closed/...) →
+	 *      the gate's own WP_Error is returned unchanged, carrying core's reason
+	 *      server-side (error_log + audit JSONL) exactly as any other deny.
+	 *      Either way the stored entry is deleted — an approval is single-use.
+	 *   d. Fails closed: an ability that is no longer registered, or that throws
+	 *      while executing, returns a WP_Error rather than silently succeeding.
+	 *
+	 * Auditing: the underlying decision (allow or a hold-validation deny) is
+	 * already written by the normal per-decision audit inside step (b) — the
+	 * envelope's approval={present:true, hold_id} makes that record identifiable
+	 * as a resubmission (Reeflex_Audit::build_record()). This method additionally
+	 * audits the cases resolved BEFORE ever reaching the gate (unknown/expired
+	 * hold, ability no longer registered, unexpected exception), which would
+	 * otherwise leave no trace.
+	 *
+	 * @param  string $hold_id  The hold_id returned in the original require_approval response.
+	 * @return mixed|WP_Error   The ability's execute() return value on success; WP_Error on
+	 *                          any failure. Never assumes success — fail-closed throughout.
+	 */
+	public static function resubmit_hold( string $hold_id ) {
+		$entry = Reeflex_Holds_Store::get( $hold_id );
+
+		if ( null === $entry ) {
+			self::audit_synthetic_resubmission(
+				$hold_id,
+				'',
+				'',
+				'hold is unknown to this adapter (never existed, or already swept)',
+				'reeflex.adapter/hold_unknown'
+			);
+			return new WP_Error(
+				'reeflex_hold_unknown',
+				'This hold is unknown to this site.',
+				array( 'status' => 404 )
+			);
+		}
+
+		$ability    = isset( $entry['ability'] ) ? (string) $entry['ability'] : '';
+		$input      = isset( $entry['input'] ) && is_array( $entry['input'] ) ? $entry['input'] : array();
+		$session_id = isset( $entry['session_id'] ) ? (string) $entry['session_id'] : '';
+
+		// Fast local expiry check — core is still authoritative (it would deny with
+		// reeflex_hold_expired via the normal hold-validation path below regardless).
+		$expires_ts    = isset( $entry['expires_ts'] ) ? (string) $entry['expires_ts'] : '';
+		$expires_epoch = '' !== $expires_ts ? strtotime( $expires_ts ) : false;
+		if ( false !== $expires_epoch && time() >= $expires_epoch ) {
+			Reeflex_Holds_Store::delete( $hold_id );
+			self::audit_synthetic_resubmission(
+				$hold_id,
+				$ability,
+				$session_id,
+				'hold past its expires_ts (adapter-side check)',
+				'reeflex.adapter/hold_expired'
+			);
+			return new WP_Error(
+				'reeflex_hold_expired',
+				'This hold has expired.',
+				array( 'status' => 410 )
+			);
+		}
+
+		$ability_obj = function_exists( 'wp_get_ability' ) ? wp_get_ability( $ability ) : null;
+
+		if ( ! is_object( $ability_obj ) || ! method_exists( $ability_obj, 'execute' ) ) {
+			self::audit_synthetic_resubmission(
+				$hold_id,
+				$ability,
+				$session_id,
+				'ability is no longer registered',
+				'reeflex.adapter/hold_ability_unavailable'
+			);
+			return new WP_Error(
+				'reeflex_hold_ability_unavailable',
+				'The action for this hold is no longer available on this site.',
+				array( 'status' => 503 )
+			);
+		}
+
+		// Attach the approval — AND the ORIGINAL agent identity (LOCKED DECISION,
+		// T1.2) — to THIS ability call only (request-scoped; see the
+		// $active_resubmission_hold_id / $active_resubmission_agent docblocks).
+		// Always cleared, even on exception.
+		$stored_agent = isset( $entry['agent'] ) && is_array( $entry['agent'] ) ? $entry['agent'] : array();
+		self::$active_resubmission_hold_id = $hold_id;
+		self::$active_resubmission_agent   = $stored_agent;
+		try {
+			$result = $ability_obj->execute( $input );
+		} catch ( \Throwable $e ) {
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+				error_log( '[reeflex] resubmit_hold: exception executing ability, failing closed: ' . $e->getMessage() );
+			}
+			self::audit_synthetic_resubmission(
+				$hold_id,
+				$ability,
+				$session_id,
+				'unexpected exception executing ability: ' . $e->getMessage(),
+				'reeflex.adapter/hold_execute_exception'
+			);
+			return new WP_Error(
+				'reeflex_hold_execute_failed',
+				'Resubmission failed due to an unexpected error.',
+				array( 'status' => 503 )
+			);
+		} finally {
+			self::$active_resubmission_hold_id = null;
+			self::$active_resubmission_agent   = null;
+		}
+
+		// Either outcome (allow -> executed, or a gate-enforced deny) is TERMINAL for
+		// this hold: an approval is single-use, and a denied resubmission cannot be
+		// retried into an allow by calling resubmit_hold() again. The decision itself
+		// (allow or deny) was already audited inside execute() -> the wrapped
+		// permission_callback -> the normal per-decision audit (see method docblock).
+		Reeflex_Holds_Store::delete( $hold_id );
+
+		return $result;
+	}
+
+	/**
+	 * Write a minimal synthetic audit record for a resubmission outcome that was
+	 * resolved entirely inside resubmit_hold() — before ever reaching the gate, so
+	 * the normal per-decision audit path never ran for it.
+	 *
+	 * @param  string $hold_id     The hold_id being resubmitted.
+	 * @param  string $ability     Ability name, if known ('' if the hold itself was unknown).
+	 * @param  string $session_id  The original session_id, if known.
+	 * @param  string $reason      Human-readable reason (server-side / audit only).
+	 * @param  string $rule        Synthetic adapter-side rule id, namespaced 'reeflex.adapter/...'
+	 *                             to match the existing fail_closed convention.
+	 * @return void
+	 */
+	private static function audit_synthetic_resubmission(
+		string $hold_id,
+		string $ability,
+		string $session_id,
+		string $reason,
+		string $rule
+	): void {
+		$envelope = array(
+			'agent'    => array(
+				'id'           => Reeflex_Config::agent_id(),
+				'on_behalf_of' => null,
+				'session_id'   => '' !== $session_id ? $session_id : 'unknown',
+			),
+			'action'   => array(
+				'namespace' => 'wordpress',
+				'verb'      => 'unknown',
+				'ability'   => '' !== $ability ? $ability : 'unknown',
+			),
+			'target'    => array( 'environment' => Reeflex_Config::env() ),
+			'magnitude' => array( 'count' => 1 ),
+			'axes'      => array(),
+			'approval'  => array(
+				'present' => true,
+				'hold_id' => $hold_id,
+			),
+			'meta'      => array( 'nonce' => 'resubmit:' . $hold_id ),
+		);
+		$decision = array(
+			'decision'    => 'deny',
+			'reason'      => $reason,
+			'rule'        => $rule,
+			'obligations' => array(),
+		);
+		Reeflex_Audit::record( $envelope, $decision, 'fail_closed_deny' );
 	}
 
 	// ------------------------------------------------------------------

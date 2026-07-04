@@ -41,6 +41,10 @@ final class Reeflex_Core_Client {
 	 * @param  array $envelope  A fully-populated Action Envelope (SPEC §2).
 	 * @return array  Decision: {decision, reason, rule, obligations, modulation}.
 	 *                Always has at minimum {decision:'deny'} on error.
+	 *                HIL Phase 2 (SPEC §5.1): on a 'require_approval' decision, core
+	 *                (>= v0.1.5) additionally returns 'hold_id' and 'expires_ts'. Both
+	 *                are passed through onto the returned Decision ONLY when core sent
+	 *                them — see ensure_complete().
 	 */
 	public static function decide( array $envelope ): array {
 		$base_url = Reeflex_Config::core_url();
@@ -191,11 +195,16 @@ final class Reeflex_Core_Client {
 	 * The engine contract guarantees all fields, but defensive defaults avoid
 	 * PHP notices and enforce adapter-side completeness.
 	 *
+	 * HIL Phase 2 (SPEC §5.1): 'hold_id' and 'expires_ts' are added to the
+	 * returned Decision ONLY when core included them (a 'require_approval'
+	 * response from core >= v0.1.5). Their absence never changes the shape
+	 * of an 'allow' or 'deny' Decision.
+	 *
 	 * @param  array $parsed  Decoded JSON response from core.
 	 * @return array
 	 */
 	private static function ensure_complete( array $parsed ): array {
-		return array(
+		$decision = array(
 			'decision'    => $parsed['decision'],
 			'reason'      => $parsed['reason'] ?? '',
 			'rule'        => $parsed['rule'] ?? 'unknown',
@@ -204,5 +213,16 @@ final class Reeflex_Core_Client {
 				: array(),
 			'modulation'  => $parsed['modulation'] ?? null,
 		);
+
+		// Pass through hold_id / expires_ts only when core actually sent them (P2-14 style:
+		// additive, never assumed). See holds.py / decide.py in reeflex-core for the source.
+		if ( isset( $parsed['hold_id'] ) && is_string( $parsed['hold_id'] ) && '' !== $parsed['hold_id'] ) {
+			$decision['hold_id'] = $parsed['hold_id'];
+		}
+		if ( isset( $parsed['expires_ts'] ) && is_string( $parsed['expires_ts'] ) && '' !== $parsed['expires_ts'] ) {
+			$decision['expires_ts'] = $parsed['expires_ts'];
+		}
+
+		return $decision;
 	}
 }

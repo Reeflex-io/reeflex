@@ -134,6 +134,15 @@ final class Reeflex_Audit {
 	 * String fields are sanitized to prevent control-character log injection (P2-9).
 	 * on_behalf_of now contains 'user:<ID>' (integer, no PII login name) per P2-12.
 	 *
+	 * HIL Phase 2 (SPEC §5.1) additions:
+	 *   'hold_id' / 'expires_ts' — present when core created a hold on THIS decision
+	 *     (a 'require_approval' verdict, core >= v0.1.5); null otherwise.
+	 *   'approval' — the envelope's own approval object ({present, hold_id}). On a
+	 *     resubmission (Reeflex_Gate::resubmit_hold()) this is {present:true,
+	 *     hold_id:"..."}, which is how a resubmission's outcome (allow or a
+	 *     hold-validation deny) is distinguishable in the audit trail from a fresh
+	 *     first submission — no separate "resubmission" flag is needed.
+	 *
 	 * @param array  $envelope
 	 * @param array  $decision
 	 * @param string $applied
@@ -163,6 +172,15 @@ final class Reeflex_Audit {
 			'rule'         => self::sanitize_field( (string) ( $decision['rule'] ?? 'unknown' ) ),
 			'reason'       => self::sanitize_field( (string) ( $decision['reason'] ?? '' ) ),
 			'obligations'  => $decision['obligations'] ?? array(),
+			// HIL Phase 2 (SPEC §5.1): hold metadata, present only when relevant.
+			'hold_id'      => isset( $decision['hold_id'] ) ? self::sanitize_field( (string) $decision['hold_id'] ) : null,
+			'expires_ts'   => isset( $decision['expires_ts'] ) ? self::sanitize_field( (string) $decision['expires_ts'] ) : null,
+			'approval'     => array(
+				'present' => (bool) ( $envelope['approval']['present'] ?? false ),
+				'hold_id' => isset( $envelope['approval']['hold_id'] ) && is_string( $envelope['approval']['hold_id'] )
+					? self::sanitize_field( $envelope['approval']['hold_id'] )
+					: null,
+			),
 			'mode'         => Reeflex_Config::mode(),
 			'applied'      => self::sanitize_field( $applied ),
 		);

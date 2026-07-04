@@ -48,21 +48,50 @@ require $adapter_dir . '/reeflex-gate/class-reeflex-config.php';
 require $adapter_dir . '/reeflex-gate/class-reeflex-normalizer.php';
 require $adapter_dir . '/reeflex-gate/class-reeflex-core-client.php';
 require $adapter_dir . '/reeflex-gate/class-reeflex-audit.php';
+require $adapter_dir . '/reeflex-gate/class-reeflex-holds-store.php';
 require $adapter_dir . '/reeflex-gate/class-reeflex-gate.php';
 
 Reeflex_Gate::register_hooks();
 $hookA = $GLOBALS['__filters']['wp_register_ability_args'][0] ?? null;
 if ( ! $hookA ) { fwrite( STDERR, "FATAL: Hook A (wp_register_ability_args) not registered\n" ); exit( 2 ); }
 
+/**
+ * Register (once) a demo ability through the REAL wp_register_ability_args filter
+ * (Hook A wraps its permission_callback at registration time, exactly as in
+ * production), and return the WP_Ability object. Idempotent per ability name so
+ * scenarios that reuse an ability (e.g. multiple 'core/delete-post' calls) share
+ * one registered permission_callback, matching how WordPress registers abilities
+ * once at bootstrap.
+ */
+function get_or_register_demo_ability( string $ability ): WP_Ability {
+	$existing = wp_get_ability( $ability );
+	if ( null !== $existing ) {
+		return $existing;
+	}
+	return WP_Abilities_Registry::get_instance()->register(
+		$ability,
+		array(
+			'permission_callback' => static function ( $i = null ) { return true; },
+			'execute_callback'    => static function ( $i ) use ( $ability ) {
+				return array( 'reeflex_harness_executed' => true, 'ability' => $ability, 'input' => $i );
+			},
+		)
+	);
+}
+
 /** Run an ability through the wrapped permission_callback; return [outcome, error_code]. */
-function run_ability( $hookA, string $ability, array $input ): array {
-	$args    = array( 'permission_callback' => static function ( $i = null ) { return true; } );
-	$wrapped = $hookA( $args, $ability );
-	$result  = ( $wrapped['permission_callback'] )( $input );
+function run_ability( string $ability, array $input ): array {
+	$result = get_or_register_demo_ability( $ability )->execute( $input );
 
 	if ( true === $result )            { return array( 'PROCEED', 'allow' ); }
+	if ( is_array( $result ) )         { return array( 'PROCEED', 'allow' ); } // ability executed successfully
 	if ( $result instanceof WP_Error ) { return array( 'BLOCKED', $result->get_error_code() ); }
 	return array( 'UNEXPECTED', var_export( $result, true ) );
+}
+
+/** Like run_ability() but returns the raw execute() result (array on success, WP_Error on block). */
+function run_ability_full( string $ability, array $input ) {
+	return get_or_register_demo_ability( $ability )->execute( $input );
 }
 
 // label => [ability, input, expected_code]  ('allow' = proceed)
@@ -106,7 +135,7 @@ foreach ( $scenarios as $label => $spec ) {
 		$expected = 'reeflex_unavailable';
 	}
 
-	list( $outcome, $code ) = run_ability( $hookA, $ability, $input );
+	list( $outcome, $code ) = run_ability( $ability, $input );
 	$got  = ( 'PROCEED' === $outcome ) ? 'allow' : $code;
 	$pass = ( $got === $expected );
 	$all_pass = $all_pass && $pass;
@@ -115,4 +144,280 @@ foreach ( $scenarios as $label => $spec ) {
 }
 echo $bar . "\n";
 echo ( $all_pass ? "ALL SCENARIOS PASS" : "SOME SCENARIOS FAILED" ) . "\n";
+
+// ============================================================================
+// HIL Phase 2 (T1) — hold-aware resubmission: hold -> resolve -> resubmit -> executed
+// ============================================================================
+// Only meaningful in ENFORCE mode against a REACHABLE core that supports the
+// holds queue (core >= v0.1.5) — observe mode never enforces a hold, and a dead
+// core means every decision above was already fail-closed. Skipped (not counted
+// as a failure) in either of those runs.
+$run_hold_scenarios = ( ! $observe_mode && ! $fail_closed_run );
+
+echo $bar . "\n";
+if ( ! $run_hold_scenarios ) {
+	echo "HIL Phase 2 hold scenarios SKIPPED (observe mode or fail-closed-core run — no live hold to resolve)\n";
+	echo $bar . "\n";
+	exit( $all_pass ? 0 : 1 );
+}
+
+echo "HIL Phase 2 (T1) — hold-aware resubmission   CORE=$core_url\n";
+echo $bar . "\n";
+printf( "%-50s | %-26s | %s\n", 'SCENARIO', 'RESULT DETAIL', 'RESULT' );
+echo $bar . "\n";
+
+$hold_all_pass = true;
+
+// H1: a fresh bulk force-delete produces a hold (distinct id range from scenario 3
+// so this is unambiguously a NEW hold, not a coincidental replay).
+$h_ability = 'core/delete-post';
+$h_input   = array( 'ids' => range( 201, 245 ), 'force_delete' => true );
+$h_result  = run_ability_full( $h_ability, $h_input );
+
+$h1_pass = ( $h_result instanceof WP_Error ) && 'reeflex_hold' === $h_result->get_error_code();
+printf(
+	"%-50s | %-26s | %s\n",
+	'H1. bulk force-delete produces a hold',
+	( $h_result instanceof WP_Error ) ? $h_result->get_error_code() : 'UNEXPECTED',
+	$h1_pass ? 'PASS' : 'FAIL'
+);
+$hold_all_pass = $hold_all_pass && $h1_pass;
+
+// H2: hold_id + expires_ts are present in the PUBLIC WP_Error data (not just the audit log).
+$hold_id    = null;
+$expires_ts = null;
+if ( $h1_pass ) {
+	$data       = $h_result->get_error_data();
+	$hold_id    = ( is_array( $data ) && isset( $data['hold_id'] ) ) ? (string) $data['hold_id'] : null;
+	$expires_ts = ( is_array( $data ) && isset( $data['expires_ts'] ) ) ? (string) $data['expires_ts'] : null;
+}
+$h2_pass = ( null !== $hold_id && '' !== $hold_id && null !== $expires_ts && '' !== $expires_ts );
+printf(
+	"%-50s | %-26s | %s\n",
+	'H2. hold_id + expires_ts in WP_Error data',
+	$h2_pass ? substr( $hold_id, 0, 20 ) . '...' : 'MISSING',
+	$h2_pass ? 'PASS' : 'FAIL'
+);
+$hold_all_pass = $hold_all_pass && $h2_pass;
+
+// H3: the entry is stored locally (Reeflex_Holds_Store) at the same moment as H1/H2.
+$h3_pass = $h2_pass && null !== Reeflex_Holds_Store::get( $hold_id );
+printf(
+	"%-50s | %-26s | %s\n",
+	'H3. pending action stored (Reeflex_Holds_Store)',
+	$h3_pass ? 'stored' : 'NOT STORED',
+	$h3_pass ? 'PASS' : 'FAIL'
+);
+$hold_all_pass = $hold_all_pass && $h3_pass;
+
+// H4: resolve the hold via core's real holds API as a human principal.
+$h4_pass = false;
+if ( $h3_pass ) {
+	$resolve_body    = wp_json_encode( array(
+		'decision'  => 'approve',
+		'principal' => array(
+			'type' => 'human',
+			'id'   => 'conformance-tester',
+		),
+		'reason'    => 'conformance harness approval',
+	) );
+	$resolve_headers = array( 'Content-Type' => 'application/json' );
+	$core_token      = Reeflex_Config::core_token();
+	if ( '' !== $core_token ) {
+		$resolve_headers['Authorization'] = 'Bearer ' . $core_token;
+	}
+	$resolve_resp = wp_remote_post(
+		rtrim( $core_url, '/' ) . '/v1/holds/' . rawurlencode( $hold_id ) . '/resolve',
+		array(
+			'headers' => $resolve_headers,
+			'body'    => $resolve_body,
+			'timeout' => 5,
+		)
+	);
+	$h4_pass = ! is_wp_error( $resolve_resp ) && 200 === (int) wp_remote_retrieve_response_code( $resolve_resp );
+}
+printf(
+	"%-50s | %-26s | %s\n",
+	'H4. POST /v1/holds/{id}/resolve (approve)',
+	$h4_pass ? 'approved' : 'FAILED',
+	$h4_pass ? 'PASS' : 'FAIL'
+);
+$hold_all_pass = $hold_all_pass && $h4_pass;
+
+// H5: Reeflex_Gate::resubmit_hold() re-runs the ORIGINAL ability+input -> executes.
+$h5_pass = false;
+if ( $h4_pass ) {
+	$resubmit_result = Reeflex_Gate::resubmit_hold( $hold_id );
+	$executed        = is_array( $resubmit_result ) && ! empty( $resubmit_result['reeflex_harness_executed'] );
+	$store_cleared   = null === Reeflex_Holds_Store::get( $hold_id );
+	$h5_pass         = $executed && $store_cleared;
+	printf(
+		"%-50s | %-26s | %s\n",
+		'H5. resubmit_hold() -> ability executed',
+		$executed ? ( $store_cleared ? 'executed, store cleared' : 'executed, STORE NOT CLEARED' )
+			: ( ( $resubmit_result instanceof WP_Error ) ? $resubmit_result->get_error_code() : 'UNEXPECTED' ),
+		$h5_pass ? 'PASS' : 'FAIL'
+	);
+} else {
+	printf( "%-50s | %-26s | %s\n", 'H5. resubmit_hold() -> ability executed', 'SKIPPED (H4 failed)', 'FAIL' );
+}
+$hold_all_pass = $hold_all_pass && $h5_pass;
+
+// H6: resubmitting an unknown hold_id fails.
+$unknown_result = Reeflex_Gate::resubmit_hold( 'deadbeefdeadbeefdeadbeefdeadbeef' );
+$h6_pass        = ( $unknown_result instanceof WP_Error ) && 'reeflex_hold_unknown' === $unknown_result->get_error_code();
+printf(
+	"%-50s | %-26s | %s\n",
+	'H6. resubmit unknown hold_id -> error',
+	( $unknown_result instanceof WP_Error ) ? $unknown_result->get_error_code() : 'UNEXPECTED',
+	$h6_pass ? 'PASS' : 'FAIL'
+);
+$hold_all_pass = $hold_all_pass && $h6_pass;
+
+// H7: resubmitting the SAME hold a second time fails (single-use — the adapter's
+// own store already deleted the entry on H5's success, so this is a LOCAL
+// reeflex_hold_unknown rather than a round-trip to core's reeflex_hold_consumed;
+// either way the hold cannot be resubmitted into a second allow).
+if ( $h5_pass ) {
+	$second_result = Reeflex_Gate::resubmit_hold( $hold_id );
+	$h7_pass       = ( $second_result instanceof WP_Error );
+	printf(
+		"%-50s | %-26s | %s\n",
+		'H7. resubmit already-consumed hold -> fails',
+		( $second_result instanceof WP_Error ) ? $second_result->get_error_code() : 'UNEXPECTED',
+		$h7_pass ? 'PASS' : 'FAIL'
+	);
+} else {
+	$h7_pass = false;
+	printf( "%-50s | %-26s | %s\n", 'H7. resubmit already-consumed hold -> fails', 'SKIPPED (H5 failed)', 'FAIL' );
+}
+$hold_all_pass = $hold_all_pass && $h7_pass;
+
+// ----------------------------------------------------------------------
+// Helpers shared by H8-H10 (deny-path resubmission scenarios).
+// ----------------------------------------------------------------------
+
+/** POST /v1/holds/{id}/resolve on the LIVE core. Returns [http_code, decoded_body|null]. */
+function core_resolve_hold( string $core_url, string $hold_id, string $decision, string $principal_type, string $principal_id ): array {
+	$body    = wp_json_encode( array(
+		'decision'  => $decision,
+		'principal' => array( 'type' => $principal_type, 'id' => $principal_id ),
+		'reason'    => 'conformance harness',
+	) );
+	$headers = array( 'Content-Type' => 'application/json' );
+	$token   = Reeflex_Config::core_token();
+	if ( '' !== $token ) { $headers['Authorization'] = 'Bearer ' . $token; }
+	$resp = wp_remote_post(
+		rtrim( $core_url, '/' ) . '/v1/holds/' . rawurlencode( $hold_id ) . '/resolve',
+		array( 'headers' => $headers, 'body' => $body, 'timeout' => 5 )
+	);
+	if ( is_wp_error( $resp ) ) { return array( 0, null ); }
+	$code    = (int) wp_remote_retrieve_response_code( $resp );
+	$decoded = json_decode( (string) wp_remote_retrieve_body( $resp ), true );
+	return array( $code, is_array( $decoded ) ? $decoded : null );
+}
+
+/** Create a fresh hold via a bulk force-delete on a disjoint id range. Returns hold_id or null. */
+function create_fresh_hold( string $ability, array $id_range ): ?string {
+	$result = run_ability_full( $ability, array( 'ids' => $id_range, 'force_delete' => true ) );
+	if ( ! ( $result instanceof WP_Error ) || 'reeflex_hold' !== $result->get_error_code() ) {
+		return null;
+	}
+	$data = $result->get_error_data();
+	return ( is_array( $data ) && isset( $data['hold_id'] ) ) ? (string) $data['hold_id'] : null;
+}
+
+// H8: reject on core -> resubmit_hold() is denied (never executes).
+$h8_hold = create_fresh_hold( $h_ability, range( 401, 445 ) );
+$h8_pass = false;
+if ( null !== $h8_hold ) {
+	list( $code8, ) = core_resolve_hold( $core_url, $h8_hold, 'reject', 'human', 'conformance-tester' );
+	if ( 200 === $code8 ) {
+		$h8_result = Reeflex_Gate::resubmit_hold( $h8_hold );
+		$h8_pass   = ( $h8_result instanceof WP_Error );
+		printf(
+			"%-50s | %-26s | %s\n",
+			'H8. reject on core -> resubmit_hold() denied',
+			( $h8_result instanceof WP_Error ) ? $h8_result->get_error_code() : 'UNEXPECTED (executed!)',
+			$h8_pass ? 'PASS' : 'FAIL'
+		);
+	} else {
+		printf( "%-50s | %-26s | %s\n", 'H8. reject on core -> resubmit_hold() denied', 'resolve(reject) HTTP ' . $code8, 'FAIL' );
+	}
+} else {
+	printf( "%-50s | %-26s | %s\n", 'H8. reject on core -> resubmit_hold() denied', 'could not create fresh hold', 'FAIL' );
+}
+$hold_all_pass = $hold_all_pass && $h8_pass;
+
+// H9: expired -> resubmit_hold() is denied. Only meaningful (and only run)
+// against a core started with a short REEFLEX_HOLD_TTL_SECONDS for THIS test
+// run — against a production-TTL (default 4h) core there is nothing to wait
+// for, so this scenario is SKIPPED (not counted as a failure) rather than
+// sleeping for hours or producing a false failure.
+$test_ttl = getenv( 'REEFLEX_HOLD_TTL_SECONDS' );
+if ( false !== $test_ttl && ctype_digit( (string) $test_ttl ) && (int) $test_ttl > 0 && (int) $test_ttl <= 60 ) {
+	$h9_hold = create_fresh_hold( $h_ability, range( 501, 545 ) );
+	$h9_pass = false;
+	if ( null !== $h9_hold ) {
+		list( $code9, ) = core_resolve_hold( $core_url, $h9_hold, 'approve', 'human', 'conformance-tester' );
+		if ( 200 === $code9 ) {
+			sleep( (int) $test_ttl + 2 ); // guarantee we are past the hold's expires_ts
+			$h9_result = Reeflex_Gate::resubmit_hold( $h9_hold );
+			$h9_pass   = ( $h9_result instanceof WP_Error )
+				&& in_array( $h9_result->get_error_code(), array( 'reeflex_hold_expired', 'reeflex_hold_unknown' ), true );
+			printf(
+				"%-50s | %-26s | %s\n",
+				'H9. expired -> resubmit_hold() denied',
+				( $h9_result instanceof WP_Error ) ? $h9_result->get_error_code() : 'UNEXPECTED (executed!)',
+				$h9_pass ? 'PASS' : 'FAIL'
+			);
+		} else {
+			printf( "%-50s | %-26s | %s\n", 'H9. expired -> resubmit_hold() denied', 'resolve(approve) HTTP ' . $code9, 'FAIL' );
+		}
+	} else {
+		printf( "%-50s | %-26s | %s\n", 'H9. expired -> resubmit_hold() denied', 'could not create fresh hold', 'FAIL' );
+	}
+	$hold_all_pass = $hold_all_pass && $h9_pass;
+} else {
+	printf( "%-50s | %-26s | %s\n", 'H9. expired -> resubmit_hold() denied', 'SKIPPED (set REEFLEX_HOLD_TTL_SECONDS<=60 on core+env to run)', 'SKIP' );
+}
+
+// H10: actor == approver -> core refuses the RESOLVE itself (403
+// actor_is_approver); the hold never becomes approved, so resubmit_hold() is
+// also denied (still-pending, never a valid approval).
+$h10_hold = create_fresh_hold( $h_ability, range( 601, 645 ) );
+$h10_pass = false;
+if ( null !== $h10_hold ) {
+	// The envelope's agent.id is Reeflex_Config::agent_id() (no REEFLEX_AGENT_ID
+	// constant defined in this harness -> defaults to 'agent:wordpress'). Resolve
+	// using THAT exact identity as the principal to trigger the actor==approver guard.
+	list( $code10, $body10 ) = core_resolve_hold( $core_url, $h10_hold, 'approve', 'human', Reeflex_Config::agent_id() );
+	$resolve_blocked = ( 403 === $code10 ) && is_array( $body10 ) && 'actor_is_approver' === ( $body10['error'] ?? '' );
+	if ( $resolve_blocked ) {
+		$h10_result = Reeflex_Gate::resubmit_hold( $h10_hold );
+		$h10_pass   = ( $h10_result instanceof WP_Error );
+		printf(
+			"%-50s | %-26s | %s\n",
+			'H10. actor==approver -> resolve blocked + denied',
+			( $h10_result instanceof WP_Error ) ? $h10_result->get_error_code() : 'UNEXPECTED (executed!)',
+			$h10_pass ? 'PASS' : 'FAIL'
+		);
+	} else {
+		printf(
+			"%-50s | %-26s | %s\n",
+			'H10. actor==approver -> resolve blocked + denied',
+			'resolve NOT blocked (HTTP ' . $code10 . ')',
+			'FAIL'
+		);
+	}
+} else {
+	printf( "%-50s | %-26s | %s\n", 'H10. actor==approver -> resolve blocked + denied', 'could not create fresh hold', 'FAIL' );
+}
+$hold_all_pass = $hold_all_pass && $h10_pass;
+
+echo $bar . "\n";
+echo ( $hold_all_pass ? "ALL HOLD SCENARIOS PASS" : "SOME HOLD SCENARIOS FAILED" ) . "\n";
+echo $bar . "\n";
+
+$all_pass = $all_pass && $hold_all_pass;
 exit( $all_pass ? 0 : 1 );

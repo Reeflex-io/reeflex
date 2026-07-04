@@ -57,10 +57,16 @@
  *     everything else                        -> internal
  *     physical (none in WP)                  -> n/a (never produced)
  *
- *   approval (P0-1):
- *     Always emitted as present:false/by:null/role:null in v0.1.
- *     No agent-controlled approval path exists yet — holds are terminal.
- *     See normalize() docblock for the full upgrade path design.
+ *   approval (HIL Phase 2 — SPEC §5.1):
+ *     Schema is {present, hold_id} — matches core's validation contract exactly
+ *     (holds.py / decide.py in reeflex-core). present:true is emitted ONLY when
+ *     this normalize() call is happening inside a server-verified hold
+ *     resubmission driven by Reeflex_Gate::resubmit_hold(); the caller passes the
+ *     hold_id explicitly as a trusted parameter — it is NEVER read from
+ *     agent-supplied $input. Everything else about the envelope (action, axes,
+ *     magnitude, target, agent identity) is built exactly as it would be for a
+ *     fresh call on the same ability+input, which is what lets core's
+ *     action-hash binding match.
  *
  * @package ReeflexWordPress
  * @since   0.1.0
@@ -143,37 +149,49 @@ final class Reeflex_Normalizer {
 	/**
 	 * Normalize a WordPress ability call into an Action Envelope.
 	 *
-	 * Approval (P0-1 — v0.1 behaviour):
-	 *   approval.present is always false in v0.1. No trusted approval source
-	 *   exists yet: the agent controls its own input, so any approval signal
-	 *   from the input array is worthless. require_approval decisions are
-	 *   TERMINAL for now — the action is held and the operator must manually
-	 *   re-submit or build the approval UI.
+	 * Approval (HIL Phase 2 — SPEC §5.1):
+	 *   approval.present is true ONLY when $approval_hold_id is non-empty, which
+	 *   only happens when Reeflex_Gate::resubmit_hold() is re-running the exact
+	 *   ability+input that originally produced the hold (see
+	 *   Reeflex_Gate::$active_resubmission_hold_id). $approval_hold_id is a
+	 *   trusted, adapter-supplied parameter — it is NEVER derived from
+	 *   agent-supplied $input (an agent forging '_reeflex_approved' or similar in
+	 *   $input has no effect; see the params sanitation below). Core independently
+	 *   validates the hold (single-use, TTL-bound, action-hash-bound — SPEC §5.1)
+	 *   before ever returning allow; this adapter asserts nothing beyond "here is
+	 *   the hold_id a human resolved."
 	 *
-	 *   Upgrade path (ROADMAP — do NOT implement until the server-side flow is built):
-	 *     1. On require_approval, store a hold record in the WP options table
-	 *        keyed by the envelope nonce, with HMAC-signed approval token.
-	 *     2. The approval UI (admin screen or Slack bot) verifies the token,
-	 *        consumes (deletes) the hold record, and writes a signed approval
-	 *        receipt back to WP options.
-	 *     3. The ORIGINAL caller (agent) is notified and re-submits the
-	 *        original envelope. The adapter retrieves and verifies the receipt
-	 *        (server-to-server, never from agent-controlled input), then sets
-	 *        approval.present=true in the re-submitted envelope.
-	 *     4. Core sees approval.present=true + the same nonce → allow.
-	 *     5. Receipt is consumed (one-time-use) immediately after verification.
-	 *   Until this flow is built, do NOT read any approval signal from $input.
+	 *   Agent identity override (LOCKED DECISION, HIL Phase 2 T1.2 — non-negotiable
+	 *   per brief): on a resubmission the envelope MUST carry the ORIGINAL agent
+	 *   identity (id, on_behalf_of, session_id) captured when the hold was first
+	 *   created — the actor stays the actor. resubmit_hold() executes from
+	 *   whatever WordPress request context triggers it (an OPERATOR surface —
+	 *   wp-admin, CLI, Slack — never the original agent's own request), so
+	 *   deriving identity from "the live request" at THAT point would silently
+	 *   substitute the resolver/operator for the actor in on_behalf_of and
+	 *   session_id. $agent_override, when supplied, is used verbatim instead of
+	 *   the live wp_get_current_user() lookup. Null (the normal, non-resubmission
+	 *   path) leaves behaviour unchanged: identity is derived from the live request.
 	 *
-	 * @param string $ability         Namespaced ability name, e.g. 'core/delete-post'.
-	 * @param array  $input           Input array passed to the ability's callback.
-	 * @param string $trusted_verb    Optional: registration-time verb override from $args
-	 *                                (set by ability author via reeflex_verb key). Empty = auto.
+	 * @param string      $ability            Namespaced ability name, e.g. 'core/delete-post'.
+	 * @param array       $input              Input array passed to the ability's callback.
+	 * @param string      $trusted_verb       Optional: registration-time verb override from $args
+	 *                                        (set by ability author via reeflex_verb key). Empty = auto.
+	 * @param string|null $approval_hold_id   Optional: set ONLY by Reeflex_Gate::resubmit_hold()
+	 *                                        around the ability's re-run. Null/empty = normal
+	 *                                        first submission (approval.present = false).
+	 * @param array|null  $agent_override     Optional: {id, on_behalf_of, session_id} captured at
+	 *                                        hold-creation time. Set ONLY by
+	 *                                        Reeflex_Gate::resubmit_hold(). Null = derive identity
+	 *                                        from the live request (normal path, unchanged).
 	 * @return array  A fully-populated Action Envelope (SPEC §2).
 	 */
 	public static function normalize(
 		string $ability,
 		array $input,
-		string $trusted_verb = ''
+		string $trusted_verb = '',
+		?string $approval_hold_id = null,
+		?array $agent_override = null
 	): array {
 		$ability_lower    = strtolower( $ability );
 		$ability_segments = self::split_segments( $ability_lower );
@@ -224,13 +242,30 @@ final class Reeflex_Normalizer {
 		$ref  = self::infer_ref( $input, $count, $kind );
 
 		// -- AGENT --------------------------------------------------------
-		$user         = wp_get_current_user();
-		// P2-12: use user ID (integer), not user_login (PII).
-		$on_behalf_of = ( $user && $user->exists() && $user->ID )
-			? 'user:' . $user->ID
-			: 'user:anonymous';
+		// LOCKED DECISION (HIL Phase 2 T1.2): when $agent_override is supplied
+		// (resubmission path only), it is used verbatim — the ORIGINAL agent
+		// identity is preserved so the actor stays the actor. Otherwise identity
+		// is derived from the live WordPress request, exactly as before.
+		if ( null !== $agent_override ) {
+			$agent_id     = isset( $agent_override['id'] ) && is_string( $agent_override['id'] ) && '' !== $agent_override['id']
+				? $agent_override['id']
+				: Reeflex_Config::agent_id();
+			$on_behalf_of = isset( $agent_override['on_behalf_of'] ) && is_string( $agent_override['on_behalf_of'] )
+				? $agent_override['on_behalf_of']
+				: 'user:anonymous';
+			$session_id   = isset( $agent_override['session_id'] ) && is_string( $agent_override['session_id'] ) && '' !== $agent_override['session_id']
+				? $agent_override['session_id']
+				: self::resolve_session_id( null );
+		} else {
+			$agent_id = Reeflex_Config::agent_id();
+			$user     = wp_get_current_user();
+			// P2-12: use user ID (integer), not user_login (PII).
+			$on_behalf_of = ( $user && $user->exists() && $user->ID )
+				? 'user:' . $user->ID
+				: 'user:anonymous';
 
-		$session_id = self::resolve_session_id( $user );
+			$session_id = self::resolve_session_id( $user );
+		}
 
 		// -- META (timestamp, nonce, stub signature) ----------------------
 		$timestamp = gmdate( 'Y-m-d\TH:i:s\Z' );
@@ -247,19 +282,24 @@ final class Reeflex_Normalizer {
 		$params = $input;
 		unset( $params['_reeflex_approved'], $params['_reeflex_approval_token'] );
 
-		// -- APPROVAL (P0-1: always false in v0.1) ------------------------
-		// No agent-controlled approval path. See normalize() docblock for
-		// the roadmap design of the server-side approval flow.
-		$approval = array(
-			'present' => false,
-			'by'      => null,
-			'role'    => null,
-		);
+		// -- APPROVAL (HIL Phase 2 — SPEC §5.1) ---------------------------
+		// present=true ONLY when $approval_hold_id was passed in by
+		// Reeflex_Gate::resubmit_hold() — never from agent-supplied $input.
+		// Schema is exactly {present, hold_id}; core needs nothing else.
+		$approval = ( null !== $approval_hold_id && '' !== $approval_hold_id )
+			? array(
+				'present' => true,
+				'hold_id' => $approval_hold_id,
+			)
+			: array(
+				'present' => false,
+				'hold_id' => null,
+			);
 
 		return array(
 			'reeflex_version' => '0.1',
 			'agent'           => array(
-				'id'           => Reeflex_Config::agent_id(),
+				'id'           => $agent_id,
 				'on_behalf_of' => $on_behalf_of,
 				'session_id'   => $session_id,
 			),

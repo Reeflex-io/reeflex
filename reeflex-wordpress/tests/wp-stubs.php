@@ -18,6 +18,7 @@ if ( ! defined( 'ABSPATH' ) )          { define( 'ABSPATH', __DIR__ . '/' ); }
 if ( ! defined( 'WP_CONTENT_DIR' ) )   { define( 'WP_CONTENT_DIR', getenv( 'REEFLEX_HARNESS_TMP' ) ?: sys_get_temp_dir() ); }
 if ( ! defined( 'AUTH_SALT' ) )        { define( 'AUTH_SALT', 'harness-auth-salt' ); }
 if ( ! defined( 'LOGGED_IN_COOKIE' ) ) { define( 'LOGGED_IN_COOKIE', 'wordpress_logged_in_harness' ); }
+if ( ! defined( 'HOUR_IN_SECONDS' ) )  { define( 'HOUR_IN_SECONDS', 3600 ); }
 
 // --- Filter/action registry ------------------------------------------------
 $GLOBALS['__filters'] = array();
@@ -86,12 +87,68 @@ if ( ! function_exists( 'wp_unslash' ) ) {
 	function wp_unslash( $value ) { return is_string( $value ) ? stripslashes( $value ) : $value; }
 }
 
-// WordPress options API: the harness has no DB, so an option returns its default.
-// Reeflex_Config::stored_options() calls get_option( 'reeflex_gate_options', array() );
-// returning the default yields core_url='' / core_token='' / verify_ssl=true, so the
-// adapter falls back to the wp-config constants (defined above) — the intended
-// precedence (constant > DB option) that this harness exercises.
-function get_option( $option, $default = false ) { return $default; }
+// WordPress options API: the harness has no DB, so options are kept in a
+// process-local in-memory array — good enough for one harness invocation
+// (Reeflex_Holds_Store needs real persistence across calls WITHIN one run;
+// Reeflex_Config::stored_options() still sees 'not set' for anything never
+// update_option()'d, so the constant > DB option precedence is unaffected).
+$GLOBALS['__options'] = array();
+function get_option( $option, $default = false ) {
+	return array_key_exists( $option, $GLOBALS['__options'] ) ? $GLOBALS['__options'][ $option ] : $default;
+}
+function update_option( $option, $value, $autoload = null ) {
+	$GLOBALS['__options'][ $option ] = $value;
+	return true;
+}
+function delete_option( $option ) {
+	unset( $GLOBALS['__options'][ $option ] );
+	return true;
+}
+
+// --- Minimal WP_Ability + WP_Abilities_Registry stub ------------------------
+// Mirrors the real Abilities API shape referenced throughout the adapter's own
+// docblocks (WP_Abilities_Registry::register(), WP_Ability::execute()) closely
+// enough to exercise Reeflex_Gate::resubmit_hold()'s wp_get_ability(...)->execute()
+// call for real, through the SAME wp_register_ability_args filter Hook A hangs off.
+class WP_Ability {
+	private $name;
+	private $args;
+	public function __construct( string $name, array $args ) {
+		$this->name = $name;
+		$this->args = $args;
+	}
+	public function check_permissions( $input = null ) {
+		$cb = $this->args['permission_callback'] ?? null;
+		if ( ! is_callable( $cb ) ) { return true; }
+		return $cb( $input );
+	}
+	public function execute( $input = null ) {
+		$perm = $this->check_permissions( $input );
+		if ( true !== $perm ) { return $perm; }
+		$exec = $this->args['execute_callback'] ?? null;
+		if ( is_callable( $exec ) ) { return $exec( $input ); }
+		return array( 'reeflex_harness_executed' => true, 'ability' => $this->name, 'input' => $input );
+	}
+}
+class WP_Abilities_Registry {
+	private static $instance;
+	private $registered = array();
+	public static function get_instance() {
+		if ( null === self::$instance ) { self::$instance = new self(); }
+		return self::$instance;
+	}
+	public function register( string $name, array $args ) {
+		$args = apply_filters( 'wp_register_ability_args', $args, $name );
+		$this->registered[ $name ] = new WP_Ability( $name, $args );
+		return $this->registered[ $name ];
+	}
+	public function get_registered( string $name ) {
+		return $this->registered[ $name ] ?? null;
+	}
+}
+function wp_get_ability( string $name ) {
+	return WP_Abilities_Registry::get_instance()->get_registered( $name );
+}
 
 // --- HTTP API: wp_remote_post -> real HTTP via streams (no curl dependency) -
 function wp_remote_post( $url, $args = array() ) {

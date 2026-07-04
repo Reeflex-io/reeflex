@@ -3,7 +3,7 @@
  * Plugin Name:  Reeflex Gate
  * Plugin URI:   https://github.com/Reeflex-io/reeflex
  * Description:  Deterministic governance for every WordPress agent action via reeflex-core (allow / deny / require-approval, fail-closed).
- * Version:      0.1.3
+ * Version:      0.1.4
  * Requires at least: 6.9
  * Requires PHP: 7.4
  * Author:       Reeflex
@@ -46,7 +46,10 @@
  *
  *   allow            -> ability runs normally.
  *   deny             -> ability is blocked; WP_Error('reeflex_denied') returned.
- *   require_approval -> ability is held; WP_Error('reeflex_hold') returned.
+ *   require_approval -> ability is held; WP_Error('reeflex_hold') returned, carrying
+ *                        hold_id + expires_ts (core >= v0.1.5). Once a human resolves
+ *                        the hold via core's holds API, Reeflex_Gate::resubmit_hold()
+ *                        re-runs the original call.
  *   core unreachable -> FAIL CLOSED: deny; WP_Error('reeflex_unavailable') returned.
  *
  * Two hooks are registered:
@@ -111,6 +114,7 @@ require_once $reeflex_dir . 'class-reeflex-config.php';
 require_once $reeflex_dir . 'class-reeflex-normalizer.php';
 require_once $reeflex_dir . 'class-reeflex-core-client.php';
 require_once $reeflex_dir . 'class-reeflex-audit.php';
+require_once $reeflex_dir . 'class-reeflex-holds-store.php';
 require_once $reeflex_dir . 'class-reeflex-gate.php';
 require_once $reeflex_dir . 'class-reeflex-settings.php';
 
