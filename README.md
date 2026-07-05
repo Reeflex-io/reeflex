@@ -98,7 +98,7 @@ flowchart TD
     B -- "POST /v1/decide" --> C["reeflex-core<br/><i>OPA/Rego policy + per-session cumulative ledger</i><br/>zero LLM in the decision path"]
     C --> D{Decision}
     D -- allow --> E["✅ Action executes"]
-    D -- require_approval --> F["✋ Held for a human"]
+    D -- require_approval --> F["✋ Hold → your approver"]
     D -- deny --> G["⛔ Blocked, with a reason"]
     C -.-> H["📜 Append-only audit record<br/><i>written either way</i>"]
     style D fill:#f6f8fa,stroke:#57606a
@@ -169,11 +169,21 @@ see [INSTALL.md](INSTALL.md).
 > Prefer to run without Docker? [INSTALL.md](INSTALL.md) covers the direct Python 3.12 and OPA setup.
 
 > **Want to try it without deploying anything?** We run a public development
-> endpoint at `https://api-dev.reeflex.io` — point an adapter at it and go. It
-> carries a valid, publicly-trusted Let's Encrypt certificate, so keep the
-> adapter's `verify_ssl` option at its secure default (`true`) — no change
-> needed to reach it. It's still a shared dev/eval endpoint, not for production.
-> Details in the [WordPress adapter guide](reeflex-wordpress/README.md#about-api-devreeflexio-public-development-endpoint).
+> endpoint at `https://api-dev.reeflex.io` with a public evaluation bearer
+> token — point an adapter at it, or curl it directly, right now:
+>
+> ```bash
+> curl -s https://api-dev.reeflex.io/v1/decide \
+>   -H 'content-type: application/json' \
+>   -H 'authorization: Bearer reeflex-eval-public-2026' \
+>   -d '{"action": {"verb": "delete", "ability": "wordpress/delete-post"}, "axes": {"reversibility": "irreversible", "blast_radius": "broad", "externality": "internal"}, "magnitude": {"count": 50}, "target": {"environment": "production"}, "agent": {"session_id": "sess-eval"}}'
+> ```
+>
+> Token: `reeflex-eval-public-2026` — **public dev/eval endpoint and token:
+> may reset or rate-limit anytime; not for production.** It carries a valid,
+> publicly-trusted Let's Encrypt certificate, so keep the adapter's
+> `verify_ssl` option at its secure default (`true`) — no change needed to
+> reach it. Details in the [WordPress adapter guide](reeflex-wordpress/README.md#about-api-devreeflexio-public-development-endpoint).
 
 ---
 
@@ -202,9 +212,11 @@ curl -s http://localhost:8080/v1/decide \
 }
 ```
 
-The adapter then enforces that decision: proceed, block, or hold for a human.
-A worked adapter lives in [`reeflex-mock/`](reeflex-mock/), and two
-conformance-tested reference adapters ship in this repo — see below.
+The adapter then enforces that decision: proceed, block, or hold for approval
+— by default a human, or an agent you explicitly designate (see
+[AIL](docs/why-reeflex.md#ail)). A worked adapter lives in
+[`reeflex-mock/`](reeflex-mock/), and two conformance-tested reference
+adapters ship in this repo — see below.
 
 ---
 

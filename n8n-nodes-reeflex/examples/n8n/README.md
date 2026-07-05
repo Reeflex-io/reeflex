@@ -27,17 +27,19 @@ each demo running against api-dev is embedded at the bottom of this page.
 ## Prerequisites
 
 - n8n with community nodes support (Node.js >= 20.15 for the node itself).
-- The `n8n-nodes-reeflex` package installed. **As of this writing the
-  package is prepared but not yet published to npm** (publishing is a
-  human-only GATE — see
-  [`../../PUBLISH.md`](../../PUBLISH.md)). Until it is published:
-  - From a clone of this repo, `cd n8n-nodes-reeflex && npm run dev` starts
-    a local n8n instance (default `http://localhost:5678`) with Reeflex
-    Gate already loaded — the fastest way to try these demos today (see
-    `PUBLISH.md` section 2, "Manual smoke test in a real n8n instance").
-  - Once published, follow the standard
-    [community node install flow](https://docs.n8n.io/integrations/community-nodes/installation-and-management/)
-    with the package name `n8n-nodes-reeflex` instead.
+- The `n8n-nodes-reeflex` package installed — it **is published on npm**
+  (`n8n-nodes-reeflex@0.1.0`). Two ways to get it:
+  - **From the n8n UI (standard path):** **Settings → Community Nodes →
+    Install**, enter `n8n-nodes-reeflex`, confirm. Full walkthrough in the
+    [community node install flow](https://docs.n8n.io/integrations/community-nodes/installation-and-management/).
+  - **Via npm**, if you manage your n8n instance's dependencies directly:
+    `npm install n8n-nodes-reeflex` in that instance, then restart n8n.
+  - **From source (optional — for contributors, not needed to try the
+    demos):** from a clone of this repo, `cd n8n-nodes-reeflex && npm run dev`
+    starts a local n8n instance (default `http://localhost:5678`) with
+    Reeflex Gate already loaded — see
+    [`../../PUBLISH.md`](../../PUBLISH.md) section 2, "Manual smoke test in
+    a real n8n instance".
 
 ## Credential setup — "Reeflex Core API" (one credential, all 5 demos)
 
