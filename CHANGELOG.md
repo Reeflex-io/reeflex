@@ -5,8 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-07-05
+
+First multi-channel release: the Claude adapter, the holds MCP server, and the n8n community node ship to PyPI / npm alongside the GitHub release and the GHCR core image.
+
 ### Added
-- **reeflex-claude: `REEFLEX_VERIFY_SSL` + `REEFLEX_CORE_TOKEN`** — TLS-verify opt-out (user's risk, default on) and bearer auth, at parity with the WordPress adapter; enables dev/self-signed + authenticated core endpoints (e.g. `api-dev.reeflex.io`).
+- **`reeflex-holds` MCP server (first release).** A FastMCP server exposing `list_holds` / `get_hold` / `resolve_hold` / `get_freeze_status` over reeflex-core's Holds API, so an MCP client (e.g. Claude Desktop) can be the approval surface. Env-configured (`REEFLEX_CORE_URL` / `REEFLEX_TOKEN` / `REEFLEX_PRINCIPAL` / `REEFLEX_VERIFY_SSL`); TLS-verify opt-out at parity with the adapters.
+- **`n8n-nodes-reeflex` community node (first release).** The "Reeflex Gate" node (allow / hold / deny outputs) + "Reeflex API" credential, plus five importable, story-driven demo workflows preconfigured against the public api-dev eval endpoint — each with an embedded GIF of a real run.
+- **reeflex-claude: `REEFLEX_VERIFY_SSL` + `REEFLEX_CORE_TOKEN`.** TLS-verify opt-out (user's risk, default on) and bearer auth, at parity with the WordPress adapter; enables dev/self-signed + authenticated core endpoints (e.g. `api-dev.reeflex.io`).
+
+### Fixed
+- **WordPress adapter — double-gating dedup (reeflex-gate 0.1.5).** An MCP-originated action gated twice (the ability's own gate + the MCP adapter layer) created two holds for one call; approving both re-ran the action twice. The adapter now deduplicates by canonical envelope hash + session within a tight creation-time window, so a double-gated action executes **at most once** — the second approval closes its record without re-executing. Corrected the wp-admin docblock/notice that wrongly claimed the companion approval never executes. Regression test (`hold-dedup-regression-demo.php`, D1–D8) added.
+- **n8n demo 3 (approval loop).** Resolves holds with a `human` principal (api-dev's default resolution policy is human-only) with an id distinct from the actor (avoids `actor_is_approver`), and regenerates `meta.nonce` on resubmit (core rejects a reused nonce as a replay) — so the decide → hold → resolve → resubmit → allow loop runs end-to-end out of the box in a real n8n.
 
 ## [0.1.5] - 2026-07-04
 

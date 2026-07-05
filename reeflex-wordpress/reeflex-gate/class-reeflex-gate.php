@@ -29,7 +29,15 @@
  *   An MCP-originated ability call activates both hooks. Hook B fires first
  *   (MCP tool layer); Hook A fires second (permission_callback). Both
  *   independently call reeflex-core — this is correct defense-in-depth.
- *   There is NO dedup/nonce-cache between them (P1-5).
+ *   There is NO dedup/nonce-cache between the two /v1/decide calls themselves
+ *   (P1-5) — both are real, independent decisions, and (pre-existing, unchanged)
+ *   a require_approval on each is stored as two SEPARATE hold_ids
+ *   (store_pending_hold() is called from both hooks with no dedup at creation
+ *   time). What IS deduplicated, since 0.1.6, is EXECUTION: resubmit_hold() will
+ *   run the underlying ability AT MOST ONCE no matter how many of these
+ *   companion holds a human later approves — see resubmit_hold()'s own docblock
+ *   for the mechanism (envelope_hash + session_id + a tight creation-time
+ *   window) and its scoping / residual risk.
  *
  * Exception safety (NEW-2):
  *   Both the permission_callback closure and gate_mcp_tool() are wrapped in
@@ -49,6 +57,20 @@
  *   call (see $active_resubmission_hold_id below). Core independently validates the
  *   hold (single-use, TTL-bound, action-hash-bound) before ever allowing — this
  *   adapter asserts nothing beyond "here is the hold_id a human resolved."
+ *
+ *   Double-execution dedup (0.1.6, adapter-side, ON TOP of core's own single-use
+ *   validation): core's hold validation makes each INDIVIDUAL hold_id single-use,
+ *   but it has no notion of "this is a companion of a hold_id I already validated" —
+ *   two DIFFERENT, both-valid hold_ids for the SAME underlying call (see
+ *   "Double-gating" above) can each independently pass core's validation and each
+ *   trigger a resubmit_hold() call. Reeflex_Holds_Store additionally tracks, per
+ *   hold entry, an `executed_ts` (set only once the ability has actually run — see
+ *   Reeflex_Holds_Store::mark_executed()). resubmit_hold() checks, before ever
+ *   touching the ability, whether this exact hold_id — or another hold sharing
+ *   its envelope_hash AND session_id AND created within a tight time window of
+ *   it (Reeflex_Holds_Store::find_executed_companion_hold_id()) — has already
+ *   executed, and if so short-circuits with a distinct 'reeflex_hold_deduplicated'
+ *   result instead of running the ability again.
  *
  * WP_Error data (NEW-1):
  *   Public WP_Error data arrays carry ONLY 'status' and 'reeflex_decision'.
@@ -680,10 +702,27 @@ final class Reeflex_Gate {
 	/**
 	 * Re-submit a previously-held action after a human has approved it.
 	 *
-	 * Flow (T1):
+	 * Flow (T1, extended 0.1.6 with step a.1 + revised step c):
 	 *   a. Load the stored entry (Reeflex_Holds_Store::get()). Missing → 'reeflex_hold_unknown'.
-	 *      Locally past its own expires_ts → 'reeflex_hold_expired' (a fast local check; core
-	 *      is still the authority and would reach the same conclusion via hold validation).
+	 *   a.1. Double-execution dedup (0.1.6 — see class docblock "Double-gating" and
+	 *      Reeflex_Holds_Store's own docblock for 'executed_ts'): BEFORE anything
+	 *      else, check whether this exact hold_id, or another hold created "in the
+	 *      same wave" (same envelope_hash + session_id, within a tight
+	 *      creation-time window — see find_executed_companion_hold_id()), has
+	 *      ALREADY executed. If so, the underlying ability must NOT run again —
+	 *      this hold's local record is cleaned up and a distinct
+	 *      'reeflex_hold_deduplicated' result is returned instead. This covers both:
+	 *        - a companion hold for the SAME originating call (Hook A + Hook B each
+	 *          produced their own hold_id for one MCP-originated call — the bug this
+	 *          fix closes); and
+	 *        - a repeat resubmission of the SAME hold_id itself (e.g. a double
+	 *          admin-post submit) — needed because, since 0.1.6, a successfully
+	 *          executed entry is marked executed rather than deleted (so a
+	 *          companion can still find it), so it would otherwise still be
+	 *          resubmittable.
+	 *      Then: locally past its own expires_ts → 'reeflex_hold_expired' (a fast
+	 *      local check; core is still the authority and would reach the same
+	 *      conclusion via hold validation).
 	 *   b. Re-execute the ORIGINAL ability with the ORIGINAL input via
 	 *      wp_get_ability( $ability )->execute( $input ). Around that single call,
 	 *      $active_resubmission_hold_id is set so the SAME gate (Hook A wraps
@@ -696,22 +735,49 @@ final class Reeflex_Gate {
 	 *      true → WP_Ability::execute() runs do_execute() → its result is returned.
 	 *      Deny (consumed/expired/mismatch/actor_is_approver/fail-closed/...) →
 	 *      the gate's own WP_Error is returned unchanged, carrying core's reason
-	 *      server-side (error_log + audit JSONL) exactly as any other deny.
-	 *      Either way the stored entry is deleted — an approval is single-use.
+	 *      server-side (error_log + audit JSONL) exactly as any other deny. Either
+	 *      way an approval is single-use: on a confirmed execution the entry is
+	 *      marked executed (Reeflex_Holds_Store::mark_executed() — kept, not
+	 *      deleted, so a companion hold found later via step a.1 can still be
+	 *      deduplicated); on a gate-enforced deny (nothing executed) the entry is
+	 *      deleted exactly as before 0.1.6, so a genuinely failed/denied
+	 *      resubmission still cannot be retried into a later allow.
 	 *   d. Fails closed: an ability that is no longer registered, or that throws
 	 *      while executing, returns a WP_Error rather than silently succeeding.
+	 *
+	 * Residual scoping risk (double-execution dedup, 0.1.6) — read before relying
+	 * on this as a general-purpose idempotency guarantee: envelope_hash alone
+	 * covers only {action,axes,magnitude,target} (SPEC's own hash projection) — it
+	 * does NOT include session_id, nonce, or hold_id, so two genuinely SEPARATE,
+	 * deliberate, identical actions (e.g. the same bulk-delete performed twice on
+	 * purpose) share the same envelope_hash. find_executed_companion_hold_id()
+	 * additionally requires the SAME session_id (for an MCP-originated call, the
+	 * Mcp-Session-Id HTTP header — identical for Hook A and Hook B because both
+	 * handle the SAME incoming HTTP request) AND a created_ts within a tight
+	 * window of each other (Hook A and Hook B fire milliseconds apart for one
+	 * real call). The one case this does NOT distinguish: a human/agent who
+	 * deliberately submits the exact SAME action twice on purpose, in the SAME
+	 * MCP session, within that same tight window, would have the second
+	 * submission wrongly deduplicated as a companion of the first. This is
+	 * judged an acceptable, narrow trade-off (see
+	 * Reeflex_Holds_Store::find_executed_companion_hold_id()'s own docblock for
+	 * the full rationale) — but it is a real, deliberate scoping choice, not an
+	 * oversight, called out here explicitly per the fix's own design brief.
 	 *
 	 * Auditing: the underlying decision (allow or a hold-validation deny) is
 	 * already written by the normal per-decision audit inside step (b) — the
 	 * envelope's approval={present:true, hold_id} makes that record identifiable
 	 * as a resubmission (Reeflex_Audit::build_record()). This method additionally
-	 * audits the cases resolved BEFORE ever reaching the gate (unknown/expired
-	 * hold, ability no longer registered, unexpected exception), which would
-	 * otherwise leave no trace.
+	 * audits the cases resolved BEFORE ever reaching the gate (unknown/expired/
+	 * deduplicated hold, ability no longer registered, unexpected exception),
+	 * which would otherwise leave no trace.
 	 *
 	 * @param  string $hold_id  The hold_id returned in the original require_approval response.
-	 * @return mixed|WP_Error   The ability's execute() return value on success; WP_Error on
-	 *                          any failure. Never assumes success — fail-closed throughout.
+	 * @return mixed|WP_Error   The ability's execute() return value on a fresh execution;
+	 *                          WP_Error on any failure OR on a deduplicated no-op (code
+	 *                          'reeflex_hold_deduplicated' — distinct from both a fresh
+	 *                          execution and an ordinary deny). Never assumes success —
+	 *                          fail-closed throughout.
 	 */
 	public static function resubmit_hold( string $hold_id ) {
 		$entry = Reeflex_Holds_Store::get( $hold_id );
@@ -731,9 +797,42 @@ final class Reeflex_Gate {
 			);
 		}
 
-		$ability    = isset( $entry['ability'] ) ? (string) $entry['ability'] : '';
-		$input      = isset( $entry['input'] ) && is_array( $entry['input'] ) ? $entry['input'] : array();
-		$session_id = isset( $entry['session_id'] ) ? (string) $entry['session_id'] : '';
+		$ability       = isset( $entry['ability'] ) ? (string) $entry['ability'] : '';
+		$input         = isset( $entry['input'] ) && is_array( $entry['input'] ) ? $entry['input'] : array();
+		$session_id    = isset( $entry['session_id'] ) ? (string) $entry['session_id'] : '';
+		$envelope_hash = isset( $entry['envelope_hash'] ) ? (string) $entry['envelope_hash'] : '';
+		$created_ts    = isset( $entry['created_ts'] ) ? (string) $entry['created_ts'] : '';
+		$executed_ts   = isset( $entry['executed_ts'] ) ? (string) $entry['executed_ts'] : '';
+
+		// Double-execution dedup (0.1.6) — see method docblock step a.1. Two cases:
+		// (i) this EXACT hold_id already executed once (repeat/double-submit), or
+		// (ii) a DIFFERENT hold created "in the same wave" (companion — same
+		// envelope_hash + session_id, within a tight creation-time window) already
+		// executed. Either way the ability must not run again for this hold.
+		$already_executed_via = '' !== $executed_ts
+			? $hold_id
+			: Reeflex_Holds_Store::find_executed_companion_hold_id( $envelope_hash, $session_id, $created_ts, $hold_id );
+
+		if ( null !== $already_executed_via ) {
+			Reeflex_Holds_Store::delete( $hold_id );
+			self::audit_synthetic_resubmission(
+				$hold_id,
+				$ability,
+				$session_id,
+				'action already executed via hold ' . $already_executed_via .
+					' (same envelope_hash + session_id, created in the same wave — double-gating dedup, 0.1.6)',
+				'reeflex.adapter/hold_deduplicated'
+			);
+			return new WP_Error(
+				'reeflex_hold_deduplicated',
+				'This action was already executed via a companion hold for the same underlying call; no action taken.',
+				array(
+					'status'                => 200,
+					'reeflex_decision'      => 'deduplicated',
+					'already_executed_via'  => $already_executed_via,
+				)
+			);
+		}
 
 		// Fast local expiry check — core is still authoritative (it would deny with
 		// reeflex_hold_expired via the normal hold-validation path below regardless).
@@ -808,7 +907,21 @@ final class Reeflex_Gate {
 		// retried into an allow by calling resubmit_hold() again. The decision itself
 		// (allow or deny) was already audited inside execute() -> the wrapped
 		// permission_callback -> the normal per-decision audit (see method docblock).
-		Reeflex_Holds_Store::delete( $hold_id );
+		//
+		// Double-execution dedup (0.1.6): a non-WP_Error $result means the wrapped
+		// permission_callback returned true and WP_Ability::execute() actually ran
+		// do_execute() — i.e. the action executed. That entry is MARKED executed
+		// (kept, not deleted) so a companion hold for the same call, resubmitted
+		// later, can be recognised via step a.1 above and deduplicated instead of
+		// re-running the action. A WP_Error result means the gate itself denied
+		// this resubmission (nothing executed) — that entry is deleted exactly as
+		// before 0.1.6, since a genuinely failed/denied resubmission must still be
+		// retryable-as-a-fresh-attempt-only, never treated as "already executed".
+		if ( $result instanceof WP_Error ) {
+			Reeflex_Holds_Store::delete( $hold_id );
+		} else {
+			Reeflex_Holds_Store::mark_executed( $hold_id );
+		}
 
 		return $result;
 	}

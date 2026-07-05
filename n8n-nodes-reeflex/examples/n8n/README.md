@@ -21,10 +21,9 @@ infrastructure of your own.
 | 4 | [`demo4-nothing-gets-through.workflow.json`](./demo4-nothing-gets-through.workflow.json) ([README](./demo4-README.md)) | Some actions get a TERMINAL deny — no hold, no principal can ever approve it. |
 | 5 | [`demo5-watch-before-you-enforce.workflow.json`](./demo5-watch-before-you-enforce.workflow.json) ([README](./demo5-README.md)) | "Observe" is a WORKFLOW POSTURE (log the verdict, proceed anyway), not a reeflex-core mode. |
 
-Each demo's own README has the full story, the exact expected result, an
-honesty note about what is real versus what needs your own core, and a
-placeholder for the GIF that gets filmed later (T7) against these same
-workflows.
+Each demo's own README has the full story, the exact expected result, and an
+honesty note about what is real versus what needs your own core. A GIF of
+each demo running against api-dev is embedded at the bottom of this page.
 
 ## Prerequisites
 
@@ -95,7 +94,37 @@ endpoint cannot demonstrate are called out explicitly rather than faked:
 
 ## GIFs
 
-Every demo README has a `GIF (filmed at T7)` section with a placeholder and
-a short note on how to film it and what it should show. No GIF exists yet —
-recording happens against these exact workflow files, imported into a local
-n8n in Docker, once T7 starts.
+Each GIF below is a real run of that demo in the n8n editor against the live
+api-dev eval endpoint — the item flowing through the nodes and the verdict
+`reeflex-core` actually returned (nothing is mocked; the verdicts were
+cross-checked against the API).
+
+### 1 — Bulk Delete Guard
+Real risk, not row count: a small recoverable delete just passes; a large
+irreversible one holds for approval.
+
+![Reeflex n8n demo 1 — Bulk Delete Guard](img/demo1-bulk-delete-guard.gif)
+
+### 2 — Fragmentation Doesn't Work
+Splitting one big delete into ten small calls under the same session doesn't
+dodge the gate — the per-session ledger accumulates and flips to a hold
+mid-loop.
+
+![Reeflex n8n demo 2 — Fragmentation Doesn't Work](img/demo2-fragmentation-doesnt-work.gif)
+
+### 3 — The Approval Loop
+The full human-in-the-loop cycle: decide → HOLD → resolve → resubmit → allow.
+
+![Reeflex n8n demo 3 — The Approval Loop](img/demo3-the-approval-loop.gif)
+
+### 4 — Nothing Gets Through
+An irreversible + systemic production action is a terminal deny — no hold, no
+principal can approve it.
+
+![Reeflex n8n demo 4 — Nothing Gets Through](img/demo4-nothing-gets-through.gif)
+
+### 5 — Watch Before You Enforce
+Observe posture: log the would-be verdict, let the action proceed, enforce
+later. "Observe" is a workflow choice, not a core mode.
+
+![Reeflex n8n demo 5 — Watch Before You Enforce](img/demo5-watch-before-you-enforce.gif)

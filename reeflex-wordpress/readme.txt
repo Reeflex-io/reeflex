@@ -4,7 +4,7 @@ Tags: security, ai-agents, governance, woocommerce, abilities-api
 Requires at least: 6.9
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.1.3
+Stable tag: 0.1.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -211,6 +211,12 @@ immediately — no other changes needed.
 
 == Changelog ==
 
+= 0.1.5 =
+* Double-gating dedup: when an MCP-originated action is gated twice (the ability's own gate plus the MCP adapter layer) and both resulting holds are approved, the action now executes at most once instead of twice (dedup by envelope hash + session within a tight window). No change to allow / deny / approval behaviour otherwise.
+
+= 0.1.4 =
+* Hold-aware: require_approval responses carry hold_id; approved holds can be re-run (approval flow, core >= 0.1.5).
+
 = 0.1.3 =
 * Observe mode: a new Enforcement mode (enforce default / observe) via the REEFLEX_MODE constant or the Settings dropdown. In observe, every verdict is recorded to the audit log with mode=observe but nothing is enforced — the action always proceeds — and a core outage fails OPEN (never blocks the site). Enforce behaviour is unchanged.
 
@@ -246,6 +252,12 @@ immediately — no other changes needed.
 * Append-only JSONL audit log written before enforcement.
 
 == Upgrade Notice ==
+
+= 0.1.5 =
+Fixes a double-execution edge case: approving both holds of a double-gated MCP action now runs the action once, not twice. Safe update; no change to allow/deny/approval behaviour.
+
+= 0.1.4 =
+Held actions now carry a hold_id and can be resubmitted after a human approves them via reeflex-core's holds API (requires core >= 0.1.5; older core versions keep the previous terminal-hold behaviour). No change to deny/allow enforcement.
 
 = 0.1.3 =
 Adds observe mode: record verdicts without enforcing, so you can calibrate before enabling enforce. No change to enforce behaviour — safe to update.

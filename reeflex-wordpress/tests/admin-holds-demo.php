@@ -221,18 +221,38 @@ if ( null !== $hold_id ) {
 // ----------------------------------------------------------------------
 // T2-8: approve flow -- THIS call is the execution step (process_resolution()
 // both resolves on core AND calls Reeflex_Gate::resubmit_hold()).
+//
+// 0.1.6 double-execution dedup fix: a successfully executed entry is now MARKED
+// executed (kept, not deleted) so a companion hold for the same underlying call
+// can still be recognised and deduplicated later -- see
+// class-reeflex-holds-store.php's docblock ('executed_ts') and
+// class-reeflex-gate.php's resubmit_hold(). This assertion is updated
+// accordingly: the entry is no longer expected to be gone from the store, only
+// no longer listed as PENDING (Reeflex_Holds_Store::list_all() filters out
+// executed entries -- see T2-8b immediately below), and marked executed.
 // ----------------------------------------------------------------------
 $hold_id2 = create_fresh_hold_for_admin( 'core/delete-post', range( 801, 845 ) );
 if ( null !== $hold_id2 ) {
-	$notice2  = Reeflex_Admin::process_resolution( $hold_id2, 'approve', '', 'admin-tester' );
-	$cleared2 = null === Reeflex_Holds_Store::get( $hold_id2 );
+	$notice2            = Reeflex_Admin::process_resolution( $hold_id2, 'approve', '', 'admin-tester' );
+	$stored_after_exec2 = Reeflex_Holds_Store::get( $hold_id2 );
+	$marked_executed2   = is_array( $stored_after_exec2 ) && ! empty( $stored_after_exec2['executed_ts'] );
 	check(
-		'T2-8. approve: core resolves + resubmit_hold() executes + cleared',
-		'success' === $notice2['type'] && $cleared2,
+		'T2-8. approve: core resolves + resubmit_hold() executes + marked executed',
+		'success' === $notice2['type'] && $marked_executed2,
 		$notice2['message']
 	);
+
+	// T2-8b: an executed hold is no longer PENDING -- it must not appear in the
+	// "Pending approvals" list (list_all() filters entries with a non-empty
+	// executed_ts), even though the raw entry itself still exists for dedup.
+	$still_listed_as_pending = array_key_exists( $hold_id2, Reeflex_Holds_Store::list_all() );
+	check(
+		'T2-8b. executed hold no longer appears in the pending-approvals list',
+		! $still_listed_as_pending
+	);
 } else {
-	check( 'T2-8. approve: core resolves + resubmit_hold() executes + cleared', false, 'could not create fresh hold' );
+	check( 'T2-8. approve: core resolves + resubmit_hold() executes + marked executed', false, 'could not create fresh hold' );
+	check( 'T2-8b. executed hold no longer appears in the pending-approvals list', false, 'could not create fresh hold' );
 }
 
 // ----------------------------------------------------------------------

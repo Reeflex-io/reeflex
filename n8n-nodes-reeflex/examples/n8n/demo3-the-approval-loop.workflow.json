@@ -71,18 +71,18 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{$credentials.coreUrl}}/v1/holds/{{$json.reeflex.hold_id}}/resolve",
+        "url": "=https://api-dev.reeflex.io/v1/holds/{{$json.reeflex.hold_id}}/resolve",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "reeflexApi",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { decision: \"approve\", principal: { type: \"automation\", id: \"n8n-demo3-approval-loop\" }, reason: \"approved via n8n demo3 - the approval loop\" } }}",
+        "jsonBody": "={{ { decision: \"approve\", principal: { type: \"human\", id: \"demo3-approver\" }, reason: \"approved via n8n demo3 - the approval loop\" } }}",
         "options": {
           "allowUnauthorizedCerts": true
         }
       },
       "id": "d3000003-0005-4003-8003-000000000005",
-      "name": "Resolve hold (automation principal)",
+      "name": "Resolve hold (human principal)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [900, 400],
@@ -92,7 +92,7 @@
           "name": "Reeflex Core API account"
         }
       },
-      "notes": "Records the approval on reeflex-core (POST /v1/holds/{id}/resolve) using the SAME 'Reeflex Core API' credential as the Reeflex Gate node above (Authentication: Predefined Credential Type -> Reeflex API), so {{$credentials.coreUrl}} resolves here too and no secret is duplicated in this node's parameters. 'allowUnauthorizedCerts' is hardcoded true because this demo is preconfigured against api-dev's staging cert -- SHORTCUT: if you point this at your own core with a valid certificate, uncheck this option (upgrade path: read it from a credential field instead, once n8n exposes a typed way to do that from a generic-auth credential -- see the same known limitation noted in credentials/ReeflexApi.credentials.ts). This step alone does NOT re-run the guarded action -- see the next node. 'automation' is one of three principal types (human/agent/automation, see reeflex-core README 'Approval principals'); resolving with the wrong type for a rule not covered by the operator's REEFLEX_RESOLUTION_POLICY returns 403 principal_type_not_allowed."
+      "notes": "Records the approval on reeflex-core (POST /v1/holds/{id}/resolve) using the SAME 'Reeflex Core API' credential as the Reeflex Gate node above (Authentication: Predefined Credential Type -> Reeflex API), so the Bearer token is injected from that credential and no secret is duplicated in this node's parameters. NOTE on the URL: the core host is hardcoded to https://api-dev.reeflex.io here (NOT read from the credential) because n8n does not expose credential fields such as {{$credentials.coreUrl}} to an HTTP Request node's URL parameter under predefinedCredentialType -- the Reeflex Gate node reads its URL from the credential internally, but these raw HTTP Request nodes cannot. If you point the credential at your own core, change this URL and the resubmit URL below to match (upgrade path: have the Gate node emit reeflex.core_url in its output so these nodes can reference it). 'allowUnauthorizedCerts' is hardcoded true because this demo is preconfigured against api-dev's staging cert -- SHORTCUT: if you point this at your own core with a valid certificate, uncheck this option (upgrade path: read it from a credential field instead, once n8n exposes a typed way to do that from a generic-auth credential -- see the same known limitation noted in credentials/ReeflexApi.credentials.ts). This step alone does NOT re-run the guarded action -- see the next node. The principal type is 'human' because that is the only type api-dev's default resolution policy accepts out of the box; the id ('demo3-approver') MUST differ from the acting agent (agent:n8n-demo3-approval-loop) or core returns 403 actor_is_approver (the approver can never be the actor). 'human' is one of three principal types (human/agent/automation, see reeflex-core README 'Approval principals'); to resolve with 'agent' or 'automation' the operator must first allow that type for this rule via REEFLEX_RESOLUTION_POLICY, otherwise core returns 403 principal_type_not_allowed."
     },
     {
       "parameters": {},
@@ -106,12 +106,12 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{$credentials.coreUrl}}/v1/decide",
+        "url": "=https://api-dev.reeflex.io/v1/decide",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "reeflexApi",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ {...$('Reeflex Gate').item.json.reeflex.envelope, approval: { present: true, hold_id: $('Reeflex Gate').item.json.reeflex.hold_id } } }}",
+        "jsonBody": "={{ {...$('Reeflex Gate').item.json.reeflex.envelope, approval: { present: true, hold_id: $('Reeflex Gate').item.json.reeflex.hold_id }, meta: { ...$('Reeflex Gate').item.json.reeflex.envelope.meta, nonce: 'n8n-resubmit-' + $now.toMillis() + '-' + Math.floor(Math.random() * 1000000) } } }}",
         "options": {
           "allowUnauthorizedCerts": true
         }
@@ -127,7 +127,7 @@
           "name": "Reeflex Core API account"
         }
       },
-      "notes": "Reuses reeflex.envelope from the Reeflex Gate node verbatim (action/axes/magnitude/target byte-identical, per SPEC's hash-binding projection), just flips approval.present/hold_id. Returns allow if the hold is now approved and hasn't expired/been consumed; deny with a machine-readable reason otherwise (reeflex_hold_not_approved / reeflex_hold_expired / reeflex_hold_consumed / reeflex_hold_envelope_mismatch -- see reeflex-core README, 'Approval-validation deny reason codes')."
+      "notes": "Reuses reeflex.envelope from the Reeflex Gate node: action/axes/magnitude/target stay BYTE-IDENTICAL (that is the projection core hash-binds, per SPEC), and only two things change -- approval.present/hold_id are set, and meta.nonce is regenerated to a fresh value. The fresh nonce is REQUIRED: core's replay protection rejects a repeated meta.nonce with HTTP 400 invalid_envelope 'replay: nonce already seen', so spreading the original envelope verbatim (it still carries the first /v1/decide call's nonce) would fail here. Regenerating meta.nonce keeps the hash-bound action fields intact while satisfying replay protection -- exactly what reeflex-core's own HIL resubmit tests do (test_hil.py sets a new meta.nonce on every resubmit). Returns allow if the hold is now approved and hasn't expired/been consumed; deny with a machine-readable reason otherwise (reeflex_hold_not_approved / reeflex_hold_expired / reeflex_hold_consumed / reeflex_hold_envelope_mismatch -- see reeflex-core README, 'Approval-validation deny reason codes')."
     },
     {
       "parameters": {
@@ -180,11 +180,11 @@
     "Reeflex Gate": {
       "main": [
         [{ "node": "Unexpected direct allow", "type": "main", "index": 0 }],
-        [{ "node": "Resolve hold (automation principal)", "type": "main", "index": 0 }],
+        [{ "node": "Resolve hold (human principal)", "type": "main", "index": 0 }],
         [{ "node": "Unexpected deny (direct)", "type": "main", "index": 0 }]
       ]
     },
-    "Resolve hold (automation principal)": {
+    "Resolve hold (human principal)": {
       "main": [[{ "node": "Resubmit to /v1/decide (same envelope + approval)", "type": "main", "index": 0 }]]
     },
     "Resubmit to /v1/decide (same envelope + approval)": {
@@ -200,6 +200,6 @@
   "pinData": {},
   "meta": {
     "templateCredsSetupCompleted": false,
-    "description": "Reeflex n8n demo 3/5 (examples/n8n/, see top-level README.md for the index + credential setup). Teaches: the full human-in-the-loop cycle -- decide (HELD, hold_id returned) -> resolve the hold with an 'automation' principal (POST /v1/holds/{id}/resolve) -> resubmit the SAME envelope with approval.present=true -> allow. Every HTTP Request node reuses the ONE 'Reeflex Core API' credential (Predefined Credential Type) instead of environment variables, so importing this demo needs only the one credential from the top README. Fully works against the live api-dev eval endpoint -- see demo3-README.md, which also documents (doc-only, not in this JSON) the webhook-trigger variant (REEFLEX_WEBHOOK_URL) for operators running their own core."
+    "description": "Reeflex n8n demo 3/5 (examples/n8n/, see top-level README.md for the index + credential setup). Teaches: the full human-in-the-loop cycle -- decide (HELD, hold_id returned) -> resolve the hold with a 'human' principal (POST /v1/holds/{id}/resolve) -> resubmit the SAME envelope with approval.present=true -> allow. Every HTTP Request node reuses the ONE 'Reeflex Core API' credential (Predefined Credential Type) instead of environment variables, so importing this demo needs only the one credential from the top README. Fully works against the live api-dev eval endpoint -- see demo3-README.md, which also documents (doc-only, not in this JSON) the webhook-trigger variant (REEFLEX_WEBHOOK_URL) for operators running their own core."
   }
 }
