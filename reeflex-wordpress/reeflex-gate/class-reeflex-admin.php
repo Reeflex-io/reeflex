@@ -37,20 +37,31 @@
  *   as here, per the HIL Phase 2 T2 brief's explicit instruction to bake this in
  *   rather than let an operator assume approval alone is inert.
  *
- * HONEST NOTE — MCP-originated holds (Hook B):
+ * HONEST NOTE — MCP-originated holds (Hook B) — FIXED in 0.1.6:
  *   An MCP-originated ability call can be gated twice: Hook A
  *   (wp_register_ability_args, bound to the ability's own execute()) and Hook B
  *   (mcp_adapter_pre_tool_call, the MCP tool-call layer) both independently call
  *   core (see class-reeflex-gate.php's own docblock, "Double-gating"). If BOTH
- *   produce a require_approval, they are stored as two SEPARATE hold_ids
- *   (Reeflex_Gate::store_pending_hold() is called from both hooks with no dedup —
- *   documented, pre-existing P1-5). Reeflex_Gate::resubmit_hold() only ever calls
- *   wp_get_ability(...)->execute(...), which fires Hook A — so approving a Hook B
- *   hold from this page resolves it on core (closing that record) but does NOT
- *   itself run anything; only the matching Hook A hold_id for the same call
- *   actually executes the action when approved here. This page cannot tell the two
- *   apart (both look like an ordinary hold entry), so this limitation is surfaced
- *   as static copy on the page rather than silently mishandled.
+ *   produce a require_approval, they are STILL stored as two SEPARATE hold_ids
+ *   (Reeflex_Gate::store_pending_hold() is called from both hooks with no dedup at
+ *   CREATION time — documented, pre-existing P1-5, unchanged) — this page can show
+ *   what looks like two rows for the same underlying call.
+ *
+ *   What changed in 0.1.6: approving BOTH of those rows here no longer runs the
+ *   action twice. Reeflex_Gate::resubmit_hold() now deduplicates holds created
+ *   "in the same wave" — same envelope_hash, same session_id, created within a
+ *   tight time window of each other (Reeflex_Holds_Store's 'executed_ts' field
+ *   and find_executed_companion_hold_id() — see that class's docblock): the
+ *   FIRST approved hold for a given underlying call actually executes the
+ *   ability; approving the SECOND (companion) hold afterward resolves it on
+ *   core and closes the local record, but is a safe no-op — it will NOT execute
+ *   anything again. process_resolution() reports this outcome honestly (a
+ *   distinct success message, not a plain "executed" or a failure) rather than
+ *   pretending nothing happened. See Reeflex_Gate::resubmit_hold()'s own
+ *   docblock for the residual scoping risk (a deliberate identical repeat
+ *   submitted in the SAME MCP session within that same tight window would also
+ *   be deduplicated — a narrow, documented trade-off, not a general-purpose
+ *   idempotency guarantee for genuinely separate calls).
  *
  * Security:
  *   - Every entry point (render_page(), handle_resolve()) checks
@@ -224,7 +235,7 @@ final class Reeflex_Admin {
 			</p>
 			<p class="description">
 				<?php echo esc_html__(
-					'Note on MCP-originated actions: a call made through the MCP Adapter can be gated twice (defense-in-depth) and may show up here as two separate holds for the same underlying call. Only the hold tied directly to the ability\'s own execution actually runs the action when approved; a companion hold for the same call can still be approved or rejected here, but approving it will not itself execute anything beyond closing that record on core.',
+					'Note on MCP-originated actions: a call made through the MCP Adapter can be gated twice (defense-in-depth) and may show up here as two separate holds for the same underlying call. If you approve both, the underlying action executes AT MOST ONCE: the first approval runs it; approving the companion hold afterward is a safe no-op (it resolves and closes that record but does not run the action again).',
 					'reeflex-gate'
 				); ?>
 			</p>
@@ -563,6 +574,22 @@ final class Reeflex_Admin {
 		$result = Reeflex_Gate::resubmit_hold( $hold_id );
 
 		if ( $result instanceof WP_Error ) {
+			// Double-execution dedup (0.1.6): this hold's action already ran via a
+			// companion hold for the same underlying call (see class docblock,
+			// "HONEST NOTE — MCP-originated holds (Hook B) — FIXED in 0.1.6").
+			// Nothing executed on THIS call, but that is the CORRECT outcome, not a
+			// failure — report it as such rather than the generic "did not execute"
+			// error message below.
+			if ( 'reeflex_hold_deduplicated' === $result->get_error_code() ) {
+				return array(
+					'type'    => 'success',
+					'message' => __(
+						'Approved on reeflex-core. This action was already executed via a companion hold for the same underlying call, so nothing was executed again here (expected double-gating dedup behaviour, not an error).',
+						'reeflex-gate'
+					),
+				);
+			}
+
 			return array(
 				'type'    => 'error',
 				'message' => sprintf(

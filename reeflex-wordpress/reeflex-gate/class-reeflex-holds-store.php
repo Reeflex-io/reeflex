@@ -27,12 +27,32 @@
  *   rule_id        string   the rule that fired (decision.rule)
  *   created_ts     string   ISO 8601 UTC, when the adapter stored the entry
  *   expires_ts     string   ISO 8601 UTC, copied from core's response
- *   session_id     string   the envelope's agent.session_id
+ *   session_id     string   the envelope's agent.session_id. For an MCP-originated
+ *                           call, this is resolved from the Mcp-Session-Id HTTP
+ *                           header (Reeflex_Normalizer::resolve_session_id(),
+ *                           source #1) — the SAME header value for Hook A and
+ *                           Hook B, since both are handling the SAME incoming HTTP
+ *                           request. Used (alongside envelope_hash + created_ts)
+ *                           for the resubmission double-execution dedup scope —
+ *                           see find_executed_companion_hold_id() below.
+ *   executed_ts    string   ISO 8601 UTC, set by Reeflex_Holds_Store::mark_executed()
+ *                           the moment Reeflex_Gate::resubmit_hold() confirms the
+ *                           underlying ability actually ran for THIS hold_id (see that
+ *                           method's docblock). '' (absent) until then. Once set, the
+ *                           entry is deliberately KEPT (not delete()'d) until sweep()
+ *                           drops it on the normal expires_ts+grace schedule, so a
+ *                           companion hold approved later can still be recognised as
+ *                           "already executed" and deduplicated instead of re-running
+ *                           the action. A hold whose resubmission was DENIED/failed
+ *                           (never executed) is still delete()'d as before — only a
+ *                           confirmed execution is preserved this way.
  *
  * Security note: this store never contains an approval decision or identity —
- * only the adapter's own record of an attempt that is still pending. The only
- * consumer that can turn a hold into an allow is reeflex-core (SPEC §5.1); this
- * class cannot forge that outcome.
+ * only the adapter's own record of an attempt that is still pending (or, once
+ * executed_ts is set, a short-lived record of an attempt that already ran, kept
+ * only so a companion hold can be deduplicated). The only consumer that can turn
+ * a hold into an allow is reeflex-core (SPEC §5.1); this class cannot forge that
+ * outcome.
  *
  * @package ReeflexWordPress
  * @since   0.1.4
@@ -119,15 +139,158 @@ final class Reeflex_Holds_Store {
 	}
 
 	/**
-	 * List all currently-stored pending hold entries (sweeping first).
+	 * Mark one entry as executed (the underlying ability actually ran for this
+	 * hold_id), WITHOUT deleting it.
+	 *
+	 * Called by Reeflex_Gate::resubmit_hold() the moment it confirms a fresh
+	 * execution (never on a gate-enforced deny — see that method's docblock).
+	 * The entry is deliberately kept (not delete()'d) so a companion hold sharing
+	 * the same envelope_hash + session_id (within the tight window — see
+	 * find_executed_companion_hold_id()), resubmitted later, can be recognised as
+	 * "already executed" and deduplicated instead of re-running the action. It is
+	 * dropped, like any other entry, once sweep() finds it past its own
+	 * expires_ts + grace window — nothing lingers forever.
+	 *
+	 * A no-op if the hold_id is unknown (defensive; should not happen in practice
+	 * since the caller just loaded this same entry via get()).
+	 *
+	 * @param  string $hold_id
+	 * @return void
+	 */
+	public static function mark_executed( string $hold_id ): void {
+		$all = self::raw_all();
+		if ( isset( $all[ $hold_id ] ) && is_array( $all[ $hold_id ] ) ) {
+			$all[ $hold_id ]['executed_ts'] = gmdate( 'Y-m-d\TH:i:s\Z' );
+			self::persist( $all );
+		}
+	}
+
+	/**
+	 * How close together (in seconds) two holds' created_ts must be to be
+	 * considered "created in the same wave" for double-execution dedup purposes.
+	 *
+	 * Rationale: Hook A and Hook B, for one real MCP-originated call, run back to
+	 * back within a single synchronous PHP request — milliseconds apart — so a
+	 * window of this size comfortably covers real Hook A/Hook B pairing (with
+	 * generous margin for a slow OPA subprocess or network hiccup) while staying
+	 * far tighter than any realistic gap between two DELIBERATELY separate calls
+	 * (which involve, at minimum, a human/agent formulating and issuing a second,
+	 * distinct request). See find_executed_companion_hold_id()'s own docblock for
+	 * the residual risk this does not eliminate.
+	 *
+	 * @var int
+	 */
+	private const COMPANION_WINDOW_SECONDS = 30;
+
+	/**
+	 * Find another hold entry (different hold_id) that was created "in the same
+	 * wave" as the given hold — same envelope_hash, same session_id, and created
+	 * within COMPANION_WINDOW_SECONDS of it — and has already been marked executed.
+	 *
+	 * Scoping rationale (double-execution dedup — see class-reeflex-gate.php
+	 * "Double-gating" and Reeflex_Gate::resubmit_hold()):
+	 *   envelope_hash alone is NOT enough to identify "the same call" — two
+	 *   genuinely separate, deliberate, identical actions (e.g. the same bulk
+	 *   delete performed twice on purpose) share the same envelope_hash by
+	 *   design (SPEC's own hash projection covers only {action,axes,magnitude,
+	 *   target} — it deliberately excludes session/nonce/hold_id). Three
+	 *   conditions must ALL hold before two holds are treated as companions of
+	 *   one underlying call:
+	 *     1. envelope_hash matches — same action, same axes, same magnitude,
+	 *        same target.
+	 *     2. session_id matches — for an MCP-originated call this is the
+	 *        Mcp-Session-Id HTTP header (Reeflex_Normalizer::resolve_session_id(),
+	 *        source #1), identical for Hook A and Hook B because both are
+	 *        handling the SAME incoming HTTP request.
+	 *     3. created_ts within COMPANION_WINDOW_SECONDS — Hook A and Hook B fire
+	 *        milliseconds apart for one real call; this rules out two unrelated
+	 *        holds that merely happen to share an envelope_hash AND a session_id
+	 *        (e.g. two different bulk actions submitted minutes apart in one long
+	 *        MCP session) from ever being conflated.
+	 *
+	 * RESIDUAL RISK (documented per the fix's own design brief, not eliminated):
+	 *   a human/agent who deliberately submits the SAME action twice on purpose,
+	 *   in the SAME MCP session, within COMPANION_WINDOW_SECONDS of each other,
+	 *   would have the second one wrongly deduplicated as if it were a companion
+	 *   of the first. This is judged an acceptable, narrow trade-off — a genuine
+	 *   duplicate submission within a ~30-second window of the first is far more
+	 *   likely to itself be an accidental double-submit than a considered second
+	 *   decision — but it is a real, deliberate scoping choice, not an oversight.
+	 *
+	 * Fails safe (returns null / no dedup) when envelope_hash or session_id is
+	 * empty, or created_ts is missing/unparseable on either side: the hold simply
+	 * behaves as it did before this fix (still correctly single-use via its own
+	 * delete()-on-terminal-outcome path).
+	 *
+	 * @param  string $envelope_hash    The querying hold's envelope_hash.
+	 * @param  string $session_id       The querying hold's session_id.
+	 * @param  string $created_ts       The querying hold's created_ts (ISO 8601 UTC).
+	 * @param  string $exclude_hold_id  The querying hold's own hold_id (never
+	 *                                  matched against itself here — the caller
+	 *                                  checks its OWN executed_ts separately).
+	 * @return string|null  The companion hold_id, or null if none found.
+	 */
+	public static function find_executed_companion_hold_id(
+		string $envelope_hash,
+		string $session_id,
+		string $created_ts,
+		string $exclude_hold_id
+	): ?string {
+		$query_epoch = self::parse_iso8601( $created_ts );
+		if ( '' === $envelope_hash || '' === $session_id || 0 === $query_epoch ) {
+			return null;
+		}
+
+		self::sweep();
+		$all = self::raw_all();
+
+		foreach ( $all as $candidate_hold_id => $entry ) {
+			if ( $candidate_hold_id === $exclude_hold_id || ! is_array( $entry ) ) {
+				continue;
+			}
+			$entry_hash       = isset( $entry['envelope_hash'] ) ? (string) $entry['envelope_hash'] : '';
+			$entry_session    = isset( $entry['session_id'] ) ? (string) $entry['session_id'] : '';
+			$entry_exec_ts    = isset( $entry['executed_ts'] ) ? (string) $entry['executed_ts'] : '';
+			$entry_created_ts = isset( $entry['created_ts'] ) ? (string) $entry['created_ts'] : '';
+			$entry_epoch      = self::parse_iso8601( $entry_created_ts );
+
+			if (
+				$entry_hash === $envelope_hash
+				&& $entry_session === $session_id
+				&& '' !== $entry_exec_ts
+				&& 0 !== $entry_epoch
+				&& abs( $entry_epoch - $query_epoch ) <= self::COMPANION_WINDOW_SECONDS
+			) {
+				return (string) $candidate_hold_id;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * List all currently-stored PENDING hold entries (sweeping first).
 	 *
 	 * For T2 (the wp-admin holds surface): keyed by hold_id, same shape as get().
+	 *
+	 * Excludes entries with a non-empty executed_ts (double-execution dedup,
+	 * 0.1.6): once resubmit_hold() confirms an entry's action actually ran, the
+	 * entry is kept internally — see mark_executed() — ONLY so a companion hold
+	 * for the same underlying call can still be recognised and deduplicated; it
+	 * is no longer pending and has nothing left for an operator to approve or
+	 * reject, so it is filtered out of the "Pending approvals" list here rather
+	 * than showing a stale, already-resolved row.
 	 *
 	 * @return array<string,array>  hold_id => entry
 	 */
 	public static function list_all(): array {
 		self::sweep();
-		return self::raw_all();
+		return array_filter(
+			self::raw_all(),
+			static function ( $entry ): bool {
+				return is_array( $entry ) && empty( $entry['executed_ts'] );
+			}
+		);
 	}
 
 	/**

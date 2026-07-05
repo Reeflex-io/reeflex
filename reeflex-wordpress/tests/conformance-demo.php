@@ -245,16 +245,24 @@ printf(
 $hold_all_pass = $hold_all_pass && $h4_pass;
 
 // H5: Reeflex_Gate::resubmit_hold() re-runs the ORIGINAL ability+input -> executes.
+//
+// 0.1.6 double-execution dedup fix: a successfully executed entry is now MARKED
+// executed (Reeflex_Holds_Store::mark_executed()) rather than delete()'d, so a
+// companion hold for the same underlying call can still be recognised and
+// deduplicated later (see class-reeflex-holds-store.php's docblock, 'executed_ts').
+// This assertion is updated accordingly: get() must still find the entry, now
+// carrying a non-empty executed_ts, instead of the pre-0.1.6 "store cleared".
 $h5_pass = false;
 if ( $h4_pass ) {
-	$resubmit_result = Reeflex_Gate::resubmit_hold( $hold_id );
-	$executed        = is_array( $resubmit_result ) && ! empty( $resubmit_result['reeflex_harness_executed'] );
-	$store_cleared   = null === Reeflex_Holds_Store::get( $hold_id );
-	$h5_pass         = $executed && $store_cleared;
+	$resubmit_result   = Reeflex_Gate::resubmit_hold( $hold_id );
+	$executed          = is_array( $resubmit_result ) && ! empty( $resubmit_result['reeflex_harness_executed'] );
+	$stored_after_exec = Reeflex_Holds_Store::get( $hold_id );
+	$marked_executed   = is_array( $stored_after_exec ) && ! empty( $stored_after_exec['executed_ts'] );
+	$h5_pass           = $executed && $marked_executed;
 	printf(
 		"%-50s | %-26s | %s\n",
 		'H5. resubmit_hold() -> ability executed',
-		$executed ? ( $store_cleared ? 'executed, store cleared' : 'executed, STORE NOT CLEARED' )
+		$executed ? ( $marked_executed ? 'executed, marked executed (0.1.6)' : 'executed, NOT MARKED EXECUTED' )
 			: ( ( $resubmit_result instanceof WP_Error ) ? $resubmit_result->get_error_code() : 'UNEXPECTED' ),
 		$h5_pass ? 'PASS' : 'FAIL'
 	);
@@ -274,13 +282,15 @@ printf(
 );
 $hold_all_pass = $hold_all_pass && $h6_pass;
 
-// H7: resubmitting the SAME hold a second time fails (single-use — the adapter's
-// own store already deleted the entry on H5's success, so this is a LOCAL
-// reeflex_hold_unknown rather than a round-trip to core's reeflex_hold_consumed;
-// either way the hold cannot be resubmitted into a second allow).
+// H7: resubmitting the SAME hold a second time fails (single-use — an approval
+// stays single-use even under the new 0.1.6 "mark executed, don't delete" model.
+// Since the entry is no longer deleted on H5's success, this is now the SAME
+// double-execution dedup path a companion hold would hit — 'reeflex_hold_deduplicated'
+// — rather than the pre-0.1.6 local 'reeflex_hold_unknown'; either way the hold
+// cannot be resubmitted into a second allow, and the ability must not run again).
 if ( $h5_pass ) {
 	$second_result = Reeflex_Gate::resubmit_hold( $hold_id );
-	$h7_pass       = ( $second_result instanceof WP_Error );
+	$h7_pass       = ( $second_result instanceof WP_Error ) && 'reeflex_hold_deduplicated' === $second_result->get_error_code();
 	printf(
 		"%-50s | %-26s | %s\n",
 		'H7. resubmit already-consumed hold -> fails',
