@@ -63,16 +63,20 @@ expected -- check the originating adapter for its own resubmission /
 | Variable                | Required | Default                   | Purpose |
 |--------------------------|----------|----------------------------|---------|
 | `REEFLEX_CORE_URL`       | no       | `http://127.0.0.1:8080`   | `reeflex-core` base URL |
-| `REEFLEX_TOKEN`          | no       | unset                      | optional bearer token; adds `Authorization: Bearer <token>` to every request. Never logged. |
+| `REEFLEX_TOKEN`          | no       | unset                      | optional bearer token; adds `Authorization: Bearer <token>` to every request. Never logged. Holds the same `reeflex-core` bearer token the other adapters call `REEFLEX_CORE_TOKEN` — see the naming note below. |
 | `REEFLEX_PRINCIPAL`      | only for `resolve_hold` | unset      | `"type:id"` of the resolving identity, e.g. `human:leo` or `agent:triage-bot`. Split on the *first* colon (an id may itself contain colons). `list_holds`, `get_hold`, and `get_freeze_status` do not need it. |
 | `REEFLEX_VERIFY_SSL`     | no       | `true` (full TLS verification) | set to `0`/`false`/`no`/`off` (case-insensitive) to **disable** TLS certificate verification -- dev/self-signed endpoints only, at the operator's own risk. Same env name and semantics as `reeflex-claude` and the WordPress adapter, per the project's standing TLS-verify-opt-out rule. |
 | `REEFLEX_HOLDS_TIMEOUT`  | no       | `10` (seconds)              | hard socket timeout for every HTTP request to core; this package never issues an unbounded request |
 
-> **Naming note (flagged for review):** the other two Reeflex adapters
-> (`reeflex-claude`, `reeflex-wordpress`) use `REEFLEX_CORE_TOKEN` for the
-> bearer token. This package uses `REEFLEX_TOKEN` per its own brief. If
-> cross-surface env-var parity is wanted, this should be reconciled in a
-> follow-up change.
+> **Naming note.** `REEFLEX_CORE_TOKEN` is the project-wide name for the
+> `reeflex-core` bearer token, used by the `reeflex-claude` and
+> `reeflex-wordpress` adapters. `reeflex-holds` is the one exception: it
+> reads the *same* bearer token, but from **`REEFLEX_TOKEN`** instead, per
+> its own original brief. Same credential, same purpose, just a different
+> env var name for this one package — set `REEFLEX_TOKEN` here to whatever
+> value the other adapters put in `REEFLEX_CORE_TOKEN`. A non-breaking
+> unification (accepting `REEFLEX_CORE_TOKEN` with `REEFLEX_TOKEN` as a
+> fallback) is a candidate for a future 0.1.1, not implemented here.
 
 ## Why the `mcp` SDK
 
@@ -92,17 +96,17 @@ change to `reeflex-core`'s or the other adapters' dependency posture.
 ## Install
 
 ```bash
+pip install reeflex-holds
+```
+
+`reeflex-holds` is published on PyPI (`reeflex-holds==0.1.0`). To work from a
+local checkout instead (for development, or to track `main`):
+
+```bash
 git clone https://github.com/Reeflex-io/reeflex.git
 cd reeflex/reeflex-holds
 pip install -e .
 ```
-
-> **PyPI status:** `reeflex-holds` is **not yet published to PyPI**, and the
-> package name is **not yet reserved** there (only `reeflex`, `reeflex-core`,
-> and `reeflex-claude` are, per project records). `pip install -e .` from a
-> local checkout is the only supported install path today. Publishing to
-> PyPI is a GATE (explicit human GO required) and is out of scope for this
-> change.
 
 ## Running it directly
 
@@ -140,10 +144,10 @@ Developer -> Edit Config), using the **absolute path** to your checkout:
 
 Notes:
 - `command` must resolve to a Python that has this package installed
-  (`pip install -e .` from `reeflex-holds/`, as above) -- use an absolute
-  interpreter path (e.g. `"C:\\path\\to\\venv\\Scripts\\python.exe"` or
-  `/path/to/venv/bin/python`) if `python` is not reliably on Claude
-  Desktop's `PATH`.
+  (`pip install reeflex-holds`, or `pip install -e .` from a local
+  checkout, as above) -- use an absolute interpreter path (e.g.
+  `"C:\\path\\to\\venv\\Scripts\\python.exe"` or `/path/to/venv/bin/python`)
+  if `python` is not reliably on Claude Desktop's `PATH`.
 - Leave `REEFLEX_TOKEN` empty (or omit it) if your core has no
   `REEFLEX_AUTH_TOKEN` configured.
 - Set `REEFLEX_VERIFY_SSL` to `false` only against a dev/self-signed core
@@ -273,8 +277,11 @@ T7 conformance step, not in this package's unit test suite.
   `list_holds` if a queue ever exceeds core's page size (currently 100).
 - **`get_freeze_status` is best-effort only** -- see the section above.
   UPGRADE: call a real freeze-status endpoint once `reeflex-core` ships one.
-- **`REEFLEX_TOKEN` vs `REEFLEX_CORE_TOKEN`** -- see the naming note in
-  Config above.
+- **`REEFLEX_TOKEN` (this package) vs `REEFLEX_CORE_TOKEN`** (`reeflex-claude`,
+  `reeflex-wordpress`) -- same bearer token, different env var name for this
+  package only; see the naming note in Config above. UPGRADE: accept
+  `REEFLEX_CORE_TOKEN` with `REEFLEX_TOKEN` as a fallback in a future
+  non-breaking release.
 - **stdio transport only.** FastMCP also supports `sse` and
   `streamable-http`; this package only wires up `stdio` (matching the brief
   and the primary Claude Desktop use case). UPGRADE: expose `transport` as a

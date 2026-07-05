@@ -87,7 +87,7 @@ flowchart LR
     G -- "Action Envelope" --> C["reeflex-core<br/>POST /v1/decide"]
     C --> D{Decision}
     D -- allow --> E["✅ Ability runs"]
-    D -- hold --> H["✋ WP_Error — held for a human"]
+    D -- hold --> H["✋ WP_Error — held for approval"]
     D -- deny --> B["⛔ WP_Error — blocked"]
     style D fill:#f6f8fa,stroke:#57606a
 ```

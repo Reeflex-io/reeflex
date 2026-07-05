@@ -61,6 +61,10 @@ and the `REEFLEX_*` keys in the `env` block are written or updated. A
 corrupt existing `settings.json` is left untouched and `setup` exits `1`
 with an explanation — it never guesses or overwrites.
 
+Run `setup` in an interactive terminal (TTY) to be prompted for each value
+below; in a non-interactive or piped context (CI, scripts, no TTY) it
+silently skips the prompts and uses the defaults shown — no error, no hang.
+
 Non-interactive flags (all optional; omitted ones fall back to an
 interactive prompt when running in a terminal, otherwise to the default
 shown):
