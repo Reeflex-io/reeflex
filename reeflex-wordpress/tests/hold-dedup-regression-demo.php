@@ -144,7 +144,20 @@ $ability_obj = wp_get_ability( $ability );
 // ------------------------------------------------------------------
 // D1: first call on the action produces a hold (simulates Hook A's own
 // require_approval for one MCP-originated call).
+//
+// Reeflex_Gate::reset_request_cache() (fan-out fix, 0.1.7): D1 and D2 below
+// each stand in for a SEPARATE, independent decide() code path for the SAME
+// underlying MCP-originated call — Hook A's own decision, and (in real
+// production) Hook B's own, entirely separate decision (gate_mcp_tool(),
+// which does NOT share Hook A's request-scoped decision memo at all — see
+// class-reeflex-gate.php's "Double-gating" docblock). Resetting before each
+// keeps this harness's "call execute() twice" simulation faithful to that:
+// without the reset, the SAME Hook-A-only memo would collapse D1+D2 into one
+// decision, which is the correct NEW behaviour for two REAL repeat
+// invocations of Hook A alone within one request, but would misrepresent
+// the (unchanged, still-real) Hook A + Hook B double-gating this test covers.
 // ------------------------------------------------------------------
+Reeflex_Gate::reset_request_cache();
 $result1 = $ability_obj->execute( $input );
 $d1_pass = ( $result1 instanceof WP_Error ) && 'reeflex_hold' === $result1->get_error_code();
 $hold_1  = null;
@@ -158,8 +171,9 @@ check( 'D1. first call on the action produces a hold (Hook A)', $d1_pass && null
 // D2: the SAME ability+input, submitted a second time, is an independent
 // /v1/decide call and produces a SECOND, DIFFERENT hold_id (simulates Hook B
 // independently gating the SAME MCP-originated call — see class-reeflex-gate.php
-// "Double-gating").
+// "Double-gating"). Reset first — see D1's comment above.
 // ------------------------------------------------------------------
+Reeflex_Gate::reset_request_cache();
 $result2 = $ability_obj->execute( $input );
 $d2_pass = ( $result2 instanceof WP_Error ) && 'reeflex_hold' === $result2->get_error_code();
 $hold_2  = null;
@@ -249,7 +263,15 @@ check(
 // over-suppress legitimate, unrelated calls that merely share an
 // envelope_hash (see Reeflex_Holds_Store::find_executed_companion_hold_id()'s
 // scoping rationale: envelope_hash alone is never sufficient).
+//
+// Reset first (fan-out fix, 0.1.7) — this represents a genuinely NEW, later
+// incoming request (a different MCP session), which must start with an empty
+// decision memo exactly like D1/D2 above; the memo key (canonical envelope
+// hash) does not include session_id, so without the reset this would
+// incorrectly be served D1/D2's now-stale, already-deleted memo entry instead
+// of deciding fresh.
 // ------------------------------------------------------------------
+Reeflex_Gate::reset_request_cache();
 $_SERVER['HTTP_MCP_SESSION_ID'] = 'dedup-regression-session-B';
 $result3 = $ability_obj->execute( $input );
 $d8_hold_pass = ( $result3 instanceof WP_Error ) && 'reeflex_hold' === $result3->get_error_code();

@@ -126,6 +126,71 @@ final class Reeflex_Gate {
 	 */
 	private static ?array $active_resubmission_agent = null;
 
+	/**
+	 * Request-scoped decision memo (fan-out fix, 0.1.7).
+	 *
+	 * WordPress 6.9 invokes the wrapped permission_callback (Hook A) roughly
+	 * once per registered ability for a SINGLE REST `/run` request on ONE
+	 * action — WP_Ability::execute()/check_permissions() plumbing calls it far
+	 * more than the "once per call" the rest of this class's docblocks assume.
+	 * Without this memo, N invocations of the SAME underlying action would
+	 * each independently normalize -> decide -> audit -> (on hold) store a
+	 * NEW pending hold, multiplying one human action into N core round-trips
+	 * and N holds that all share the same canonical envelope_hash.
+	 *
+	 * Keyed by Reeflex_Holds_Store::canonical_envelope_hash( $envelope ) — the
+	 * same {action,axes,magnitude,target} projection used for the existing
+	 * execution-time envelope_hash dedup (see resubmit_hold()'s docblock) —
+	 * which is stable across repeated normalize() calls for the SAME action
+	 * (it deliberately excludes nonce/timestamp/agent/session, so it does NOT
+	 * distinguish two genuinely separate calls that happen to be identical;
+	 * that is an accepted, pre-existing scoping choice, unchanged here).
+	 *
+	 * Value cached per key is the exact enforcement result that was returned
+	 * on the first (memo-miss) call for that key: `true` (allow / observe) or
+	 * a WP_Error (deny / require_approval / fail-closed). A memo HIT returns
+	 * that SAME value again WITHOUT calling decide(), audit(), store_pending_hold(),
+	 * or dispatch_obligations() a second time — collapsing N invocations of one
+	 * action into exactly one decision + one audit record + (on hold) one hold.
+	 *
+	 * Bypassed entirely — never read, never written — while a resubmission is
+	 * in flight (self::$active_resubmission_hold_id !== null): a resubmission
+	 * must always decide fresh against core to actually consume the hold; it
+	 * must never be served a stale memo entry, and it must never poison the
+	 * memo for the ability's normal (non-resubmission) callers.
+	 *
+	 * Cleared via reset_request_cache(), hooked onto `rest_api_init` in
+	 * register_hooks() so each real incoming REST request starts with an empty
+	 * memo. In a normal per-request PHP process (mod_php/php-fpm) this static
+	 * is already empty on every request; the hook is belt-and-suspenders for
+	 * long-lived-worker deployments (e.g. Swoole/RoadRunner) and for the
+	 * single-process CLI test harnesses in tests/, which call
+	 * reset_request_cache() explicitly at scenario boundaries to model
+	 * separate requests.
+	 *
+	 * @var array<string,true|WP_Error>
+	 */
+	private static array $decision_memo = array();
+
+	/**
+	 * Request-scoped idempotent-wrap guard (fan-out fix, 0.1.7).
+	 *
+	 * Tracks ability names whose permission_callback has already been wrapped
+	 * by wrap_permission_callback() this request. Defends against nested
+	 * double-wrapping if `wp_register_ability_args` ever fires more than once
+	 * for the same ability within one request (e.g. a plugin re-registering
+	 * an ability) — without this guard, a second wrap would close over the
+	 * ALREADY-WRAPPED callback and every invocation would normalize/decide
+	 * TWICE, nested, defeating the decision memo above (each nested layer
+	 * would compute its own memo hit/miss independently).
+	 *
+	 * Cleared via reset_request_cache() alongside $decision_memo, for the same
+	 * per-request reasoning.
+	 *
+	 * @var array<string,true>
+	 */
+	private static array $wrapped_ability_names = array();
+
 	// ------------------------------------------------------------------
 	// Hook registration
 	// ------------------------------------------------------------------
@@ -169,6 +234,34 @@ final class Reeflex_Gate {
 			10,
 			4
 		);
+
+		/*
+		 * Request-scoped cache reset (fan-out fix, 0.1.7).
+		 *
+		 * `rest_api_init` fires once per incoming REST request, before route
+		 * dispatch — before Hook A's wrapped permission_callback can be invoked
+		 * for that request. Clearing the decision memo + wrap guard here keeps
+		 * both request-scoped in the belt-and-suspenders sense described in
+		 * their own docblocks (real per-request PHP processes already start
+		 * with empty statics; this matters for long-lived workers and is
+		 * mirrored explicitly by the test harnesses via reset_request_cache()).
+		 */
+		add_action( 'rest_api_init', array( self::class, 'reset_request_cache' ) );
+	}
+
+	/**
+	 * Clear the request-scoped decision memo and wrap guard.
+	 *
+	 * Hooked onto `rest_api_init` (see register_hooks()) so each real incoming
+	 * REST request starts with an empty memo. Also called explicitly by the
+	 * CLI test harnesses (tests/*.php) at scenario boundaries to model separate
+	 * requests within one PHP process — see class docblock on $decision_memo.
+	 *
+	 * @return void
+	 */
+	public static function reset_request_cache(): void {
+		self::$decision_memo         = array();
+		self::$wrapped_ability_names = array();
 	}
 
 	// ------------------------------------------------------------------
@@ -207,10 +300,21 @@ final class Reeflex_Gate {
 	 * @return array  Modified $args with permission_callback replaced.
 	 */
 	public static function wrap_permission_callback( array $args, string $name ): array {
+		// Idempotent-wrap guard (fan-out fix, 0.1.7): if wp_register_ability_args
+		// fires more than once for the SAME ability within one request, do not
+		// wrap a second time. A second wrap would close over the ALREADY-wrapped
+		// callback, nesting two independent normalize->decide->audit layers
+		// around every future invocation — see $wrapped_ability_names docblock.
+		if ( isset( self::$wrapped_ability_names[ $name ] ) ) {
+			return $args;
+		}
+
 		// Guard: skip abilities that have no permission callback.
 		if ( empty( $args['permission_callback'] ) || ! is_callable( $args['permission_callback'] ) ) {
 			return $args;
 		}
+
+		self::$wrapped_ability_names[ $name ] = true;
 
 		$original_callback = $args['permission_callback'];
 		$ability_name      = $name;
@@ -243,6 +347,16 @@ final class Reeflex_Gate {
 			// normalize() throws before the assignment completes.
 			$envelope = array();
 
+			// Fan-out fix (0.1.7): a resubmission must ALWAYS decide fresh against
+			// core to actually consume the hold — it is never read from, and never
+			// written to, the request-scoped decision memo (see $decision_memo
+			// docblock). $memo_key stays null until normalize() has produced an
+			// envelope to hash; a null key is never looked up or stored (see
+			// memoize() below) — there is nothing safe to key an exception that
+			// happened before an envelope existed.
+			$bypass_memo = ( null !== self::$active_resubmission_hold_id );
+			$memo_key    = null;
+
 			// Step 3: gate in a try/catch so any unexpected exception fails CLOSED (NEW-2).
 			try {
 				// Step 3a: normalize → envelope. approval.present is true, and the agent
@@ -257,13 +371,29 @@ final class Reeflex_Gate {
 					self::$active_resubmission_agent
 				);
 
+				// Step 3a.1 (fan-out fix, 0.1.7): compute the request-scoped memo key
+				// from the CANONICAL envelope projection — stable across repeated
+				// normalize() calls for the same underlying action (unlike the full
+				// envelope, which differs on nonce/timestamp every call). A HIT means
+				// this exact canonical action has already been decided within this
+				// request: return that SAME enforcement result immediately, WITHOUT
+				// calling decide(), audit(), store_pending_hold(), or
+				// dispatch_obligations() again — this is what collapses WordPress
+				// 6.9's N permission_callback invocations for one action into exactly
+				// one decision.
+				$memo_key = Reeflex_Holds_Store::canonical_envelope_hash( $envelope );
+				if ( ! $bypass_memo && isset( self::$decision_memo[ $memo_key ] ) ) {
+					return self::$decision_memo[ $memo_key ];
+				}
+
 				// Step 3b: POST to /v1/decide.
 				$decision = Reeflex_Core_Client::decide( $envelope );
 
 				// OBSERVE (HIL-DESIGN §8): record the would-be verdict, never enforce, always proceed.
 				if ( 'observe' === Reeflex_Config::mode() ) {
 					Reeflex_Audit::record( $envelope, $decision, 'observe' );
-					return true;   // action always proceeds in observe mode.
+					// action always proceeds in observe mode.
+					return self::memoize( $memo_key, $bypass_memo, true );
 				}
 
 				// Step 3c: audit before enforcement (record always exists even on fatal).
@@ -298,8 +428,8 @@ final class Reeflex_Gate {
 					}
 				}
 
-				// Step 3f: enforce.
-				return self::enforce_from_permission_callback( $decision );
+				// Step 3f: enforce, then memoize the exact result returned (fan-out fix, 0.1.7).
+				return self::memoize( $memo_key, $bypass_memo, self::enforce_from_permission_callback( $decision ) );
 
 			} catch ( \Throwable $e ) {
 				// OBSERVE fail-open (HIL-DESIGN §8): never break the site in observe mode.
@@ -313,7 +443,8 @@ final class Reeflex_Gate {
 						Reeflex_Core_Client::fail_closed( 'exception in observe (failed open): ' . $e->getMessage() ),
 						'observe'
 					);
-					return true;   // action always proceeds in observe mode.
+					// action always proceeds in observe mode.
+					return self::memoize( $memo_key, $bypass_memo, true );
 				}
 
 				// ENFORCE: unexpected exception: fail CLOSED (NEW-2). Log and deny.
@@ -321,13 +452,40 @@ final class Reeflex_Gate {
 					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
 					error_log( '[reeflex] unexpected exception in permission gate, failing closed: ' . $e->getMessage() );
 				}
-				return self::enforce_from_permission_callback(
-					Reeflex_Core_Client::fail_closed( 'unexpected exception: ' . $e->getMessage() )
+				return self::memoize(
+					$memo_key,
+					$bypass_memo,
+					self::enforce_from_permission_callback(
+						Reeflex_Core_Client::fail_closed( 'unexpected exception: ' . $e->getMessage() )
+					)
 				);
 			}
 		};
 
 		return $args;
+	}
+
+	/**
+	 * Store $result in the request-scoped decision memo under $memo_key, then
+	 * return it — a one-line "cache-then-return" helper so every return path
+	 * inside wrap_permission_callback()'s gated block is memoized identically
+	 * (fan-out fix, 0.1.7; see $decision_memo docblock).
+	 *
+	 * No-op (does not write) when $bypass_memo is true (an active resubmission
+	 * must never populate the memo) or when $memo_key is null (normalize()
+	 * threw before an envelope existed to hash — nothing safe to key by).
+	 *
+	 * @param  string|null $memo_key     Reeflex_Holds_Store::canonical_envelope_hash() of
+	 *                                    the envelope, or null if none was computed.
+	 * @param  bool        $bypass_memo  True while a resubmission is in flight.
+	 * @param  true|WP_Error $result     The exact value this call is about to return.
+	 * @return true|WP_Error  $result, unchanged.
+	 */
+	private static function memoize( ?string $memo_key, bool $bypass_memo, $result ) {
+		if ( ! $bypass_memo && null !== $memo_key ) {
+			self::$decision_memo[ $memo_key ] = $result;
+		}
+		return $result;
 	}
 
 	// ------------------------------------------------------------------

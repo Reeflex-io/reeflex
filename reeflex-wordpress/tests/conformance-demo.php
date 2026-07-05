@@ -79,8 +79,20 @@ function get_or_register_demo_ability( string $ability ): WP_Ability {
 	);
 }
 
-/** Run an ability through the wrapped permission_callback; return [outcome, error_code]. */
+/**
+ * Run an ability through the wrapped permission_callback; return [outcome, error_code].
+ *
+ * Calls Reeflex_Gate::reset_request_cache() first (fan-out fix, 0.1.7): this
+ * harness models each top-level scenario as its OWN incoming HTTP request, so
+ * each must start with an empty request-scoped decision memo — otherwise two
+ * scenarios that happen to normalize to the SAME canonical envelope (e.g.
+ * scenario 3's bulk force-delete and scenario 6's forged-approval replay of
+ * the identical ids+force_delete) would collapse into one decide()/hold, which
+ * is the correct production behaviour for repeat invocations WITHIN one real
+ * request but wrong for two intentionally-distinct scenarios in this harness.
+ */
 function run_ability( string $ability, array $input ): array {
+	Reeflex_Gate::reset_request_cache();
 	$result = get_or_register_demo_ability( $ability )->execute( $input );
 
 	if ( true === $result )            { return array( 'PROCEED', 'allow' ); }
@@ -89,8 +101,16 @@ function run_ability( string $ability, array $input ): array {
 	return array( 'UNEXPECTED', var_export( $result, true ) );
 }
 
-/** Like run_ability() but returns the raw execute() result (array on success, WP_Error on block). */
+/**
+ * Like run_ability() but returns the raw execute() result (array on success, WP_Error on block).
+ *
+ * Also resets the request-scoped decision memo first — see run_ability()'s
+ * docblock. This is what keeps H1 and create_fresh_hold()'s H8/H9/H10 calls
+ * (which share H1's exact magnitude.count=45 + force_delete=true canonical
+ * envelope) from colliding into a single memoized hold.
+ */
 function run_ability_full( string $ability, array $input ) {
+	Reeflex_Gate::reset_request_cache();
 	return get_or_register_demo_ability( $ability )->execute( $input );
 }
 
