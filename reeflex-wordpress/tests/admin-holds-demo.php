@@ -102,8 +102,19 @@ function get_or_register_demo_ability_for_admin( string $ability ): WP_Ability {
 	);
 }
 
-/** Create a fresh hold via a bulk force-delete on a disjoint id range. Returns hold_id or null. */
+/**
+ * Create a fresh hold via a bulk force-delete on a disjoint id range. Returns hold_id or null.
+ *
+ * Resets the request-scoped decision memo first (fan-out fix, 0.1.7): this
+ * harness models each T2-N scenario as its OWN incoming HTTP request. T2-3,
+ * T2-8, and T2-10 all pass a 45-element id range + force_delete=true, so they
+ * normalize to the SAME canonical envelope (magnitude.count=45, same axes,
+ * same target) — without the reset, only the FIRST call would actually
+ * decide/store a hold; the rest would be served that same (by-then-resolved)
+ * hold_id back out of the memo instead of getting their own fresh hold.
+ */
 function create_fresh_hold_for_admin( string $ability, array $id_range ): ?string {
+	Reeflex_Gate::reset_request_cache();
 	$result = get_or_register_demo_ability_for_admin( $ability )->execute(
 		array( 'ids' => $id_range, 'force_delete' => true )
 	);
