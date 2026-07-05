@@ -6,7 +6,7 @@ This document describes the decision flow and the two deployment variants. For t
 
 ## Decision flow
 
-An adapter intercepts a backend-specific action, normalizes it into a universal Action Envelope, and posts it to `reeflex-core`. The engine evaluates the envelope against OPA/Rego policy and returns a deterministic decision. The adapter enforces that decision before the backend action executes.
+An adapter intercepts a backend-specific action, normalizes it into a universal Action Envelope, and posts it to `reeflex-core`. The engine evaluates the envelope against OPA/Rego policy and returns a deterministic decision. The adapter enforces that decision before the backend action executes. On `require_approval`, the adapter stores a **hold** instead of executing; resolving that hold is a separate handover step, covered in [Hold resolution (HIL, HOTL, AIL)](#hold-resolution-hil-hotl-ail) below.
 
 ```mermaid
 flowchart LR
@@ -15,7 +15,11 @@ flowchart LR
     C --> D{Decision}
     D -->|allow| E["Adapter:\nexecute action"]
     D -->|deny| F["Adapter:\nblock, surface reason"]
-    D -->|require_approval| G["Adapter:\nhold for human\nre-submit on approval"]
+    D -->|require_approval| G["Adapter:\nstore hold\ncore never executes"]
+    G --> H{{"Resolved by the principal\nyou designate\n(human / agent / automation)\nunder your resolution policy"}}
+    H -->|approved| I["Adapter:\nre-submit envelope\napproval.present = true"]
+    I --> C
+    H -->|rejected| F
     C --> AU[("Audit log\n(append-only)")]
 ```
 
@@ -24,6 +28,61 @@ Key invariants:
 - **Zero LLM in the decision path.** The engine is OPA/Rego plus classical logic. Free text, markdown, and OKF documents are never decision inputs.
 - **Fail-closed.** If the engine is unreachable or OPA cannot be invoked, the adapter denies or holds. There is no configuration that changes this.
 - **Deterministic.** Same Action Envelope in, same Decision out — every call, every deployment.
+- **Core never executes.** On `require_approval`, `reeflex-core` persists a hold and hands control back to the adapter. Whether the action ultimately runs, is blocked, or is re-submitted after resolution is always decided and carried out by the adapter, never by core.
+
+---
+
+## Hold resolution (HIL, HOTL, AIL)
+
+`require_approval` does not mean "ask a human" — it means **hold, and let the
+principal the operator designates resolve it**: a human who approves before
+the action runs (HITL), a human who monitors on the loop (HOTL), or an AI
+agent the operator trusts for routine holds (AIL). This is the same model
+documented in [`docs/why-reeflex.md`](why-reeflex.md#ail) (see `#ail` for the
+full naming and rationale) — this section shows the mechanics only, and does
+not restate or reword that definition.
+
+Shipped in core **v0.1.5** (HIL Phase 1): `GET /v1/holds`, `GET /v1/holds/{id}`,
+`POST /v1/holds/{id}/resolve`. The `reeflex-holds` MCP server (see
+[`reeflex-holds/README.md`](../reeflex-holds/README.md)) exposes the same
+three calls as MCP tools to any MCP client — the socket an AIL principal
+plugs into.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Requester as AI Agent (the actor)
+    participant Adapter
+    participant Core as reeflex-core
+    participant Principal as Designated Principal (human / agent / automation)
+
+    Requester->>Adapter: attempts action
+    Adapter->>Core: POST /v1/decide (ActionEnvelope)
+    Core-->>Adapter: require_approval, hold_id, expires_ts
+    Note over Core: hold persisted, TTL-bound, single-use.<br/>Core never executes.
+    Adapter->>Principal: surface the hold (GET /v1/holds)
+    Principal->>Core: POST /v1/holds/{id}/resolve (approve)
+    Note over Requester,Core: actor ≠ approver, enforced in core --<br/>the agent that raised this hold can never resolve it.
+    Core-->>Principal: decided_by, decided_ts (written to the audit trail)
+    Adapter->>Core: re-submit ActionEnvelope (approval.present=true, hold_id)
+    Core-->>Adapter: allow
+    Adapter->>Requester: action executes -- by the Adapter, never by Core
+```
+
+Two guarantees hold no matter which principal the operator designates:
+
+- **actor ≠ approver.** The agent whose action raised the hold can never
+  resolve it — enforced on identity, inside `reeflex-core`, on every surface
+  (adapter re-submission and the `reeflex-holds` MCP surface alike).
+- **R3 (`irreversible_systemic_prod`) is terminal.** A systemic-blast-radius
+  action is a `deny`, not a `require_approval` — it never becomes a hold, and
+  a defensive guard (`NON_RESOLVABLE_RULES`) additionally ensures a hold
+  carrying that rule can never be resolved by any principal, human or agent.
+  It is re-scoped into a smaller action and resubmitted, never approved as-is.
+
+Which principal types may resolve which rule is the operator's own choice,
+configured via `REEFLEX_RESOLUTION_POLICY`: Reeflex ships human-only by
+default; AIL is opt-in, per rule, explicit.
 
 ---
 
@@ -51,7 +110,7 @@ flowchart TD
         direction TB
         AG["AI Agent"]
         AD["Adapter\n(e.g. reeflex-wordpress plugin)"]
-        RC["reeflex-core\nPython + OPA/Rego\nHTTP :8080"]
+        RC["reeflex-core\nPython + OPA/Rego\nHTTP :8080\n/v1/decide + /v1/holds"]
         AU[("Audit log\nJSONL — append-only")]
     end
     AG -->|"backend intent"| AD
@@ -61,7 +120,7 @@ flowchart TD
     AD -->|"proceed / block / hold"| AG
 ```
 
-Requirements: Python 3.12, OPA 1.x binary, a persistent service process. Does not work on shared hosting (no persistent processes). See [`INSTALL.md`](../INSTALL.md).
+Requirements: Python 3.12, OPA 1.x binary, a persistent service process. Does not work on shared hosting (no persistent processes). See [`INSTALL.md`](../INSTALL.md). The holds API (`GET /v1/holds`, `POST /v1/holds/{id}/resolve`) is served from this same process, at this same base URL — see [Hold resolution (HIL, HOTL, AIL)](#hold-resolution-hil-hotl-ail) above for the resolution handover.
 
 ---
 
@@ -107,6 +166,8 @@ Multi-tenancy, authentication, and billing are part of the closed commercial tie
 
 ## References
 
-- [`reeflex-spec/SPEC.md`](../reeflex-spec/SPEC.md) — Action Envelope, Adapter Contract, conformance requirements
+- [`reeflex-spec/SPEC.md`](../reeflex-spec/SPEC.md) — Action Envelope, Adapter Contract, conformance requirements, §5.1 Approval object semantics (HIL Phase 1)
+- [`docs/why-reeflex.md`](why-reeflex.md#ail) — the HITL / HOTL / AIL naming and rationale (source of truth for the coined term; this document only shows the mechanics)
+- [`reeflex-holds/README.md`](../reeflex-holds/README.md) — the MCP holds surface (`reeflex-holds`), an AIL-capable resolution socket
 - [`docs/adr/0001-deployment-model.md`](adr/0001-deployment-model.md) — deployment model decision (engine-as-service, open-core, on-prem-first, hosted = roadmap; embedded-engine alternative documented and rejected)
-- [`docs/adr/0002-no-llm-in-decision-path.md`](adr/0002-no-llm-in-decision-path.md) — why zero LLM in `/v1/decide`
+- [`docs/adr/0002-no-llm-in-decision-path.md`](adr/0002-no-llm-in-decision-path.md) — why zero LLM in `/v1/decide` (note: this ADR's §2 still describes the pre-AIL "held for a human reviewer" framing; it records a historical decision and was not rewritten as part of this pass — see NOTES)
