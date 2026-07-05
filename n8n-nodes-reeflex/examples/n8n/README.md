@@ -127,3 +127,13 @@ Observe posture: log the would-be verdict, let the action proceed, enforce
 later. "Observe" is a workflow choice, not a core mode.
 
 ![Reeflex n8n demo 5 — Watch Before You Enforce](img/demo5-watch-before-you-enforce.gif)
+
+### 6 — The Approval, Live
+The human side of demo 3's loop, captured in the WordPress adapter's
+"Pending approvals" surface (not the n8n editor): a single held action →
+click **Approve & run** → "Approved and executed." and the row clears to
+"No pending holds." One action produces exactly one hold (the fan-out fix),
+resolved by the principal you designate — see
+[why-reeflex.md#ail](../../../docs/why-reeflex.md#ail).
+
+![Reeflex approval flow — Approve & run in wp-admin](img/demo6-approve-flow.gif)
