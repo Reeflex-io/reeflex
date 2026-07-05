@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+### Fixed
+- **WordPress adapter — hold fan-out (reeflex-gate 0.1.7).** A single gated action triggered one `/v1/decide` call — and, when held, one hold — per *registered ability* instead of once, producing duplicate "Pending approvals" rows (the "Reeflex N" badge). A request-scoped decision memo collapses the permission-callback fan-out across all registered abilities to exactly one decision (one hold) per action. The guarantees are unchanged (actor ≠ approver, single-use holds, double-execution dedup). Distributed via the v0.1.6 release's WordPress zips (re-attached); core/PyPI/npm unchanged.
+
 ## [0.1.6] - 2026-07-05
 
 First multi-channel release: the Claude adapter, the holds MCP server, and the n8n community node ship to PyPI / npm alongside the GitHub release and the GHCR core image.

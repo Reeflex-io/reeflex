@@ -4,7 +4,7 @@ Tags: security, ai-agents, governance, woocommerce, abilities-api
 Requires at least: 6.9
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.1.5
+Stable tag: 0.1.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -211,6 +211,9 @@ immediately — no other changes needed.
 
 == Changelog ==
 
+= 0.1.7 =
+* Fan-out fix: a single gated action now triggers exactly one core decision (and, for a held action, exactly one hold) instead of one per registered ability. A request-scoped memo collapses the permission-callback fan-out across all registered abilities; the guarantees (actor != approver, single-use holds, dedup) are unchanged.
+
 = 0.1.5 =
 * Double-gating dedup: when an MCP-originated action is gated twice (the ability's own gate plus the MCP adapter layer) and both resulting holds are approved, the action now executes at most once instead of twice (dedup by envelope hash + session within a tight window). No change to allow / deny / approval behaviour otherwise.
 
@@ -252,6 +255,9 @@ immediately — no other changes needed.
 * Append-only JSONL audit log written before enforcement.
 
 == Upgrade Notice ==
+
+= 0.1.7 =
+Fixes a hold fan-out: one gated action now creates one hold, not one per registered ability (the source of duplicate 'Pending approvals' rows). Recommended update. No change to allow/deny/approval behaviour.
 
 = 0.1.5 =
 Fixes a double-execution edge case: approving both holds of a double-gated MCP action now runs the action once, not twice. Safe update; no change to allow/deny/approval behaviour.
