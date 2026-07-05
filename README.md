@@ -15,7 +15,7 @@ blocked. Across any backend, with no LLM in the decision path.
 [![WordPress](https://img.shields.io/badge/WordPress-6.9%2B-21759b.svg)](reeflex-wordpress/)
 [![Release](https://img.shields.io/github/v/release/Reeflex-io/reeflex?sort=semver&color=6a4c93)](https://github.com/Reeflex-io/reeflex/releases)
 
-[Why Reeflex](docs/why-reeflex.md) · [Quickstart](QUICKSTART.md) · [How it works](#how-it-works) ·
+[Why Reeflex](docs/why-reeflex.md) · [Quickstart](QUICKSTART.md) · [How it works](#how-it-works) · [Launch article](docs/blog/one-minute-policy.md) ·
 [WordPress adapter](reeflex-wordpress/) · [Claude Code adapter](reeflex-claude/) ·
 [Spec](reeflex-spec/SPEC.md) · [Whitepaper](docs/Reeflex_Architecture.pdf) ·
 [Contributing](CONTRIBUTING.md)
