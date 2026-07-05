@@ -15,7 +15,7 @@ blocked. Across any backend, with no LLM in the decision path.
 [![WordPress](https://img.shields.io/badge/WordPress-6.9%2B-21759b.svg)](reeflex-wordpress/)
 [![Release](https://img.shields.io/github/v/release/Reeflex-io/reeflex?sort=semver&color=6a4c93)](https://github.com/Reeflex-io/reeflex/releases)
 
-[Why Reeflex](docs/why-reeflex.md) · [Quickstart](QUICKSTART.md) · [How it works](#how-it-works) ·
+[Why Reeflex](docs/why-reeflex.md) · [Quickstart](QUICKSTART.md) · [How it works](#how-it-works) · [Launch article](docs/blog/one-minute-policy.md) ·
 [WordPress adapter](reeflex-wordpress/) · [Claude Code adapter](reeflex-claude/) ·
 [Spec](reeflex-spec/SPEC.md) · [Whitepaper](docs/Reeflex_Architecture.pdf) ·
 [Contributing](CONTRIBUTING.md)
@@ -170,8 +170,9 @@ see [INSTALL.md](INSTALL.md).
 
 > **Want to try it without deploying anything?** We run a public development
 > endpoint at `https://api-dev.reeflex.io` — point an adapter at it and go. It
-> carries a Let's Encrypt *staging* certificate (dev only, not for production),
-> so set the adapter's `verify_ssl` option to `false` for this endpoint only.
+> carries a valid, publicly-trusted Let's Encrypt certificate, so keep the
+> adapter's `verify_ssl` option at its secure default (`true`) — no change
+> needed to reach it. It's still a shared dev/eval endpoint, not for production.
 > Details in the [WordPress adapter guide](reeflex-wordpress/README.md#about-api-devreeflexio-public-development-endpoint).
 
 ---

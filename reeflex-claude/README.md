@@ -228,30 +228,29 @@ path.
 `https://api-dev.reeflex.io` is a public evaluation endpoint. Use the public
 eval token below — no signup needed:
 
-> **Eval token:** `reeflex-eval-public-2026` — dev endpoint, staging cert (set
-> `verify_ssl=false`), rate-limited, **may reset anytime; not for production.**
+> **Eval token:** `reeflex-eval-public-2026` — dev endpoint, rate-limited,
+> **may reset anytime; not for production.**
 
 ```bash
-reeflex-claude setup --core-url https://api-dev.reeflex.io --verify-ssl false \
+reeflex-claude setup --core-url https://api-dev.reeflex.io \
   --token reeflex-eval-public-2026 --mode observe
 reeflex-claude check
 ```
 
-`--verify-ssl false` is only needed because the staging endpoint uses a
-self-signed/untrusted certificate; never set it against a production core.
-Starting with `--mode observe` lets you watch decisions land in the audit log
-without the adapter enforcing them, so a policy misconfiguration or
-connectivity issue can't block your Claude Code session. Note that
-`reeflex-claude check` always probes with an intentionally unreachable core
-address regardless of `--core-url` — it verifies the adapter's fail-closed
-plumbing, not connectivity to api-dev itself; use the demo or a manual
-`curl .../v1/decide` to confirm the staging endpoint responds.
+TLS verification stays on (`--verify-ssl` defaults to `true`) — no flag is
+needed here: `api-dev.reeflex.io` carries a valid, publicly-trusted
+certificate. Starting with `--mode observe` lets you watch decisions land in
+the audit log without the adapter enforcing them, so a policy
+misconfiguration or connectivity issue can't block your Claude Code session.
+Note that `reeflex-claude check` always probes with an intentionally
+unreachable core address regardless of `--core-url` — it verifies the
+adapter's fail-closed plumbing, not connectivity to api-dev itself; use the
+demo or a manual `curl .../v1/decide` to confirm the endpoint responds.
 
 For the git-clone / manual-export path, the equivalent is:
 
 ```bash
 export REEFLEX_CORE_URL=https://api-dev.reeflex.io
-export REEFLEX_VERIFY_SSL=false             # staging cert is not a publicly-trusted CA cert
 export REEFLEX_CORE_TOKEN=reeflex-eval-public-2026   # public eval token (may reset anytime)
 export REEFLEX_MODE=observe                 # recommended for a first run — see below
 ```

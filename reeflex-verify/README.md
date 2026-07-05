@@ -27,8 +27,9 @@ You can run it straight from a clone of this repo, or download
 1. **The Reeflex gate installed** on the WordPress site (the plugin that
    actually intercepts — see [`../reeflex-wordpress/`](../reeflex-wordpress/)),
    configured to reach your `reeflex-core` (e.g. the public dev endpoint
-   `https://api-dev.reeflex.io` — with the gate's `verify_ssl` off, since it
-   carries a staging certificate — or an internal deployment).
+   `https://api-dev.reeflex.io` — keep the gate's `verify_ssl` at its secure
+   default, since it carries a valid, publicly-trusted certificate — or an
+   internal deployment).
 2. **The test-abilities plugin installed** on the same site. A fresh WordPress
    has no write-abilities registered, so there is nothing to fire at. This small
    plugin registers a few **safe** abilities (they only ever touch their own

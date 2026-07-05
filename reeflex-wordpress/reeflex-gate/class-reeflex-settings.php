@@ -577,7 +577,7 @@ final class Reeflex_Settings {
 					aria-describedby="<?php echo esc_attr( $field_id . '-desc' ); ?>"
 				/>
 				<?php echo esc_html__(
-					'Verify the TLS certificate of the core endpoint. Keep enabled in production. Uncheck ONLY for development endpoints with an untrusted/staging certificate (e.g. api-dev.reeflex.io).',
+					'Verify the TLS certificate of the core endpoint. Keep enabled in production. Uncheck ONLY for your own self-signed or internal core endpoint with an untrusted certificate, at your own risk.',
 					'reeflex-gate'
 				); ?>
 			</label>
@@ -599,7 +599,7 @@ final class Reeflex_Settings {
 					aria-describedby="<?php echo esc_attr( $field_id . '-desc' ); ?>"
 				/>
 				<?php echo esc_html__(
-					'Verify the TLS certificate of the core endpoint. Keep enabled in production. Uncheck ONLY for development endpoints with an untrusted/staging certificate (e.g. api-dev.reeflex.io).',
+					'Verify the TLS certificate of the core endpoint. Keep enabled in production. Uncheck ONLY for your own self-signed or internal core endpoint with an untrusted certificate, at your own risk.',
 					'reeflex-gate'
 				); ?>
 			</label>
@@ -611,7 +611,7 @@ final class Reeflex_Settings {
 			?>
 			<p class="description" style="color:#d63638;font-weight:bold;margin-top:6px;">
 				<?php echo esc_html__(
-					'Warning: TLS certificate verification is DISABLED. This is for development only (e.g. staging certs). Never disable it in production.',
+					'Warning: TLS certificate verification is DISABLED. This is for a self-signed or internal core endpoint only. Never disable it in production.',
 					'reeflex-gate'
 				); ?>
 			</p>

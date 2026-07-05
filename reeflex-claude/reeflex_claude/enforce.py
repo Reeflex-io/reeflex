@@ -27,7 +27,7 @@ Env:
                             Falsy values (0, false, no, off, case-insensitive)
                             DISABLE certificate verification.  Use only for dev
                             or staging endpoints with self-signed / untrusted
-                            certs (e.g. api-dev.reeflex.io).  Default is full
+                            certs.  Default is full
                             verification; opt-in insecure at the operator's risk.
                             Same env name as the WordPress adapter for cross-adapter
                             consistency.
@@ -254,7 +254,7 @@ def _build_ssl_context(url: str):
     # OPT-IN INSECURE: operator explicitly set REEFLEX_VERIFY_SSL to a falsy value.
     # Build a context that skips hostname and certificate verification.
     # This is intentional and required for dev/staging endpoints with self-signed
-    # or privately-signed certificates (e.g. api-dev.reeflex.io).
+    # or privately-signed / internal certificates.
     # NEVER use this in production -- it removes MITM protection on the decision call.
     ctx = ssl.create_default_context()
     ctx.check_hostname = False

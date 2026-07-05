@@ -20,7 +20,7 @@
  *     2. DB option reeflex_gate_options['verify_ssl']        (Settings page path).
  *     3. true → TLS verification ON (secure default).
  *     Default true: verification ON. Disable ONLY for dev endpoints with untrusted/
- *     staging certs (e.g. api-dev.reeflex.io). Keep true in production — this
+ *     self-signed or internal certs. Keep true in production — this
  *     setting protects the decision call from MITM interception.
  *
  * All other values (env, agent_id, audit_log_path, request_timeout) remain
@@ -67,7 +67,7 @@ defined( 'ABSPATH' ) || exit;
  *                        over any DB/Settings value and the Settings checkbox
  *                        is rendered disabled. Default: true (verification ON).
  *                        Set to false ONLY for dev/staging endpoints with
- *                        untrusted certs (e.g. api-dev.reeflex.io). Never
+ *                        untrusted or self-signed certs. Never
  *                        disable in production — MITM protection for the
  *                        governance decision call.
  *   REEFLEX_MODE       — 'enforce'|'observe'; default 'enforce'. In observe the
@@ -193,7 +193,7 @@ final class Reeflex_Config {
 	 *   3. true — verification ON (secure default).
 	 *
 	 * Default true: TLS verification is ON. Disable ONLY for development
-	 * endpoints with untrusted/staging certificates (e.g. api-dev.reeflex.io).
+	 * endpoints with untrusted or self-signed certificates.
 	 * Keep true in production — this protects the governance decision call from
 	 * MITM interception.
 	 *

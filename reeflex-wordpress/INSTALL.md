@@ -17,14 +17,14 @@ is the detailed procedure.
 | PHP | 7.4 or higher |
 | WordPress | **6.9 or higher** (Abilities API is core as of 6.9) |
 | MCP Adapter (`wordpress/mcp-adapter`) | v0.5.0; required only if you use MCP traffic or Hook B |
-| `reeflex-core` | Running and reachable — your own deployment, or `https://api-dev.reeflex.io` for testing (see the TLS note below) |
+| `reeflex-core` | Running and reachable — your own deployment, or `https://api-dev.reeflex.io` for testing (see the note below) |
 
 > **Testing against `api-dev.reeflex.io`:** our public dev endpoint carries a
-> Let's Encrypt **staging** certificate (untrusted by design, not for
-> production). To connect to it you must disable certificate verification —
-> Settings checkbox in the standard plugin, or
-> `define( 'REEFLEX_VERIFY_SSL', false );` for the mu-plugin. For production
-> or internal deployments: valid certificate, verification **on**.
+> valid, publicly-trusted Let's Encrypt certificate, so no special TLS
+> configuration is needed — leave certificate verification at its secure
+> default (**on**), both in the standard plugin's Settings checkbox and in
+> the mu-plugin's `REEFLEX_VERIFY_SSL` constant. It is still a shared dev/eval
+> endpoint, not for production, and may reset or change at any time.
 
 ---
 
@@ -35,8 +35,8 @@ is the detailed procedure.
 2. wp-admin → **Plugins → Add New → Upload Plugin** → choose the zip →
    **Install Now** → **Activate**.
 3. **Settings → Reeflex Gate**: set **API URL** (required), **Token**
-   (optional), and leave **Verify TLS certificate** on unless pointing at
-   `api-dev.reeflex.io`.
+   (optional), and leave **Verify TLS certificate** on — including when
+   pointing at `api-dev.reeflex.io`.
 4. Verify (see "Verification" at the end of this file).
 
 Constants in `wp-config.php` (below) override Settings fields and lock them
@@ -270,7 +270,7 @@ page for standard plugin):
 ```php
 define( 'REEFLEX_CORE_URL',  'https://your-reeflex-core-host' );  // required
 define( 'REEFLEX_CORE_TOKEN', '' );                                 // optional (core auth)
-define( 'REEFLEX_VERIFY_SSL', true );                               // false ONLY for api-dev
+define( 'REEFLEX_VERIFY_SSL', true );                               // default; disable only for a self-signed/internal core
 define( 'REEFLEX_ENV',      'production' );                         // optional
 define( 'REEFLEX_AGENT_ID', 'agent:wordpress' );                    // optional
 define( 'REEFLEX_AUDIT_LOG', '/absolute/path/to/reeflex-audit.jsonl' );  // optional
