@@ -157,8 +157,10 @@ The zero-friction path. No filesystem access, no code, no wp-config edits.
      or your own deployment URL in production.
    - **Token** *(optional)* — the bearer token, if your core has auth enabled.
    - **Verify TLS certificate** *(default: on)* — leave **on** for any real
-     deployment. Turn it **off only** when pointing at `api-dev.reeflex.io`
-     (see the note below).
+     deployment, including when pointing at `api-dev.reeflex.io` (it carries a
+     valid, publicly-trusted certificate — see the note below). Only disable
+     this for your own self-signed or internal core endpoint, at your own
+     risk.
 4. Done. The gate is now intercepting every ability call.
 
 This is the right choice for most sites, and the only choice when you cannot
@@ -180,7 +182,7 @@ impossible to disable from wp-admin. Requires filesystem access.
    ```php
    define( 'REEFLEX_CORE_URL', 'https://api-dev.reeflex.io' );
    define( 'REEFLEX_CORE_TOKEN', '' );        // optional
-   define( 'REEFLEX_VERIFY_SSL', false );     // only for api-dev; true in prod
+   define( 'REEFLEX_VERIFY_SSL', true );      // default; disable only for a self-signed/internal core
    ```
 
 4. Done. Must-use plugins activate automatically — nothing to click.
@@ -194,18 +196,19 @@ impossible to disable from wp-admin. Requires filesystem access.
 We run `api-dev.reeflex.io` so anyone can try Reeflex end-to-end without
 deploying core first. Two things to know, stated plainly:
 
-- **It is a development/test endpoint.** It carries a Let's Encrypt **staging**
-  certificate, which is not trusted by browsers or HTTP clients by design. It
-  is **not suitable for production** and may reset or change at any time.
-- **Because of that staging certificate, you must set `verify_ssl = false`**
-  (standard plugin: uncheck *Verify TLS certificate*; mu-plugin:
-  `define( 'REEFLEX_VERIFY_SSL', false );`) for the adapter to connect to it.
+- **It is a development/test endpoint.** It is **not suitable for
+  production** and may reset or change at any time — but it carries a valid,
+  publicly-trusted Let's Encrypt certificate, so it needs no special TLS
+  handling.
+- **Keep `verify_ssl = true` (the default) when pointing at it** — no
+  configuration change is needed to connect the adapter to
+  `api-dev.reeflex.io`.
 
 This is a conscious, dev-only trade-off — an open, frictionless way to test.
-**For production, or any internal deployment, use a real endpoint with a valid
-certificate and keep `verify_ssl = true`.** Disabling certificate verification
-against anything other than this dev endpoint defeats the transport security
-the gate relies on.
+**For production, or any internal deployment, use your own endpoint and keep
+`verify_ssl = true`.** Only disable certificate verification against a core
+endpoint that uses a self-signed or privately-signed/internal certificate,
+and only at your own risk.
 
 ### Verify the install
 
@@ -229,7 +232,8 @@ three-field admin page:
   it Reeflex fails closed on every action.
 - **Token** — the bearer token for the Authorization header. Optional.
 - **Verify TLS certificate** — verify the core's TLS certificate. On by default;
-  uncheck only for dev/staging endpoints with untrusted certs (e.g. `api-dev.reeflex.io`).
+  uncheck only for your own self-signed or internal endpoint with an
+  untrusted certificate.
 - **Enforcement mode** — `enforce` (default) or `observe`. In observe mode every
   verdict is recorded but nothing is enforced; see [Observe mode](#observe-mode)
   below. The `REEFLEX_MODE` constant, when defined, takes precedence and locks
@@ -250,7 +254,7 @@ No secrets are accepted inline — reference them via environment or Vault.
 |----------------------|--------------|--------------------------------------------|-------------|
 | `REEFLEX_CORE_URL`   | **Yes**      | `''` (fail-closed until set)              | Base URL of `reeflex-core`. Must be `https://` in production. `http://` is accepted only for loopback hosts (`127.0.0.1`, `localhost`, `::1`); any other `http://` URL is rejected unconditionally and every call fails closed. No filter override is possible (the URL is a trust anchor; a later-loading plugin cannot redirect decisions). Standard-plugin equivalent: the "API URL" field in Settings. |
 | `REEFLEX_CORE_TOKEN` | No           | `''`                                       | Bearer token sent to `reeflex-core` when its auth is enabled. Standard-plugin equivalent: the "Token" field in Settings. Keep it out of version control — reference from environment or Vault. |
-| `REEFLEX_VERIFY_SSL` | No           | `true`                                     | Whether to verify the TLS certificate of the core endpoint. **Keep `true` in production.** Set `false` only for development endpoints with untrusted certificates (e.g. `api-dev.reeflex.io`, which uses a Let's Encrypt staging cert). Standard-plugin equivalent: the "Verify TLS certificate" checkbox in Settings. |
+| `REEFLEX_VERIFY_SSL` | No           | `true`                                     | Whether to verify the TLS certificate of the core endpoint. **Keep `true` in production.** Set `false` only for your own self-signed or internally-signed core endpoint with an untrusted certificate, at your own risk. Standard-plugin equivalent: the "Verify TLS certificate" checkbox in Settings. |
 | `REEFLEX_ENV`        | No           | `production`                               | Environment label written into every envelope's `target.environment`. Values: `production`, `staging`, `dev`. |
 | `REEFLEX_AGENT_ID`   | No           | `agent:wordpress`                          | Agent identity string for `agent.id` in the envelope. |
 | `REEFLEX_AUDIT_LOG`  | No           | `WP_CONTENT_DIR/reeflex-audit.jsonl`      | Absolute filesystem path for the append-only JSONL audit log. The default is outside `uploads/` so the file is not web-accessible. Paths containing `..` are rejected; a path inside `uploads/` generates a warning. |

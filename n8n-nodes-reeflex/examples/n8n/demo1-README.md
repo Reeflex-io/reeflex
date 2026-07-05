@@ -12,9 +12,8 @@ See the top-level [README.md](./README.md) → "Credential setup" for the
 exact 3 values (Core URL / API Token / Ignore SSL Issues) and the 2-minute
 import steps. This demo needs only the one "Reeflex Core API" credential.
 
-> Disclaimer: Eval token for api-dev.reeflex.io — dev endpoint, staging
-> cert (set verify_ssl=false / Ignore SSL Issues on), may reset anytime; not
-> for production.
+> Disclaimer: Eval token for api-dev.reeflex.io — dev endpoint,
+> rate-limited, may reset anytime; not for production.
 
 ## The story
 

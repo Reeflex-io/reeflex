@@ -7,9 +7,8 @@ Every demo is preconfigured against the live, public **api-dev** eval
 endpoint, so you can import and run each one in a couple of minutes with no
 infrastructure of your own.
 
-> **Disclaimer:** Eval token for api-dev.reeflex.io — dev endpoint, staging
-> cert (set verify_ssl=false / Ignore SSL Issues on), may reset anytime; not
-> for production.
+> **Disclaimer:** Eval token for api-dev.reeflex.io — dev endpoint,
+> rate-limited, may reset anytime; not for production.
 
 ## The 5 demos
 
@@ -56,7 +55,7 @@ credential by name/id that you create locally.
    |---|---|
    | Core URL | `https://api-dev.reeflex.io` |
    | API Token | `reeflex-eval-public-2026` |
-   | Ignore SSL Issues (Insecure) | **ON** (api-dev uses a staging cert) |
+   | Ignore SSL Issues (Insecure) | **OFF** (default — api-dev has a valid, publicly-trusted certificate) |
 
    Save it as, for example, "Reeflex Core API account" (any name works —
    only the credential TYPE matters for import).

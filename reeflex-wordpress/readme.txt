@@ -111,9 +111,9 @@ action's payload** — only the risk-relevant metadata above.
 
 **Where it is sent.** To the reeflex-core deployment you configure — normally your
 own, self-hosted, on your own infrastructure. For evaluation only, the project
-also runs a public development endpoint at `https://api-dev.reeflex.io` (it uses a
-staging TLS certificate and requires turning TLS verification off; it is not for
-production).
+also runs a public development endpoint at `https://api-dev.reeflex.io` (it
+carries a valid, publicly-trusted certificate, so no special TLS configuration
+is needed; it is still a shared dev/eval endpoint, not for production).
 
 **Service information.**
 
@@ -133,9 +133,9 @@ production).
    (for example `https://reeflex-core.example.com`). This is required: while it is
    empty, Reeflex blocks every agent action (fail-closed) and contacts nothing.
 4. Optionally enter a **Token** — the bearer token, if your core has auth enabled.
-5. Leave **Verify TLS certificate** on for any real deployment. Turn it off only
-   when pointing at the public dev endpoint `https://api-dev.reeflex.io`, which
-   carries a staging certificate.
+5. Leave **Verify TLS certificate** on — the secure default. This includes when
+   pointing at the public dev endpoint `https://api-dev.reeflex.io`, which
+   carries a valid, publicly-trusted certificate.
 6. Optionally set **Enforcement mode** — `enforce` (default, fail-closed) or
    `observe` (records verdicts but never blocks; gate fails OPEN on a core
    outage so it never breaks your site). Start with `observe` to see what
@@ -143,7 +143,7 @@ production).
 7. Save. The gate now intercepts and decides on every ability call.
 
 To try it without deploying core first, set the API URL to
-`https://api-dev.reeflex.io` and uncheck **Verify TLS certificate**.
+`https://api-dev.reeflex.io` and leave **Verify TLS certificate** on.
 
 Constants defined in `wp-config.php` (`REEFLEX_CORE_URL`, `REEFLEX_CORE_TOKEN`,
 `REEFLEX_VERIFY_SSL`) always take precedence over the Settings page and lock those

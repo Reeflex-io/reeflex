@@ -73,7 +73,7 @@
  *   REEFLEX_CORE_TOKEN — bearer token for Authorization header (optional).
  *                        When set, locks the Token field on the Settings page.
  *   REEFLEX_VERIFY_SSL — verify the core's TLS certificate (default: true).
- *                        Set false ONLY for dev/staging certs (e.g. api-dev).
+ *                        Set false ONLY for a self-signed or internal core cert.
  *                        When set, locks the Verify TLS checkbox on the Settings page.
  *   REEFLEX_ENV        — 'production'|'staging'|'dev' (default: 'production').
  *   REEFLEX_AGENT_ID   — agent identity string (default: 'agent:wordpress').

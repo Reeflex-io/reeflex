@@ -170,8 +170,9 @@ see [INSTALL.md](INSTALL.md).
 
 > **Want to try it without deploying anything?** We run a public development
 > endpoint at `https://api-dev.reeflex.io` — point an adapter at it and go. It
-> carries a Let's Encrypt *staging* certificate (dev only, not for production),
-> so set the adapter's `verify_ssl` option to `false` for this endpoint only.
+> carries a valid, publicly-trusted Let's Encrypt certificate, so keep the
+> adapter's `verify_ssl` option at its secure default (`true`) — no change
+> needed to reach it. It's still a shared dev/eval endpoint, not for production.
 > Details in the [WordPress adapter guide](reeflex-wordpress/README.md#about-api-devreeflexio-public-development-endpoint).
 
 ---

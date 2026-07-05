@@ -27,9 +27,8 @@ in the workflow.
 > - The resubmit node **regenerates `meta.nonce`** (see step 4) — required, or
 >   core rejects the reused nonce as a replay (`400`).
 
-> Disclaimer: Eval token for api-dev.reeflex.io — dev endpoint, staging
-> cert (set verify_ssl=false / Ignore SSL Issues on), may reset anytime; not
-> for production.
+> Disclaimer: Eval token for api-dev.reeflex.io — dev endpoint,
+> rate-limited, may reset anytime; not for production.
 
 ## The story
 
