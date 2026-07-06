@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-07-06
+
+PyPI publish path: `reeflex-claude` and `reeflex-holds` now ship through CI with SLSA provenance via PyPI Trusted Publishing. No runtime behaviour change to either package.
+
+### Changed
+- **`reeflex-claude` 0.1.7** — docs: README now states the **Python 3.8+** prerequisite and clarifies that R2/R3 are production-gated and that custom policy environments are supported (from #30). This is the first `reeflex-claude` release published to PyPI **through CI with provenance** (0.1.6 was published manually, without provenance).
+- **`reeflex-holds` 0.1.1** — no functional change; the bump exists solely to cut the **first `reeflex-holds` release published to PyPI through CI with provenance** (0.1.0 was published manually, without provenance). Version bumped honestly to carry the provenance publish, since PyPI rejects re-publishing an existing version.
+
 ## [0.1.9] - 2026-07-06
 
 n8n community node release-path fix. No change to any component's runtime behaviour.
