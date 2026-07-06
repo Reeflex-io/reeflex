@@ -43,6 +43,17 @@ one block's body is true for any given envelope.
 
 The smallest possible change: one constant.
 
+**Work in a copy — never edit the checked-in policy in place.** So a mistake
+can't dirty the shipped `reeflex-core/policy/` (which must stay
+byte-identical), copy the directory once and run every command below against
+the copy:
+
+```bash
+cp -r reeflex-core/policy my-policy
+```
+
+The constant you'll change lives in `my-policy/reeflex.rego`:
+
 ```rego
 delete_session_budget := 20
 ```
@@ -58,27 +69,28 @@ delete_session_budget := 5
 
 That's the entire code change. But changing a constant is a real behavior
 change, and your test suite is the proof of what changed — including tests
-you didn't intend to touch. Run the suite:
+you didn't intend to touch. Run the suite against your copy:
 
 ```bash
-opa test reeflex-core/policy/ -v
+opa test my-policy/ -v
 ```
 
-**What actually happened when I did this in a scratch copy** (not the real
-`reeflex-core/policy/` — see the DoD note at the end of this guide): the
-shipped test `test_r5_under_budget_allows` uses a fixture tuned to sit under
-the *old* budget of 20 (prior deletes = 3, this batch = 5, total = 8 — under
-20, over 5):
+**What actually happened when I ran this against the copy** (the shipped
+`reeflex-core/policy/` stays untouched): the shipped test
+`test_r5_under_budget_allows` uses a fixture tuned to sit under the *old*
+budget of 20 (prior deletes = 3, this batch = 5, total = 8 — under 20, over
+5). At this point you have only the **nine shipped tests** — the two boundary
+tests below aren't added yet — so the count is out of nine:
 
 ```
 FAILURES
 --------------------------------------------------------------------------------
 data.reeflex.policy_test.test_r5_under_budget_allows: FAIL (1.0406ms)
   ...
-  reeflex_test.rego:108   | | Fail got.decision = "allow"
+  my-policy/reeflex_test.rego:108   | | Fail got.decision = "allow"
 --------------------------------------------------------------------------------
-PASS: 10/11
-FAIL: 1/11
+PASS: 8/9
+FAIL: 1/9
 ```
 
 That failure is `opa test` doing its job: total = 8 is now *over* the new
@@ -144,10 +156,10 @@ test_lowered_budget_five_is_still_allowed if {
 }
 ```
 
-Re-run the same command. Raw output, verified in the scratch copy:
+Re-run the same command. Raw output, verified against the copy:
 
 ```
-$ opa test <scratch>/policy -v
+$ opa test my-policy/ -v
 ...
 data.reeflex.policy_test.test_r1_read_internal_allow: PASS (2.1634ms)
 data.reeflex.policy_test.test_r2_irreversible_broad_prod_require_approval: PASS (2.1482ms)
