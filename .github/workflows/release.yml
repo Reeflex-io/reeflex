@@ -176,7 +176,11 @@ jobs:
         working-directory: n8n-nodes-reeflex
         run: |
           set -euo pipefail
-          npm ci
+          # --ignore-scripts: skip native compiles at install. @n8n/node-cli pulls
+          # isolated-vm (via @n8n/expression-runtime) whose node-gyp build fails on the
+          # runner; it is NOT needed to build/pack the node (tsc + eslint only). The
+          # published package keeps zero runtime dependencies.
+          npm ci --ignore-scripts
           npm run build
           npm pack --pack-destination ../dist-artifacts
 
@@ -312,19 +316,22 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
+      - name: Upgrade npm (OIDC Trusted Publishing requires npm >= 11.5.1)
+        # Node 20 ships npm 10.x, which cannot do OIDC trusted publishing. npm 11.5.1+
+        # performs the OIDC token exchange at `npm publish` time.
+        run: npm install -g npm@latest
+
       - name: Build the node
         working-directory: n8n-nodes-reeflex
         run: |
-          npm ci
+          npm ci --ignore-scripts   # skip isolated-vm native compile (see the build job)
           npm run build
 
       - name: Publish to npm (guard against a duplicate version)
         working-directory: n8n-nodes-reeflex
-        env:
-          # Bootstrap/fallback auth = the Vault npm token in the NPM_TOKEN secret.
-          # If npm OIDC trusted publishing is configured for this package, this
-          # token is unnecessary (see docs/RELEASING.md).
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # Auth = npm OIDC Trusted Publishing (configured on npmjs.com for repo
+        # Reeflex-io/reeflex + release.yml). No token: the job's `id-token: write`
+        # does the OIDC exchange, which also signs the `--provenance` attestation.
         run: |
           set -euo pipefail
           VER="${{ needs.prepare.outputs.n8n_version }}"
