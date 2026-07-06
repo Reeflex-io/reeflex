@@ -6,4 +6,4 @@
 #
 # Convention: bump this together with the CHANGELOG [x.y.z] entry.
 
-CORE_VERSION: str = "0.1.5"
+CORE_VERSION: str = "0.1.7"
