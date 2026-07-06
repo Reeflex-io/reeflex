@@ -1,0 +1,22 @@
+<!--
+  Reeflex decision-gate rules for Wazuh (COMMUNITY EXAMPLE, UNMAINTAINED).
+
+  ONE minimal base rule: it catches every event decoded by the "reeflex" decoder
+  (see reeflex-decoder.xml). Level 3 = informational. This is the base "Reeflex
+  event" rule, not a rule suite - build your own higher-severity rules on top.
+
+  Optional per-verdict examples (NOT enabled here, shown for reference only):
+    - a level-10 rule matching data.verdict "deny",
+    - a level-7 rule matching data.verdict "require_approval".
+  Add them yourself if you want verdict-based severities/alerting.
+
+  Install: copy to /var/ossec/etc/rules/ on the Wazuh manager, then
+  `systemctl restart wazuh-manager`.
+-->
+<group name="reeflex,">
+  <rule id="100200" level="3">
+    <decoded_as>reeflex</decoded_as>
+    <description>Reeflex gate decision: $(verdict) on $(ability) [$(rule_id)]</description>
+    <group>reeflex_gate,</group>
+  </rule>
+</group>

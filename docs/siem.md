@@ -525,4 +525,21 @@ audit log.
 
 ---
 
+## Consuming Reeflex in Wazuh
+
+A ready-to-use **community example** integration lives in
+[`integrations/wazuh/`](../integrations/wazuh/): a decoder (Wazuh-native JSON
+decoding + a cheap prematch), one base rule (level 3, `rule.id 100200`), and an
+example CISO/SOC dashboard — all driven by the standard syslog feed above, with
+**no custom connector, agent, or plugin**. See
+[`integrations/wazuh/README.md`](../integrations/wazuh/README.md) for the full
+setup (emit → receive → decode → rule → dashboard), the decoded field list
+(incl. `namespace`/`agent_id` for the calling module, `params`/`target_ref` for
+the exact command, and `srcip` for the caller IP), and the optional GeoIP note.
+Marked *community example, unmaintained* — parsing is legible; what you build on
+it is yours.
+
+---
+
 <!-- END docs/siem.md -->
+
