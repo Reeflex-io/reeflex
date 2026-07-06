@@ -118,7 +118,7 @@ so fragmenting a dangerous action doesn't evade the gate.
 The whole base policy is **five rules you can read in one minute** — each a
 decades-old safety principle applied to agent actions, with its limits
 [documented honestly](reeflex-spec/IMPACT-MODEL.md#what-the-base-policy-does-not-catch).
-Universal axes, readable rules, yours to extend.
+Universal axes, readable rules, [yours to extend](docs/policy-guide.md).
 
 The engine knows nothing about WordPress, Postgres, or S3. It decides on
 **actions** — normalized, structured, and risk-profiled. Adapters are the
