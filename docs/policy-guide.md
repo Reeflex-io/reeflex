@@ -25,6 +25,17 @@ rules (R1–R5) against those fields and returns exactly one `decision` object:
 **deny > require_approval > allow** — so for any input exactly one Rego block
 matches and no two rules can disagree.
 
+> **Environment matters.** R2 and R3 are gated on `production`. In `dev`,
+> `staging`, or any other environment, an irreversible / broad / systemic
+> action is **not** held or denied by R2/R3 — only R1 (read allow), R5 (delete
+> budget), and R4 (default allow) apply. Set `target.environment` accordingly;
+> the stricter behavior is intentional for production only.
+>
+> You can also define your **own** environments: the policy matches
+> `target.environment` as a plain string, so you can gate rules on any names
+> you use (e.g. `prod-eu`, `critical`) by editing `reeflex.rego` — with zero
+> core changes.
+
 This guide does not re-derive the axis model or the five shipped rules — see:
 
 - [`docs/why-reeflex.md`](why-reeflex.md) — why the model looks like this, HITL/HOTL/AIL.

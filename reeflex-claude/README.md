@@ -36,7 +36,8 @@ flowchart LR
 
 ## Install / wire up
 
-**1. Install.**
+**1. Install.** Requires **Python 3.8+** (and a recent pip — upgrade with
+`python3 -m pip install --upgrade pip` if the install fails on an old box).
 
 ```bash
 pip install reeflex-claude
