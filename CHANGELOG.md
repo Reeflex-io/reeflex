@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 ### Fixed
 - **WordPress adapter — hold fan-out (reeflex-gate 0.1.7).** A single gated action triggered one `/v1/decide` call — and, when held, one hold — per *registered ability* instead of once, producing duplicate "Pending approvals" rows (the "Reeflex N" badge). A request-scoped decision memo collapses the permission-callback fan-out across all registered abilities to exactly one decision (one hold) per action. The guarantees are unchanged (actor ≠ approver, single-use holds, double-execution dedup). Distributed via the v0.1.6 release's WordPress zips (re-attached); core/PyPI/npm unchanged.
 
+## [0.1.7] - 2026-07-06
+
+Core telemetry hardening for SIEM consumption (Wazuh integration + launch readiness). No decision-path behaviour change; the GHCR core image is rebuilt so `api-dev` runs a baked image rather than a container hotpatch.
+
+### Added
+- **Decision telemetry enrichment for SIEM.** The syslog decision event now carries `srcip` (caller IP from `X-Forwarded-For` / peer, named `srcip` so Wazuh GeoIP can enrich it), `namespace` + `agent_id` (the originating module/adapter — e.g. wordpress / claude / n8n), and `target_ref` + `params` (the executed command that produced the decision). The fire-and-forget, non-blocking decision-path invariant is unchanged.
+
+### Fixed
+- **Syslog TCP keepalive.** Enable `SO_KEEPALIVE` (plus Linux `TCP_KEEPIDLE`/`TCP_KEEPINTVL`/`TCP_KEEPCNT`, ~30s detection) on the syslog connection so a restarted collector (e.g. `wazuh-remoted`) is detected and delivery resumes, instead of silently dropping events on a half-open connection until the core container is restarted.
+
 ## [0.1.6] - 2026-07-05
 
 First multi-channel release: the Claude adapter, the holds MCP server, and the n8n community node ship to PyPI / npm alongside the GitHub release and the GHCR core image.
