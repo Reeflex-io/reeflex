@@ -124,6 +124,9 @@ Point it at the public evaluation endpoint, watch it decide, then run your
 own engine when you're ready. The WordPress plugin governs WooCommerce
 stores through the same five rules.
 
+The security is free. Proof for auditors, fleet-scale management, and a
+hosted engine are the paid tiers — see [reeflex.io/pricing](https://reeflex.io/pricing).
+
 It's on GitHub at github.com/Reeflex-io/reeflex. Break it, fork it, tell us
 where the rules are wrong. The clone that improves the rules is a clone
 that improves the standard — and that's a trade we'll take every time.
