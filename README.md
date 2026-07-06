@@ -99,10 +99,19 @@ flowchart TD
     C --> D{Decision}
     D -- allow --> E["✅ Action executes"]
     D -- require_approval --> F["✋ Hold → your approver"]
+    F --> HU["👤 Human (HITL)"]
+    F --> AG["🤝 Agent you <b>trust</b> (AIL)"]
     D -- deny --> G["⛔ Blocked, with a reason"]
     C -.-> H["📜 Append-only audit record<br/><i>written either way</i>"]
     style D fill:#f6f8fa,stroke:#57606a
 ```
+
+> The `require_approval` branch hands the decision to an approver **you
+> trust** — a human (HITL), or an agent you trust to judge routine holds
+> (**AIL**): a private model fine-tuned on your procedures, a local LLM you
+> run yourself, or a supervisor agent that already knows your systems. Your
+> model, your infrastructure, your call — and every handover is recorded.
+> [More on HITL / HOTL / AIL](docs/why-reeflex.md#ail)
 
 The adapter enforces the decision faithfully and **fails closed** — if the
 engine is unreachable, nothing goes through.
