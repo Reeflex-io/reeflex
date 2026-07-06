@@ -15,7 +15,7 @@ flowchart LR
     C --> D{Decision}
     D -->|allow| E["Adapter:\nexecute action"]
     D -->|deny| F["Adapter:\nblock, surface reason"]
-    D -->|require_approval| G["Adapter:\nstore hold\ncore never executes"]
+    D -->|require_approval| G["Adapter:\nstore hold"]
     G --> H{{"Resolved by the principal\nyou designate\n(human / agent / automation)\nunder your resolution policy"}}
     H -->|approved| I["Adapter:\nre-submit envelope\napproval.present = true"]
     I --> C
@@ -34,13 +34,7 @@ Key invariants:
 
 ## Hold resolution (HIL, HOTL, AIL)
 
-`require_approval` does not mean "ask a human" — it means **hold, and let the
-principal the operator designates resolve it**: a human who approves before
-the action runs (HITL), a human who monitors on the loop (HOTL), or an AI
-agent the operator trusts for routine holds (AIL). This is the same model
-documented in [`docs/why-reeflex.md`](why-reeflex.md#ail) (see `#ail` for the
-full naming and rationale) — this section shows the mechanics only, and does
-not restate or reword that definition.
+`require_approval` means **hold** — the principal the operator designates (human, agent, or automation) resolves it before the action can run. The naming and rationale for the three oversight modes (HITL / HOTL / AIL) live in [why-reeflex.md#ail](why-reeflex.md#ail); this section shows only the mechanics.
 
 Shipped in core **v0.1.5** (HIL Phase 1): `GET /v1/holds`, `GET /v1/holds/{id}`,
 `POST /v1/holds/{id}/resolve`. The `reeflex-holds` MCP server (see
@@ -48,7 +42,9 @@ Shipped in core **v0.1.5** (HIL Phase 1): `GET /v1/holds`, `GET /v1/holds/{id}`,
 three calls as MCP tools to any MCP client — the socket an AIL principal
 plugs into.
 
-```mermaid
+![Hold resolution — decide → hold → resolve (principal) → re-submit → allow → execute](img/hold-resolution-sequence.png)
+
+<!-- mermaid source for the PNG above; regenerate docs/img/hold-resolution-sequence.png after editing:
 sequenceDiagram
     autonumber
     participant Requester as AI Agent (the actor)
@@ -59,26 +55,22 @@ sequenceDiagram
     Requester->>Adapter: attempts action
     Adapter->>Core: POST /v1/decide (ActionEnvelope)
     Core-->>Adapter: require_approval, hold_id, expires_ts
-    Note over Core: hold persisted, TTL-bound, single-use.<br/>Core never executes.
+    Note over Core: hold persisted · TTL-bound · single-use
     Adapter->>Principal: surface the hold (GET /v1/holds)
     Principal->>Core: POST /v1/holds/{id}/resolve (approve)
-    Note over Requester,Core: actor ≠ approver, enforced in core --<br/>the agent that raised this hold can never resolve it.
+    Note over Requester,Core: actor ≠ approver — enforced in core
     Core-->>Principal: decided_by, decided_ts (written to the audit trail)
     Adapter->>Core: re-submit ActionEnvelope (approval.present=true, hold_id)
     Core-->>Adapter: allow
-    Adapter->>Requester: action executes -- by the Adapter, never by Core
-```
+    Adapter->>Requester: action executes
+-->
 
 Two guarantees hold no matter which principal the operator designates:
 
 - **actor ≠ approver.** The agent whose action raised the hold can never
   resolve it — enforced on identity, inside `reeflex-core`, on every surface
   (adapter re-submission and the `reeflex-holds` MCP surface alike).
-- **R3 (`irreversible_systemic_prod`) is terminal.** A systemic-blast-radius
-  action is a `deny`, not a `require_approval` — it never becomes a hold, and
-  a defensive guard (`NON_RESOLVABLE_RULES`) additionally ensures a hold
-  carrying that rule can never be resolved by any principal, human or agent.
-  It is re-scoped into a smaller action and resubmitted, never approved as-is.
+- R3 (`irreversible_systemic_prod`) is terminal: a systemic action is a `deny`, never a hold — it must be re-scoped and resubmitted, never approved as-is.
 
 Which principal types may resolve which rule is the operator's own choice,
 configured via `REEFLEX_RESOLUTION_POLICY`: Reeflex ships human-only by
@@ -170,4 +162,4 @@ Multi-tenancy, authentication, and billing are part of the closed commercial tie
 - [`docs/why-reeflex.md`](why-reeflex.md#ail) — the HITL / HOTL / AIL naming and rationale (source of truth for the coined term; this document only shows the mechanics)
 - [`reeflex-holds/README.md`](../reeflex-holds/README.md) — the MCP holds surface (`reeflex-holds`), an AIL-capable resolution socket
 - [`docs/adr/0001-deployment-model.md`](adr/0001-deployment-model.md) — deployment model decision (engine-as-service, open-core, on-prem-first, hosted = roadmap; embedded-engine alternative documented and rejected)
-- [`docs/adr/0002-no-llm-in-decision-path.md`](adr/0002-no-llm-in-decision-path.md) — why zero LLM in `/v1/decide` (note: this ADR's §2 still describes the pre-AIL "held for a human reviewer" framing; it records a historical decision and was not rewritten as part of this pass — see NOTES)
+- [`docs/adr/0002-no-llm-in-decision-path.md`](adr/0002-no-llm-in-decision-path.md) — why zero LLM in `/v1/decide`. (Its §2 uses the earlier "held for a human reviewer" wording that predates AIL; the current resolution model is [why-reeflex.md#ail](why-reeflex.md#ail).)

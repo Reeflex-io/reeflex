@@ -173,7 +173,7 @@ This is the discrete-decision equivalent of the cumulative-cost idea at the proj
 
 - `allow` → adapter lets the action run.
 - `deny` → adapter blocks it and returns `reason` to the agent.
-- `require_approval` → adapter holds the action and routes it to a human; on approval it re-submits the envelope with `approval.present = true`.
+- `require_approval` → adapter holds the action for the designated approver; on approval it re-submits the envelope with `approval.present = true`.
 - `obligations` are mandatory side-effects (e.g. `redact:pii`, `rate_limit`). An adapter that ignores an obligation is non-conformant.
 
 Every decision is deterministic: same envelope in, same decision out. No LLM in this path.
@@ -235,7 +235,7 @@ Holds have a TTL (default 4 hours, configurable via `REEFLEX_HOLD_TTL_SECONDS`).
 
 ### Adapter responsibility on approval
 
-The holds API (`GET /v1/holds`, `POST /v1/holds/{id}/resolve`) is core's output. Re-submission of the envelope after resolution is the adapter's responsibility. Core validates the approval and returns `allow`; only then does the adapter execute the original action in the governed system. This separation means core never touches the governed system regardless of the verdict.
+The holds API (`GET /v1/holds`, `POST /v1/holds/{id}/resolve`) is core's output. Re-submission of the envelope after resolution is the adapter's responsibility. Core validates the approval and returns `allow`; only then does the adapter execute the original action in the governed system.
 
 Phase 2 (adapter surfaces) will add re-submission logic to the WordPress adapter and other reference adapters. In Phase 1, core provides the mechanism; adapters must implement re-submission themselves.
 

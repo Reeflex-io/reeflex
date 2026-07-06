@@ -371,10 +371,7 @@ When an envelope carries `approval.present=true` and validation fails, `/v1/deci
 Three principal types may resolve a hold, all via `POST /v1/holds/{id}/resolve`:
 
 - **human** — a human operator (the only type enabled by default).
-- **agent** — AIL. The AIL definition (verbatim from design/HIL-DESIGN.md §17):
-
-  > "AIL (agent-in-the-loop): the resolution of a governance hold by an AI principal that the operator designates, under the operator's resolution policy — with the principal's identity recorded in the audit trail, and never the agent whose action raised the hold."
-
+- **agent** — AIL (agent-in-the-loop): resolution by an AI principal the operator designates. See [why-reeflex.md#ail](../docs/why-reeflex.md#ail) for the full definition and rationale.
 - **automation** — resolution by the operator's workflow or decision system (BPMN process, DMN table, SOAR playbook), recorded as such.
 
 **Core-enforced guarantees (surfaces cannot bypass these):**

@@ -2,6 +2,8 @@
 
 **Status:** Accepted — 2026-06-30
 
+> **Note (superseded framing):** Hold resolution is **not human-only** in the shipped model — the resolving principal may be a human, an agent, or automation you designate (see [why-reeflex.md#ail](../why-reeflex.md#ail)). This ADR records the original decision; its "held for a human reviewer" wording predates the AIL model. The zero-LLM-in-`/v1/decide` decision itself stands.
+
 ---
 
 ## Context
