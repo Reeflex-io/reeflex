@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-reeflex",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "n8n community node for Reeflex - deterministic governance for AI-agent actions. Calls reeflex-core POST /v1/decide and routes each item to Allowed, Held for Approval, or Denied.",
 	"license": "MIT",
 	"homepage": "https://reeflex.io",
