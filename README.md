@@ -17,7 +17,7 @@ blocked. Across any backend, with no LLM in the decision path.
 
 [Why Reeflex](docs/why-reeflex.md) · [Quickstart](QUICKSTART.md) · [How it works](#how-it-works) · [Launch article](docs/blog/one-minute-policy.md) ·
 [WordPress adapter](reeflex-wordpress/) · [Claude Code adapter](reeflex-claude/) ·
-[Spec](reeflex-spec/SPEC.md) · [Whitepaper](docs/Reeflex_Architecture.pdf) ·
+[Spec](reeflex-spec/SPEC.md) · [Whitepaper](https://raw.githubusercontent.com/Reeflex-io/reeflex/main/docs/Reeflex_Architecture.pdf) ·
 [Contributing](CONTRIBUTING.md)
 
 </div>
@@ -39,7 +39,7 @@ have?"** The answer is one of three decisions:
 
 - **allow** — the action proceeds
 - **deny** — it is blocked, with a reason the agent can read
-- **require_approval** — it is held until a human confirms
+- **require_approval** — it is held until an approver confirms
 
 The decision is made by OPA/Rego plus classical logic. Same envelope in, same
 decision out, every time. **Zero LLM in the decision path** — because a safety
@@ -123,7 +123,7 @@ Universal axes, readable rules, yours to extend.
 The engine knows nothing about WordPress, Postgres, or S3. It decides on
 **actions** — normalized, structured, and risk-profiled. Adapters are the
 ecosystem; the spec and the engine are the product. See the
-[architecture whitepaper (PDF)](docs/Reeflex_Architecture.pdf) for the full
+[architecture whitepaper (PDF)](https://raw.githubusercontent.com/Reeflex-io/reeflex/main/docs/Reeflex_Architecture.pdf) for the full
 picture, or [SPEC.md](reeflex-spec/SPEC.md) for the contract.
 
 ---
@@ -131,10 +131,8 @@ picture, or [SPEC.md](reeflex-spec/SPEC.md) for the contract.
 ## Deploy on-prem in one command
 
 Everything runs inside your own infrastructure. In the on-prem deployment — the
-only production-supported one — no decision data ever leaves your network. (The
-one exception is entirely opt-in: if you point an adapter at our public
-`api-dev.reeflex.io` evaluation endpoint to try it out, envelopes go there
-instead. It's for dev/eval only — self-host for anything real.)
+only production-supported one — no decision data ever leaves your network.
+(One opt-in exception — a public eval endpoint — is described below.)
 
 ```bash
 git clone https://github.com/Reeflex-io/reeflex.git
@@ -246,7 +244,7 @@ spec — [CONTRIBUTING.md](CONTRIBUTING.md) walks through it.
 - Anti-fragmentation: a per-session cumulative ledger defeats split-batch evasion
 - Two conformance-tested reference adapters (Claude Code, WordPress)
 - **SIEM-ready**: every decision streams as syslog (RFC 5424, JSON or CEF) — Splunk, QRadar, Wazuh, Graylog, Loki and friends consume it with zero vendor connectors. The SOC sees the attempt, not just the aftermath. See [docs/siem.md](docs/siem.md).
-- **Human-in-the-loop, operational**: `require_approval` materializes a persistent hold with a resolution API (`/v1/holds`), approval principals (human/agent/automation, human-only by default), `actor != approver` enforced, single-use + TTL + action-hash binding, and a kill-switch. Surfaces: the WordPress "Pending approvals" admin page and the `reeflex-holds` MCP server (approve from Claude Desktop).
+- **Human-in-the-loop, operational**: `require_approval` creates a persistent hold with a resolution API (`/v1/holds`); the operator's designated principal resolves it (human-only by default — [HITL/HOTL/AIL](docs/why-reeflex.md#ail)), with `actor ≠ approver` enforced and single-use, TTL-bound holds. Surfaces: the WordPress "Pending approvals" page and the `reeflex-holds` MCP server.
 
 **On the roadmap:** ed25519 envelope signing, Postgres-backed audit,
 database/GraphQL adapters, Slack/CLI approval surfaces + daily digest,
@@ -257,7 +255,7 @@ N-of-M quorum approvals, and a hosted tier. Full list in
 
 ## Learn more
 
-- [Architecture whitepaper (PDF)](docs/Reeflex_Architecture.pdf) — the decision model, how impact is computed, and five real use cases
+- [Architecture whitepaper (PDF)](https://raw.githubusercontent.com/Reeflex-io/reeflex/main/docs/Reeflex_Architecture.pdf) — the decision model, how impact is computed, and five real use cases
 - [QUICKSTART.md](QUICKSTART.md) — clone to a working "watch it stop a delete" in under 10 minutes
 - [SPEC.md](reeflex-spec/SPEC.md) — the Action Envelope and Adapter Contract
 - [IMPACT-MODEL.md](reeflex-spec/IMPACT-MODEL.md) — how impact is computed, in depth
