@@ -274,7 +274,7 @@ def _deny_response(reason: str, rule: str) -> dict:
 # Main decision entry point
 # ---------------------------------------------------------------------------
 
-def process(raw_body: dict) -> tuple[int, dict]:
+def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
     """
     Execute the full decision pipeline.
 
@@ -363,6 +363,7 @@ def process(raw_body: dict) -> tuple[int, dict]:
                 envelope=envelope,
                 decision_response=allow_decision,
                 decision_latency_ms=0,
+                src_ip=src_ip,
             )
             return 200, allow_decision
 
@@ -443,6 +444,7 @@ def process(raw_body: dict) -> tuple[int, dict]:
             envelope=envelope,
             decision_response=decision_response,
             decision_latency_ms=_decision_latency_ms,
+            src_ip=src_ip,
         )
 
         return 200, decision_response
@@ -475,6 +477,7 @@ def _try_emit_decision(
     envelope: dict,
     decision_response: dict,
     decision_latency_ms: int,
+    src_ip: str = "",
 ) -> None:
     """
     Fire-and-forget telemetry emit for one decision event.
@@ -508,6 +511,10 @@ def _try_emit_decision(
                  if isinstance(envelope.get("context"), dict) else "enforce",
             decision_latency_ms=decision_latency_ms,
             reason=decision_response.get("reason", ""),
+            namespace=action.get("namespace", ""),
+            src_ip=src_ip,
+            target_ref=str(target.get("ref") or ""),
+            params=envelope.get("params") or {},
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[reeflex-core] WARN: telemetry emit failed: {exc}", file=sys.stderr)

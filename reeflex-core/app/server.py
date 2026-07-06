@@ -279,7 +279,12 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
             self._respond(400, {"error": "invalid_json"})
             return
 
-        status, response = process(envelope)
+        # Source IP of the /v1/decide caller, for SIEM/GeoIP enrichment.
+        # Behind a reverse proxy the direct peer is the proxy; prefer the
+        # left-most X-Forwarded-For hop (the real client) when present.
+        xff = self.headers.get("X-Forwarded-For", "")
+        src_ip = xff.split(",")[0].strip() if xff.strip() else self.client_address[0]
+        status, response = process(envelope, src_ip=src_ip)
         self._respond(status, response)
 
     # ------------------------------------------------------------------

@@ -1,0 +1,22 @@
+<!--
+  Reeflex decision-gate syslog decoder for Wazuh (COMMUNITY EXAMPLE, UNMAINTAINED).
+
+  Source: reeflex-core SIEM telemetry (REEFLEX_SYSLOG_ENABLED=true) - RFC 5424
+  syslog, APP-NAME "reeflex", MSGID decision|lifecycle|kill_switch, MSG = one-line
+  JSON.
+
+  Efficient by design: a single cheap prematch anchored on the static
+  " reeflex <procid> <msgid> - " marker scopes the decoder to Reeflex lines only;
+  every field is extracted by Wazuh's native JSON_Decoder (verdict, rule_id, verb,
+  ability, axes.*, magnitude_count, session_id, agent_id, on_behalf_of, environment,
+  mode, decision_latency_ms, reason, namespace, target_ref, params.*, and srcip -
+  the /v1/decide caller IP, named "srcip" so Wazuh GeoIP enriches it when a
+  GeoLite2 database is configured). No per-field regex to maintain.
+
+  Install: copy to /var/ossec/etc/decoders/ on the Wazuh manager, then
+  `systemctl restart wazuh-manager`. Test with /var/ossec/bin/wazuh-logtest.
+-->
+<decoder name="reeflex">
+  <prematch type="pcre2"> reeflex \d+ \S+ - </prematch>
+  <plugin_decoder offset="after_prematch">JSON_Decoder</plugin_decoder>
+</decoder>

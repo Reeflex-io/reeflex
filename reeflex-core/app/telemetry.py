@@ -569,6 +569,10 @@ class SyslogEmitter:
         mode: str = "enforce",
         decision_latency_ms: int = 0,
         reason: str = "",
+        namespace: str = "",
+        src_ip: str = "",
+        target_ref: str = "",
+        params: dict | None = None,
     ) -> None:
         """
         Emit one decision event.
@@ -605,6 +609,10 @@ class SyslogEmitter:
             "mode": mode,
             "decision_latency_ms": decision_latency_ms,
             "reason": reason,
+            "namespace": namespace,
+            "srcip": src_ip,
+            "target_ref": target_ref,
+            "params": params or {},
             "reeflex_version": self._version,
             "epoch_ms": epoch_ms,
         }
