@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reeflex-holds"
-version = "0.1.0"
+version = "0.1.1"
 description = "MCP server exposing reeflex-core's Human-in-the-Loop (HIL) holds API -- list, inspect, and resolve Reeflex governance holds from any MCP client."
 readme = "README.md"
 requires-python = ">=3.10"
