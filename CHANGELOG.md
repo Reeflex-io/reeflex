@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-07-06
+
+n8n community node release-path fix. No change to any component's runtime behaviour.
+
+### Fixed
+- **`n8n-nodes-reeflex` now publishes with provenance (0.1.1).** The release workflow's n8n build failed because `npm ci` compiled `isolated-vm` (native, pulled transitively by `@n8n/node-cli`), which is not needed to build/lint/pack the node — so `npm ci --ignore-scripts` is used, and the npm publish job runs npm ≥ 11.5.1 and authenticates via npm OIDC Trusted Publishing (tokenless), which signs the `--provenance` attestation. The node keeps **zero runtime dependencies**. (The previously published `n8n-nodes-reeflex@0.1.0` had no provenance because it was published manually.)
+
 ## [0.1.8] - 2026-07-06
 
 Core telemetry hardening for SIEM consumption (Wazuh integration + launch readiness). No decision-path behaviour change; the GHCR core image is rebuilt so `api-dev` runs a baked image rather than a container hotpatch.
