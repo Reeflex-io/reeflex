@@ -338,7 +338,12 @@ jobs:
           if npm view "n8n-nodes-reeflex@${VER}" version >/dev/null 2>&1; then
             echo "n8n-nodes-reeflex@${VER} is already published — skipping."
           else
-            npm publish --provenance --access public --tag latest
+            # --ignore-scripts: the package's prepublishOnly hook runs `n8n-node
+            # prerelease`, which intentionally blocks a raw `npm publish` ("Run
+            # `npm run release`…", exit 1). We publish the already-built dist/ in
+            # CI, so skip that guard. Provenance is unaffected (native to npm
+            # publish, not a package script).
+            npm publish --provenance --access public --tag latest --ignore-scripts
             echo "Published n8n-nodes-reeflex@${VER}."
           fi
 
