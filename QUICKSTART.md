@@ -472,7 +472,7 @@ product in miniature.
 - Put it in front of something real: the [WordPress adapter](reeflex-wordpress/)
   installs from the wp-admin UI in minutes.
 - Point Claude Code at it: the [Claude Code adapter](reeflex-claude/) gates
-  every tool call.
+  every tool call. It requires **Python 3.8+** (`pip install reeflex-claude`).
 - Build your own adapter: the [SPEC](reeflex-spec/SPEC.md) is deliberately
   simple — one envelope shape, four responsibilities — and
   [contributions are genuinely welcome](CONTRIBUTING.md).
