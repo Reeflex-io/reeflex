@@ -839,6 +839,7 @@ class SyslogEmitter:
         """
         raw = socket.create_connection((self._host, self._port), timeout=5.0)
         raw.settimeout(5.0)
+        _enable_keepalive(raw)
         if self._protocol == "tls":
             if self._tls_verify:
                 ctx = ssl.create_default_context()
@@ -915,6 +916,37 @@ def _safe_hostname() -> str:
         return socket.gethostname() or "unknown"
     except Exception:  # noqa: BLE001
         return "unknown"
+
+
+def _enable_keepalive(sock: socket.socket) -> None:
+    """
+    Enable TCP keepalive on a freshly connected socket.
+
+    WHY: the syslog stream is low-volume and long-idle. If the collector (e.g.
+    wazuh-remoted) restarts while our connection is idle, the peer goes away but
+    a subsequent sendall() can SUCCEED — the bytes are buffered locally and only
+    a delayed RST later surfaces the break. That is a half-open connection: the
+    message is silently lost and the reconnect path in _send_tcp_or_tls never
+    fires. Keepalive makes the OS actively probe the idle peer, so a dead
+    connection raises on the next send and triggers the reconnect+retry.
+
+    Best-effort and platform-guarded: SO_KEEPALIVE is portable; the interval
+    knobs are Linux-specific (TCP_KEEP*) and skipped where absent. Never raises —
+    a socket without keepalive still works, just detects drops more slowly.
+    """
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except OSError:
+        return
+    # Fast detection tuned for an idle, low-volume stream: start probing after
+    # 15s idle, probe every 5s, drop after 3 failed probes (~30s to detect).
+    for opt_name, value in (("TCP_KEEPIDLE", 15), ("TCP_KEEPINTVL", 5), ("TCP_KEEPCNT", 3)):
+        opt = getattr(socket, opt_name, None)
+        if opt is not None:
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, opt, value)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------

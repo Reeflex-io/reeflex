@@ -201,6 +201,26 @@ def _stop_server(server: socketserver.BaseServer, thread: threading.Thread) -> N
     thread.join(timeout=3)
 
 
+def _emit_sample(emitter: SyslogEmitter, session_id: str) -> None:
+    """Emit one decision event — shared by transport/reconnect tests."""
+    emitter.emit_decision(
+        verdict="require_approval",
+        rule_id="reeflex.policy/reconnect_test",
+        verb="delete",
+        ability="test/delete",
+        axes={"reversibility": "irreversible", "blast_radius": "broad",
+              "externality": "internal"},
+        magnitude_count=1,
+        session_id=session_id,
+        agent_id="agent:test",
+        on_behalf_of="user:synthetic",
+        environment="production",
+        mode="enforce",
+        decision_latency_ms=5,
+        reason="reconnect test",
+    )
+
+
 # ---------------------------------------------------------------------------
 # 1. FORMATTER GOLDENS — socket-free
 # ---------------------------------------------------------------------------
@@ -727,6 +747,72 @@ class TestTransportTCP(unittest.TestCase):
         msg_str = msg_bytes.decode("utf-8", errors="replace")
         self.assertRegex(msg_str[:20], r"^<\d+>1 ",
                          f"Framed message not RFC 5424: {msg_str[:60]}")
+
+    def test_connect_enables_so_keepalive(self) -> None:
+        """_connect() must enable SO_KEEPALIVE so a dead, idle peer is detected
+        by the OS and the next send raises -> the reconnect path fires. Without
+        keepalive a half-open connection silently swallows (loses) buffered
+        writes until a delayed RST. Directly asserts the hardening is applied."""
+        emitter = self._make_emitter()
+        sock = emitter._connect()
+        try:
+            self.assertEqual(
+                sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE), 1,
+                "SO_KEEPALIVE not enabled on the syslog socket",
+            )
+        finally:
+            sock.close()
+
+
+# ---------------------------------------------------------------------------
+# 5b. TRANSPORT TCP RECONNECT — recover when the collector restarts
+# ---------------------------------------------------------------------------
+
+class TestTCPReconnect(unittest.TestCase):
+    """Regression for the field finding: after wazuh-remoted restarted,
+    reeflex-core kept writing to a half-open socket and silently lost events
+    until the container was restarted. Keepalive detects the drop and the
+    reconnect path resumes delivery to the restarted collector."""
+
+    def tearDown(self) -> None:
+        reset_emitter(enabled=False)
+
+    def test_redelivers_to_restarted_collector(self) -> None:
+        # Collector #1 on an ephemeral port.
+        srv1 = FakeTCPServer("127.0.0.1", 0)
+        port = srv1.server_address[1]
+        t1 = _start_server_thread(srv1)
+
+        emitter = reset_emitter(
+            enabled=True, address=f"127.0.0.1:{port}", protocol="tcp", fmt="json",
+        )
+        emitter.start()
+        _emit_sample(emitter, "sess_reconnect_1")
+        self.assertTrue(srv1.delivery_event.wait(3.0),
+                        "msg1 not delivered to collector #1")
+
+        # Collector #1 goes away (simulates the syslog collector restarting).
+        # Force the emitter to notice deterministically — in production keepalive
+        # does this after ~30s; the test must not depend on that timing.
+        _stop_server(srv1, t1)
+        emitter._close_socket()
+
+        # Collector #2 comes up on the SAME port (allow_reuse_address).
+        srv2 = FakeTCPServer("127.0.0.1", port)
+        t2 = _start_server_thread(srv2)
+        try:
+            _emit_sample(emitter, "sess_reconnect_2")
+            delivered = srv2.delivery_event.wait(3.0)
+            emitter.stop(timeout_s=2.0)
+            self.assertTrue(
+                delivered,
+                "msg2 not delivered to restarted collector #2 — reconnect failed",
+            )
+            with srv2._lock:
+                self.assertEqual(len(srv2.received), 1,
+                                 f"Expected 1 msg on collector #2, got {len(srv2.received)}")
+        finally:
+            _stop_server(srv2, t2)
 
 
 # ---------------------------------------------------------------------------
