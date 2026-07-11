@@ -1,0 +1,119 @@
+# mappings/github.yaml -- the canonical reference GitHub MCP server
+# (github.com/modelcontextprotocol/servers-archived/tree/main/src/github --
+# archived by the steering group, but still the widely-mirrored reference
+# tool surface; "Repository management, file operations, and GitHub API
+# integration"). Tool names + argument shapes verified against the server's
+# REAL source (src/github/operations/*.ts) while building this mapping.
+#
+# HONEST NOTE (read this before trusting the "broad-blast" example): the
+# reference server exposes NO delete-anything tool (no delete_repository,
+# no delete_file/branch/issue) -- 27 tools total, zero of them named/shaped
+# like a delete. So the irreversible+broad+outbound demonstration this
+# mapping gives is `merge_pull_request` (merging integrates a PR into the
+# target branch; the GitHub API itself gives you no "unmerge" -- reverting
+# means a NEW commit/PR, so this is a defensible, real irreversible+broad
+# action), NOT a fictitious "delete repo" tool.
+
+tools:
+  # -- reads ---------------------------------------------------------------
+  search_repositories:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  search_code:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  search_issues:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  search_users:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  get_file_contents:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  get_issue:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  list_issues:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  get_pull_request:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  list_pull_requests:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  list_commits:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  get_pull_request_files:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  get_pull_request_status:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  get_pull_request_comments:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  get_pull_request_reviews:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+
+  # -- writes: single-target, externality outbound (reaches GitHub's servers
+  # and every collaborator/CI watching the repo) --------------------------
+  create_or_update_file:
+    # Real tool name literally does both -- `sha` arg (optional) selects
+    # create vs overwrite-existing at runtime; conservatively mapped as the
+    # more consequential of the two.
+    verb: update
+    axes: { reversibility: recoverable, blast_radius: single, externality: outbound }
+  create_repository:
+    verb: create
+    axes: { reversibility: recoverable, blast_radius: single, externality: outbound }
+  fork_repository:
+    verb: create
+    axes: { reversibility: recoverable, blast_radius: single, externality: outbound }
+  create_issue:
+    verb: create
+    axes: { reversibility: recoverable, blast_radius: single, externality: outbound }
+  create_branch:
+    verb: create
+    axes: { reversibility: recoverable, blast_radius: single, externality: outbound }
+  add_issue_comment:
+    verb: create
+    axes: { reversibility: recoverable, blast_radius: single, externality: outbound }
+  create_pull_request:
+    verb: create
+    axes: { reversibility: recoverable, blast_radius: single, externality: outbound }
+  create_pull_request_review:
+    verb: create
+    axes: { reversibility: recoverable, blast_radius: single, externality: outbound }
+  update_issue:
+    verb: update
+    axes: { reversibility: recoverable, blast_radius: single, externality: outbound }
+  update_pull_request_branch:
+    verb: update
+    axes: { reversibility: recoverable, blast_radius: single, externality: outbound }
+
+  # -- the bulk / magnitude-from-args case ---------------------------------
+  push_files:
+    # Real `files` argument is an array -- magnitude scales with the batch
+    # size (see `magnitude:` below). A git push CAN be reverted with another
+    # commit (unlike a merge), so reversibility stays recoverable even at
+    # scale -- this is what distinguishes it from merge_pull_request below.
+    verb: create
+    axes: { reversibility: recoverable, blast_radius: scoped, externality: outbound }
+
+  # -- the irreversible + broad + outbound case ("R2/R3" demonstration) ----
+  merge_pull_request:
+    # Integrates a PR into its target branch. The GitHub API has no
+    # "unmerge" -- reverting requires a brand-new commit/PR, and the merge
+    # can affect everything the PR touched (broad), visible to every
+    # collaborator/CI the instant it lands (outbound).
+    verb: update
+    axes: { reversibility: irreversible, blast_radius: broad, externality: outbound }
+
+# push_files' `files` is the one real list-typed argument in this server --
+# count = len(arguments.files) if a list, else 1.
+magnitude:
+  from_arg: files

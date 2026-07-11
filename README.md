@@ -16,7 +16,7 @@ blocked. Across any backend, with no LLM in the decision path.
 [![Release](https://img.shields.io/github/v/release/Reeflex-io/reeflex?sort=semver&color=6a4c93)](https://github.com/Reeflex-io/reeflex/releases)
 
 [Why Reeflex](docs/why-reeflex.md) · [Quickstart](QUICKSTART.md) · [How it works](#how-it-works) · [Launch article](docs/blog/one-minute-policy.md) ·
-[WordPress adapter](reeflex-wordpress/) · [Claude Code adapter](reeflex-claude/) ·
+[WordPress adapter](reeflex-wordpress/) · [Claude Code adapter](reeflex-claude/) · [MCP gateway](reeflex-mcp/) ·
 [Spec](reeflex-spec/SPEC.md) · [Whitepaper](https://raw.githubusercontent.com/Reeflex-io/reeflex/main/docs/Reeflex_Architecture.pdf) ·
 [Contributing](CONTRIBUTING.md)
 
@@ -222,7 +222,7 @@ curl -s http://localhost:8080/v1/decide \
 The adapter then enforces that decision: proceed, block, or hold for approval
 — by default a human, or an agent you explicitly designate (see
 [AIL](docs/why-reeflex.md#ail)). A worked adapter lives in
-[`reeflex-mock/`](reeflex-mock/), and two conformance-tested reference
+[`reeflex-mock/`](reeflex-mock/), and three conformance-tested reference
 adapters ship in this repo — see below.
 
 ---
@@ -234,12 +234,18 @@ adapters ship in this repo — see below.
 | [`reeflex-mock`](reeflex-mock/) | in-memory reference | worked example + 5-scenario demo |
 | [`reeflex-claude`](reeflex-claude/) | Claude Code (source-side) | `pip install reeflex-claude` · conformance-tested · 133 tests |
 | [`reeflex-wordpress`](reeflex-wordpress/) | WordPress Abilities API (resource-side) | conformance-tested end-to-end |
+| [`reeflex-mcp`](reeflex-mcp/) | MCP gateway — any MCP upstream (network boundary) | conformance-tested · 287 tests · Apache-2.0 · not yet on PyPI (install from source) |
+| [`n8n-nodes-reeflex`](n8n-nodes-reeflex/) | n8n workflow node (agent-side) | MIT · not yet on npm (install from source) |
 | `reeflex-postgres` | database wire-protocol | on the roadmap |
 | `reeflex-graphql` | GraphQL resolvers | on the roadmap |
 
 Adapters implement four responsibilities from [SPEC §6](reeflex-spec/SPEC.md):
 **intercept → normalize → enforce → audit.** Anyone can write one against the
 spec — [CONTRIBUTING.md](CONTRIBUTING.md) walks through it.
+
+Already running MCP servers (filesystem, GitHub, Postgres, your own)? Put
+`reeflex-mcp` in front of all of them without rewriting a client — see the
+[MCP gateway guide](docs/mcp-gateway.md).
 
 ---
 
@@ -251,9 +257,10 @@ spec — [CONTRIBUTING.md](CONTRIBUTING.md) walks through it.
 - Base policy pack (R1–R5): read-only allow, irreversible-broad-prod approval, irreversible-systemic-prod deny, default allow, session delete-budget
 - Fail-closed on any OPA error or unreachable core — never a silent allow
 - Anti-fragmentation: a per-session cumulative ledger defeats split-batch evasion
-- Two conformance-tested reference adapters (Claude Code, WordPress)
+- Three conformance-tested reference adapters (Claude Code, WordPress, MCP gateway)
 - **SIEM-ready**: every decision streams as syslog (RFC 5424, JSON or CEF) — Splunk, QRadar, Wazuh, Graylog, Loki and friends consume it with zero vendor connectors. The SOC sees the attempt, not just the aftermath. See [docs/siem.md](docs/siem.md).
 - **Human-in-the-loop, operational**: `require_approval` creates a persistent hold with a resolution API (`/v1/holds`); the operator's designated principal resolves it (human-only by default — [HITL/HOTL/AIL](docs/why-reeflex.md#ail)), with `actor ≠ approver` enforced and single-use, TTL-bound holds. Surfaces: the WordPress "Pending approvals" page and the `reeflex-holds` MCP server.
+- **MCP gateway (`reeflex-mcp`)**: a transparent proxy in front of any MCP upstream (stdio or streamable-HTTP) — namespaced dynamic tool discovery, `tools/call` normalized via declarative per-server mappings (filesystem/github/postgres starters) or a heuristic fallback, decided by the same `/v1/decide`, obligations honored per SPEC §5/§7. `setup`/`add`/`import`/`doctor` migrate and drift-check client MCP configs onto a single governed path. Not yet on PyPI — install from source. See [docs/mcp-gateway.md](docs/mcp-gateway.md).
 
 **On the roadmap:** ed25519 envelope signing, Postgres-backed audit,
 database/GraphQL adapters, Slack/CLI approval surfaces + daily digest,
@@ -268,6 +275,7 @@ N-of-M quorum approvals, and a hosted tier. Full list in
 - [QUICKSTART.md](QUICKSTART.md) — clone to a working "watch it stop a delete" in under 10 minutes
 - [SPEC.md](reeflex-spec/SPEC.md) — the Action Envelope and Adapter Contract
 - [IMPACT-MODEL.md](reeflex-spec/IMPACT-MODEL.md) — how impact is computed, in depth
+- [docs/mcp-gateway.md](docs/mcp-gateway.md) — the MCP gateway adapter (`reeflex-mcp`): architecture, deployment modes, mappings, obligations, lifecycle
 - [docs/adr/](docs/adr/) — the decisions behind the design, including [why no LLM in the decision path](docs/adr/0002-no-llm-in-decision-path.md)
 
 ---

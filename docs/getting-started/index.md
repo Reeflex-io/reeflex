@@ -2,7 +2,8 @@
 title: Getting started
 description: >-
   Install a Reeflex adapter and watch it hold a destructive action in minutes —
-  Claude Code, n8n, or WordPress. Observe-mode first, so nothing breaks.
+  Claude Code, n8n, WordPress, or an existing MCP server. Observe-mode first,
+  so nothing breaks.
 ---
 
 # Getting started
@@ -58,6 +59,21 @@ verdict, and enforces it. Pick the adapter that matches where your agent runs.
     URL in **Settings → Reeflex Gate**, and trigger a bulk delete to see a hold.
     Full guide:
     [`reeflex-wordpress/`](https://github.com/Reeflex-io/reeflex/tree/main/reeflex-wordpress).
+
+=== "MCP gateway"
+
+    Puts the same governance in front of any existing MCP server —
+    filesystem, GitHub, Postgres, or your own — with no client rewrite.
+    `observe` mode by default; `setup` migrates a client's MCP config for you.
+
+    ```bash
+    # Not yet published to PyPI — install from source (repo root):
+    cd reeflex-mcp && pip install -e .
+    cp reeflex-mcp.yaml.example reeflex-mcp.yaml   # edit: point upstreams: at a real MCP server
+    reeflex-mcp --config reeflex-mcp.yaml --transport stdio
+    ```
+
+    Full guide: [docs/mcp-gateway.md](../mcp-gateway.md).
 
 ## Try it in 30 seconds (no install)
 

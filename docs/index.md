@@ -38,7 +38,8 @@ safe to run, needs a human, or must be blocked. Across any backend, with
     ---
 
     Install an adapter and watch Reeflex hold a destructive action in minutes —
-    Claude Code, n8n, or WordPress. Observe-mode first, so nothing breaks.
+    Claude Code, n8n, WordPress, or an existing MCP server. Observe-mode
+    first, so nothing breaks.
 
     [:octicons-arrow-right-24: Quickstart](getting-started/index.md)
 
@@ -56,7 +57,8 @@ safe to run, needs a human, or must be blocked. Across any backend, with
     ---
 
     An adapter turns a backend action into an Action Envelope and enforces the
-    verdict. Claude Code, WordPress, n8n — or write your own against the spec.
+    verdict. Claude Code, WordPress, n8n, MCP gateway — or write your own
+    against the spec.
 
     [:octicons-arrow-right-24: Adapters](adapters/index.md)
 

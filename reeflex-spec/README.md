@@ -110,6 +110,24 @@ The following components are built, tested, and available:
   `STATUS: PASS` or `STATUS: FAIL`.
 - The worked reference for adapter authors building against this spec.
 
+**`reeflex-mcp` — MCP gateway adapter (reference, conformance-tested)**
+- A transparent MCP proxy: intercepts `tools/call` on any configured MCP
+  upstream (stdio or streamable-HTTP), namespaces and aggregates tools across
+  multiple upstreams with zero hardcoded tool knowledge, normalizes into the
+  Action Envelope, calls core, and enforces the verdict — everything else
+  passes through unmodified.
+- Declarative per-server mappings (`mappings/<system>.yaml`; starters ship for
+  `filesystem`, `github`, `postgres`) resolved ahead of a name-heuristic
+  fallback and a conservative default — the same fail-closed axis coercion as
+  core's own.
+- Obligations (SPEC §5/§7) read on every decision; enforce mode blocks on an
+  unknown obligation, observe mode records it.
+- Lifecycle subcommands (`setup`/`restore`/`add`/`import`/`doctor`) migrate a
+  client's MCP config onto a single governed path and detect drift.
+- 113 unit tests passing; conformance-tested per SPEC §7. **Not yet published
+  to PyPI** — install from source. See
+  [docs/mcp-gateway.md](../docs/mcp-gateway.md).
+
 ---
 
 ## What is planned (not yet built)

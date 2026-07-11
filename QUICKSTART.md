@@ -327,6 +327,36 @@ this behaviour — it is structural.
 
 ---
 
+## Govern an existing MCP fleet (reeflex-mcp)
+
+If your agents already talk to MCP servers (filesystem, GitHub, Postgres, or
+your own), `reeflex-mcp` puts the same `reeflex-core` decision in front of
+all of them — without opening core to the internet or rewriting a client's
+logic. It is **not yet published to PyPI**; install from source, from the
+repo root:
+
+```bash
+cd reeflex-mcp
+python -m venv .venv
+.venv/Scripts/pip install -e .          # Windows; .venv/bin/pip on Linux/macOS
+
+cp reeflex-mcp.yaml.example reeflex-mcp.yaml
+# edit reeflex-mcp.yaml: point upstreams: at your real MCP server(s)
+
+reeflex-mcp --config reeflex-mcp.yaml --transport stdio
+```
+
+Point your MCP client (Claude Desktop, Claude Code's `.mcp.json`, …) at
+`reeflex-mcp` instead of the upstream directly — `reeflex-mcp setup` can do
+that migration for you, with a backup and a `restore` undo. Every
+`tools/call` is normalized into the same Action Envelope this guide's `curl`
+examples use, decided by the same `reeflex-core` you just started, and (in
+`observe` mode, the default) recorded without changing anything — flip to
+`enforce` once you've watched what it would have held. Full guide:
+[docs/mcp-gateway.md](docs/mcp-gateway.md).
+
+---
+
 ## Wire your own backend
 
 To connect a new backend (a database, an API, a file system), you implement a
@@ -473,6 +503,10 @@ product in miniature.
   installs from the wp-admin UI in minutes.
 - Point Claude Code at it: the [Claude Code adapter](reeflex-claude/) gates
   every tool call. It requires **Python 3.8+** (`pip install reeflex-claude`).
+- Already running MCP servers? The [MCP gateway](reeflex-mcp/)
+  (`reeflex-mcp`) governs any of them without a client rewrite — see the
+  [gateway quickstart](#govern-an-existing-mcp-fleet-reeflex-mcp) above and
+  [docs/mcp-gateway.md](docs/mcp-gateway.md).
 - Build your own adapter: the [SPEC](reeflex-spec/SPEC.md) is deliberately
   simple — one envelope shape, four responsibilities — and
   [contributions are genuinely welcome](CONTRIBUTING.md).

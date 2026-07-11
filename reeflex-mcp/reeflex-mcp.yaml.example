@@ -1,0 +1,50 @@
+# reeflex-mcp.yaml -- operator-owned multi-upstream registry.
+# Copy to reeflex-mcp.yaml (or point REEFLEX_MCP_CONFIG at your own copy) and
+# edit. Secrets are ALWAYS by-reference (an env var NAME, e.g. token_env) --
+# never inline here.
+#
+# See design/MCP-GATEWAY-DESIGN.md section 7 and reeflex_mcp/registry.py for
+# the full field reference.
+
+# observe (default, never breaks traffic) | enforce.
+# REEFLEX_MODE env var, if set, overrides this.
+mode: observe
+
+upstreams:
+  # A local, stdio-launched MCP server -- the gateway spawns it as a child
+  # process (same lifecycle as the front: client restart -> gateway restart
+  # -> upstream restart, matching how Claude Desktop launches servers).
+  - name: fs
+    command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"]
+    target:
+      system: filesystem       # matches the bundled mappings/filesystem.yaml starter (Track 4) automatically
+      environment: staging     # production | staging | dev -- the strictness lever
+    required: true             # default true: unreachable at boot -> refuse to boot
+
+  # A remote, streamable-HTTP MCP server.
+  - name: gh
+    url: https://mcp.internal/github
+    auth:
+      token_env: GH_MCP_TOKEN   # by-reference; read fresh at connect time
+    target:
+      system: github           # matches the bundled mappings/github.yaml starter (Track 4) automatically
+      environment: production
+    required: true
+
+# OPTIONAL -- service-mode per-client auth + session scaffold (design doc
+# section 10 / section 14). Maps a presented bearer token (streamable-HTTP
+# front only) to a stable session_id, so reeflex-core's R5 cumulative
+# per-agent ledger stays intact across reconnects for the same client.
+# Full mTLS is documented as a future upgrade, not implemented here.
+clients:
+  - token_env: CLIENT_ALICE_TOKEN
+    session_id: agent:alice
+
+# OPTIONAL -- Track 4 (design doc section 8): directory of declarative
+# `<system>.yaml` mapping files, keyed by `target.system` above. Omit this
+# key entirely to use the package's own bundled starter mappings
+# (filesystem/github/postgres -- see reeflex_mcp/mappings/*.yaml and the
+# README's "Declarative mappings" section for the honest limitations and
+# reasoning behind each one). REEFLEX_MCP_MAPPINGS_DIR env, if set,
+# overrides this.
+# mappings_dir: ./mappings

@@ -32,6 +32,21 @@ Key invariants:
 
 ---
 
+## Interception seams
+
+`reeflex-core` knows nothing about where an action came from. Every adapter attaches this same decision flow at a different seam:
+
+| Adapter | Seam | Placement |
+|---|---|---|
+| `reeflex-claude` | `PreToolUse` hook (every Claude Code tool call) | Source-side (in the agent) |
+| `reeflex-wordpress` | `WP_Ability::execute()` (WordPress Abilities API) | Resource-side (in the backend) |
+| `n8n-nodes-reeflex` | a gate node before a risky workflow step | Source-side (in the workflow) |
+| `reeflex-mcp` | JSON-RPC `tools/call`, in front of any MCP upstream (stdio or streamable-HTTP) | Network-boundary (between an MCP client and the server(s) it talks to) |
+
+`reeflex-mcp` is the newest of these: a transparent MCP proxy that aggregates and namespaces every configured upstream's tools, intercepts `tools/call`, normalizes it into the same Action Envelope shown above (via declarative per-server mappings or a conservative heuristic fallback — see [docs/mcp-gateway.md](mcp-gateway.md)), and enforces the same `/v1/decide` verdict. It adds no second decision engine and no state of its own — R5's cumulative ledger, holds, and audit stay in `reeflex-core`, keyed by the same `agent.session_id` this document describes throughout.
+
+---
+
 ## Hold resolution (HIL, HOTL, AIL)
 
 `require_approval` means **hold** — the principal the operator designates (human, agent, or automation) resolves it before the action can run. The naming and rationale for the three oversight modes (HITL / HOTL / AIL) live in [why-reeflex.md#ail](why-reeflex.md#ail); this section shows only the mechanics.
@@ -161,5 +176,6 @@ Multi-tenancy, authentication, and billing are part of the closed commercial tie
 - [`reeflex-spec/SPEC.md`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-spec/SPEC.md) — Action Envelope, Adapter Contract, conformance requirements, §5.1 Approval object semantics (HIL Phase 1)
 - [`docs/why-reeflex.md`](why-reeflex.md#ail) — the HITL / HOTL / AIL naming and rationale (source of truth for the coined term; this document only shows the mechanics)
 - [`reeflex-holds/README.md`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-holds/README.md) — the MCP holds surface (`reeflex-holds`), an AIL-capable resolution socket
+- [`docs/mcp-gateway.md`](mcp-gateway.md) — the MCP gateway adapter (`reeflex-mcp`): the network-boundary interception seam, deployment modes, mappings, obligations, lifecycle
 - [`docs/adr/0001-deployment-model.md`](adr/0001-deployment-model.md) — deployment model decision (engine-as-service, open-core, on-prem-first, hosted = roadmap; embedded-engine alternative documented and rejected)
 - [`docs/adr/0002-no-llm-in-decision-path.md`](adr/0002-no-llm-in-decision-path.md) — why zero LLM in `/v1/decide`. (Its §2 uses the earlier "held for a human reviewer" wording that predates AIL; the current resolution model is [why-reeflex.md#ail](why-reeflex.md#ail).)

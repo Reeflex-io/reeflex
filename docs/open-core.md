@@ -17,6 +17,7 @@ any public repository, in any form — no code, no configuration, no schema, no 
 | `reeflex-spec` (Action Envelope + Adapter Contract + conformance suite + JSON schemas) | Open | Apache 2.0 | Available |
 | `reeflex-claude` reference adapter (Claude Code) | Open | Apache 2.0 | Available |
 | `reeflex-wordpress` reference adapter | Open | Apache 2.0 | Available |
+| `reeflex-mcp` reference adapter (MCP gateway — any MCP upstream) | Open | Apache 2.0 | Available (source; not yet on PyPI) |
 | Community adapters (`reeflex-postgres`, `reeflex-s3`, etc.) | Open | Apache 2.0 | Community-built against the spec |
 | Base policy packs (Rego rules for the Action Envelope) | Open | Apache 2.0 | Available |
 | Mock adapter + demo | Open | Apache 2.0 | Available |
@@ -86,6 +87,16 @@ S3. It evaluates envelopes. The spec defines what a valid envelope looks like.
 The reference implementation of the Adapter Contract. It proves the contract is
 implementable, serves as the primary adoption surface (WordPress runs a large proportion
 of the web), and is the template from which community adapters are built.
+
+### `reeflex-mcp` — reference adapter (MCP gateway)
+
+A transparent MCP proxy that governs any MCP upstream (stdio or streamable-HTTP): it
+intercepts `tools/call`, normalizes it into the Action Envelope via declarative
+per-server mappings or a conservative heuristic fallback, calls core, and enforces the
+verdict. It proves the contract is implementable at the network-boundary side — the
+third seam alongside source-side (`reeflex-claude`) and resource-side
+(`reeflex-wordpress`). Conformance-tested per SPEC §7. See
+[docs/mcp-gateway.md](mcp-gateway.md).
 
 ### Community adapters
 

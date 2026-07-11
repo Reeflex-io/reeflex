@@ -1,0 +1,83 @@
+# mappings/filesystem.yaml -- @modelcontextprotocol/server-filesystem, the
+# official TypeScript reference filesystem MCP server
+# (npx -y @modelcontextprotocol/server-filesystem <allowed-dir>...).
+#
+# Tool names + argument shapes verified against the server's REAL source
+# while building this mapping (github.com/modelcontextprotocol/servers,
+# src/filesystem/index.ts, `server.registerTool(...)` calls) -- these are
+# not invented names.
+#
+# HONEST NOTE (read this before trusting the reversible/irreversible split):
+# the reference server has NO delete tool at all -- by design, per its own
+# tagline "Secure file operations with configurable access controls". So the
+# split this mapping demonstrates is READ (reversible) vs WRITE/OVERWRITE
+# (irreversible) -- not read vs. hard-delete. `write_file` and `edit_file`
+# both carry the tool's OWN real MCP annotation `destructiveHint: true`
+# (write_file's own description literally warns: "will overwrite existing
+# files without warning, no built-in undo") -- that real annotation is why
+# this mapping treats them as irreversible rather than merely "recoverable".
+# If you point this mapping at a filesystem server that DOES expose a real
+# delete/trash tool, add it explicitly -- do not assume one exists.
+
+tools:
+  # -- reads (readOnlyHint: true on all of these, per the real tool schemas) --
+  read_text_file:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  read_media_file:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  read_multiple_files:
+    # `paths` is a real list-typed argument -- magnitude scales with it (see
+    # the `magnitude:` rule below).
+    verb: read
+    axes: { reversibility: reversible, blast_radius: scoped, externality: internal }
+  list_directory:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  list_directory_with_sizes:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  directory_tree:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: scoped, externality: internal }
+  search_files:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: scoped, externality: internal }
+  get_file_info:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  list_allowed_directories:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+
+  # -- writes ------------------------------------------------------------
+  write_file:
+    # Creates OR completely overwrites an existing file -- real annotation:
+    # { readOnlyHint: false, idempotentHint: true, destructiveHint: true }.
+    verb: create
+    axes: { reversibility: irreversible, blast_radius: single, externality: internal }
+  edit_file:
+    # Line-based edits to an existing file -- real annotation:
+    # { readOnlyHint: false, idempotentHint: false, destructiveHint: true }.
+    verb: update
+    axes: { reversibility: irreversible, blast_radius: single, externality: internal }
+  move_file:
+    # Moves/renames; fails if the destination exists (no silent overwrite),
+    # but the SOURCE path is gone afterward. Real annotation:
+    # { readOnlyHint: false, idempotentHint: false, destructiveHint: true }.
+    verb: update
+    axes: { reversibility: irreversible, blast_radius: single, externality: internal }
+  create_directory:
+    # Creates (or silently confirms) a directory -- real annotation:
+    # { readOnlyHint: false, idempotentHint: true, destructiveHint: false }.
+    # The one write op in this mapping deliberately left recoverable: making
+    # a directory is low-risk and the real tool's own hint says non-destructive.
+    verb: create
+    axes: { reversibility: recoverable, blast_radius: single, externality: internal }
+
+# read_multiple_files' `paths` is the one real list-typed argument in this
+# server -- count = len(arguments.paths) if a list, else 1 (applies to any
+# tool call carrying a `paths` argument; only read_multiple_files does today).
+magnitude:
+  from_arg: paths

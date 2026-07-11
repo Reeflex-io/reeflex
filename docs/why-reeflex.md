@@ -28,14 +28,51 @@ Most of the stack answers the first two. Reeflex exists for the third.
 | Evidence | logs after the fact | flags after the fact | access logs | **pre-execution record of what the agent *attempted*** — streamed to your SIEM in real time |
 | If the engine is down | varies | fails open as a rule | varies | **fails closed — nothing goes through** |
 
+*("MCP gateways" above is the commodity, identity-first category — Permit.io,
+agent.security, and similar: auth, rate limits, routing. Reeflex's own
+component at that same seam, `reeflex-mcp`, is not that category — it renders
+the impact judgment instead. See
+[below](#reeflex-mcp--governance-judgment-at-the-mcp-seam).)*
+
 ## What Reeflex deliberately does not do
 
 - It does not replace identity, SSO, or permissions. Keep them.
 - It does not scan prompts or outputs. Content safety stays where it is.
-- It does not route or catalog MCP traffic. Your gateway keeps its job —
-  and can call Reeflex's `/v1/decide` as its judgment layer.
+- It does not do identity, consent, or routing for MCP traffic — that is the
+  commodity MCP-gateway job, and your gateway keeps it. `reeflex-mcp` is
+  Reeflex's own component at that seam, and it renders a different
+  judgment — see below.
 - It does not use AI to police AI. The decision path is boring on purpose:
   the same envelope in produces the same verdict out, every time.
+
+<a id="reeflex-mcp--governance-judgment-at-the-mcp-seam"></a>
+
+## reeflex-mcp — governance judgment at the MCP seam
+
+**MCP gateways govern who may call; Reeflex governs whether the call is
+safe. reeflex-mcp puts that impact judgment at the same seam.**
+
+The commodity "MCP gateway" category — Permit.io's MCP Gateway,
+agent.security, and others — does identity-first authorization: who the
+caller is, what token it holds, which tools it may reach, routed and rate-
+limited at the MCP boundary. That is a real, useful job, and `reeflex-mcp`
+does not replace it — run both, the same way you'd run an identity platform
+alongside Reeflex generally (see the comparison above).
+
+`reeflex-mcp` occupies the same seam with a different question. It
+intercepts `tools/call` on any MCP upstream, normalizes it into the same
+Action Envelope every other Reeflex adapter produces, and asks
+`reeflex-core`'s `/v1/decide`: given this specific call's impact axes,
+magnitude, environment, and this session's cumulative history, is it safe to
+run — not just permitted? A fully-authorized, correctly-routed call can still
+be about to delete 500 rows; that is the case `reeflex-mcp` is built for.
+
+Some products in this category shipped the MCP-gateway seam before we did —
+no claim of being first or only here. What `reeflex-mcp` brings to that seam
+is **fully self-hosted, zero-account operation**: no control plane, no
+hosted account, no traffic leaving the operator's own network. The gateway
+calls the operator's own `reeflex-core`, nothing else. Full guide:
+[docs/mcp-gateway.md](mcp-gateway.md).
 
 ## So do I still need my existing stack?
 

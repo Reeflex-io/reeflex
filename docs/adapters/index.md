@@ -2,7 +2,8 @@
 title: Adapters
 description: >-
   An adapter turns a backend action into an Action Envelope and enforces the
-  verdict. Claude Code, WordPress, n8n — or write your own against the spec.
+  verdict. Claude Code, WordPress, n8n, MCP gateway — or write your own
+  against the spec.
 ---
 
 # Adapters
@@ -18,14 +19,18 @@ envelope alone.
 | **Claude Code** | PreToolUse hook (every tool call) | Source-side (in the agent) | Reference, on PyPI |
 | **WordPress / WooCommerce** | `WP_Ability::execute()` (Abilities API) | Resource-side (in WordPress) | Reference, release ZIP + WP.org queue |
 | **n8n** | A gate node before a risky step | Source-side (in the workflow) | Published (`n8n-nodes-reeflex`) |
-| **MCP Gateway** | JSON-RPC `tools/call` at the boundary | Network boundary | In development |
+| **MCP gateway** | JSON-RPC `tools/call`, in front of any MCP upstream | Network boundary | Reference, conformance-tested — source-install (`reeflex-mcp/`); not yet on PyPI |
 | **Your own** | Anywhere you can intercept | Your choice | Build against the spec |
 
-!!! info "Source-side vs resource-side — an honest trade-off"
+!!! info "Source-side vs resource-side vs network-boundary — an honest trade-off"
     A **source-side** adapter (Claude Code, n8n) governs one agent wherever it
     acts, but only that agent. A **resource-side** adapter (WordPress) governs
-    *every* caller of a backend, but only that backend. Neither is strictly
-    better — the architecture section covers where each leaves gaps.
+    *every* caller of a backend, but only that backend. A **network-boundary**
+    adapter (the MCP gateway) governs every call that flows *through* it, but
+    a server added directly to the client bypasses it (`doctor` detects this,
+    cannot prevent it — see the lifecycle section of
+    [docs/mcp-gateway.md](../mcp-gateway.md)). None is strictly better — the
+    architecture section covers where each leaves gaps.
 
 ## The adapters
 
@@ -40,6 +45,14 @@ envelope alone.
 - **n8n** — a community node (or a plain HTTP Request node) that calls
   `/v1/decide` and routes on the verdict.
   [Repo](https://github.com/Reeflex-io/reeflex/tree/main/n8n-nodes-reeflex)
+- **MCP gateway (`reeflex-mcp`)** — a transparent MCP proxy: aggregates and
+  namespaces every configured MCP upstream's tools, intercepts `tools/call`,
+  normalizes via declarative per-server mappings (filesystem/github/postgres
+  starters) or a heuristic fallback, and enforces the verdict. Both stdio and
+  streamable-HTTP transports; `setup`/`add`/`import`/`doctor` migrate and
+  drift-check client MCP configs. Not yet on PyPI — install from source.
+  [Repo](https://github.com/Reeflex-io/reeflex/tree/main/reeflex-mcp) ·
+  [Full guide](../mcp-gateway.md)
 - **Writing your own** — implement the four responsibilities against the
   [Adapter Contract](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-spec/SPEC.md).
 

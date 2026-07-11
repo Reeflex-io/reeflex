@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reeflex-mcp"
+version = "0.1.0"
+description = "Reeflex MCP gateway -- a transparent MCP proxy that governs any MCP upstream: intercepts tools/call, normalizes it into a Reeflex Action Envelope, asks reeflex-core /v1/decide, and enforces the verdict. Zero LLM in the decision path."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Reeflex" }]
+keywords = ["reeflex", "mcp", "governance", "gateway", "ai-agents", "adapter"]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+# reeflex-core stays dependency-free by contract; this is a thin MCP surface
+# package. `mcp` is the official SDK (the standard way to speak the protocol
+# on both the front -- FastMCP -- and back -- ClientSession -- sides); `pyyaml`
+# reads the operator-owned reeflex-mcp.yaml registry (SPEC section 7 in the
+# design doc). Both are the minimum needed; reeflex-core-facing HTTP stays
+# stdlib-only (see core_client.py).
+dependencies = [
+    "mcp>=1.2.0",
+    "pyyaml",
+]
+
+[project.urls]
+Homepage = "https://reeflex.io"
+Repository = "https://github.com/Reeflex-io/reeflex"
+
+[project.scripts]
+reeflex-mcp = "reeflex_mcp.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["reeflex_mcp*"]
+
+# Track 4 (design doc section 8): the 3 bundled starter declarative mappings
+# (filesystem/github/postgres) ship as package data so `mappings.load_mappings_dir()`
+# finds them in a real wheel install, not just an editable/source checkout.
+[tool.setuptools.package-data]
+reeflex_mcp = ["mappings/*.yaml"]
+
+# NOTE: publishing this package to PyPI is a GATE (human GO) -- the same policy as
+# every other Reeflex package. It is performed by the release workflow on a tag
+# push, not by authoring. reeflex-core emits decision_id (SPEC section 5), so the
+# release is unblocked; the gateway tags every allowed action with it.

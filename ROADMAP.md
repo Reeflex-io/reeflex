@@ -2,8 +2,9 @@
 
 This page describes work that is **planned or in progress**, not yet fully
 delivered. For what already ships and is tested today — including the
-`reeflex-core` engine and the Claude Code and WordPress reference adapters —
-see [CHANGELOG.md](CHANGELOG.md) and the component READMEs.
+`reeflex-core` engine and the Claude Code, WordPress, and MCP gateway
+(`reeflex-mcp`) reference adapters — see [CHANGELOG.md](CHANGELOG.md) and the
+component READMEs.
 
 ---
 
@@ -25,6 +26,20 @@ What remains is the **live deployment milestone**:
 - A documented install on a real WordPress instance, with hooks firing on
   actual posts (before/after on real data), not just the stubbed conformance harness.
 - WooCommerce-specific coverage (orders, refunds, bulk product edits).
+
+### MCP gateway adapter — SHIPPED (`reeflex-mcp` v0.1.0)
+
+`reeflex-mcp` is **built and conformance-tested**: a transparent MCP proxy
+that governs any MCP upstream (stdio or streamable-HTTP) — dynamic tool
+discovery and namespacing, declarative per-server mappings (starters:
+filesystem, github, postgres) with a name-heuristic fallback and a
+conservative default, obligations honored (SPEC §5/§7), and lifecycle
+subcommands (`setup`/`add`/`import`/`doctor`) that migrate a client's MCP
+config onto a single governed path and detect drift. 113 unit tests passing.
+See [`reeflex-mcp/`](reeflex-mcp/) and [docs/mcp-gateway.md](docs/mcp-gateway.md).
+
+What remains: **PyPI publication** — gated on a human GO, same as every other
+Reeflex package; install from source until then.
 
 ### Community adapters (planned — not built)
 
