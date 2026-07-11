@@ -81,9 +81,13 @@ the consumed hold (the hold that require_approval created).  This stitches
 decision -> hold -> approval -> re-decision into one navigable chain.  The
 fallback reuses the SAME hold record `_validate_approval()` already fetched
 for its six-check chain -- it does NOT issue a second get_hold(hold_id) read
-between validation and mark_consumed(), which would widen the TOCTOU window
-on this single-use hold (mark_consumed has no CAS guard; that hardening is a
-separate, out-of-scope follow-up).
+between validation and mark_consumed(), keeping the pre-CAS read path tight.
+`mark_consumed()` itself now has a CAS (compare-and-set) guard: the
+status-check and the consume-append happen atomically under holds.py's
+module lock, so even if two callers both reach mark_consumed() concurrently
+on the same hold_id, exactly one wins the consume and the other gets None
+(-> denied, reason reeflex_hold_already_consumed).  See holds.mark_consumed()
+docstring for the CAS guarantee.
 
 `traceparent` (opaque W3C trace-context passthrough, NOT OpenTelemetry — no
 SDK, no spans): if present at `envelope.context.traceparent`, it is echoed
@@ -236,10 +240,14 @@ def _validate_approval(envelope: dict) -> tuple[int, dict | None, dict | None]:
     TOCTOU note: callers MUST reuse this returned `hold` dict (e.g. its
     `decision_id`) for any downstream read (e.g. parent_decision_id
     resolution) instead of issuing a fresh get_hold(hold_id) between this
-    call and mark_consumed(hold_id) -- an extra intervening read widens the
-    window between "checked approved/not-consumed" and "marked consumed" on
-    this single-use hold (mark_consumed has no CAS guard; that hardening is
-    tracked separately, out of scope here).
+    call and mark_consumed(hold_id).  `mark_consumed()` has a CAS
+    (compare-and-set) guard -- its status-check and consume-append are
+    atomic under holds.py's module lock -- so even if two callers reach
+    mark_consumed() concurrently for the same hold_id, exactly one wins the
+    consume and the other is refused (None -> caller must deny, reason
+    reeflex_hold_already_consumed).  The single-caller-wins guarantee lives
+    in mark_consumed() itself; the reuse-the-returned-hold discipline here is
+    still worth keeping for correctness of parent_decision_id resolution.
 
     Validation chain per design T2c:
       1. hold exists                       else deny "reeflex_hold_not_found"
@@ -429,10 +437,12 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
             # time (change 4/1) — the hold names the decision that created it.
             # We reuse `validated_hold` (the SAME hold record _validate_approval
             # already fetched for the six-check chain) rather than issuing a
-            # second get_hold(hold_id) here — an extra intervening read would
-            # widen the TOCTOU window between "validated" and mark_consumed()
-            # below on this single-use hold (mark_consumed has no CAS guard;
-            # that hardening is tracked separately, out of scope here).
+            # second get_hold(hold_id) here.  mark_consumed() below is a CAS
+            # (compare-and-set): its approved-status check and consume-append
+            # are atomic under holds.py's module lock, so even under a race
+            # (two resubmissions for the same hold_id reaching mark_consumed()
+            # concurrently) exactly one wins and the other gets None back,
+            # which we deny below as reeflex_hold_already_consumed.
             parent_decision_id = approval.get("parent_decision_id") or ""
             if not isinstance(parent_decision_id, str):
                 parent_decision_id = ""
@@ -441,7 +451,7 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
 
             try:
                 from .holds import mark_consumed  # type: ignore[import]
-                mark_consumed(hold_id)
+                consumed_hold = mark_consumed(hold_id)
             except Exception:  # noqa: BLE001
                 # Fail-closed: if we can't consume, deny
                 denial = _deny_response(
@@ -451,6 +461,28 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
                 _try_audit(
                     session_id, envelope, {}, denial,
                     decision_id=decision_id, envelope_hash=envelope_hash,
+                    traceparent=traceparent,
+                )
+                return 200, denial
+
+            if consumed_hold is None:
+                # CAS refusal (holds.mark_consumed): a concurrent racer already
+                # won the single-use consume between our _validate_approval
+                # read and this call (or the hold was otherwise not
+                # "approved" at consume time).  This is the whole point of
+                # the CAS guard -- the losing racer MUST be denied, never
+                # allowed to double-execute an approved-once irreversible
+                # action.  Fail-closed, not "consume failed" (that reason is
+                # reserved for the exception branch above).
+                denial = _deny_response(
+                    "reeflex_hold_already_consumed", "reeflex.core/hold_validation"
+                )
+                denial["decision_id"] = decision_id
+                _try_audit(
+                    session_id, envelope, {}, denial,
+                    decision_id=decision_id, hold_id=hold_id,
+                    envelope_hash=envelope_hash,
+                    parent_decision_id=parent_decision_id,
                     traceparent=traceparent,
                 )
                 return 200, denial
