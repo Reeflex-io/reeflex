@@ -1,6 +1,6 @@
 # Your AI agent has the same database access you do. That's the problem.
 
-> Canonical version on dev.to (link pending)
+> Canonical version on dev.to: https://dev.to/leodavidsec/your-ai-agent-has-the-same-database-access-you-do-thats-the-problem-2go6
 
 Give an AI agent access to your systems and it inherits your permissions —
 all of them. It can read every customer record, delete every product,
