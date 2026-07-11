@@ -123,24 +123,30 @@ extra:
       name: reeflex.io
   generator: false
 
-# Foundation nav — the section skeleton. Detailed pages land in follow-on PRs
-# (Track 2), added under these sections as their links are fixed for MkDocs.
 nav:
   - Home: index.md
-  - Getting started: getting-started/index.md
-  - Concepts: concepts/index.md
-  - Adapters: adapters/index.md
-
-# Legacy repo docs are still GitHub-rendered (README links point at them with
-# relative paths) but use links that MkDocs --strict cannot resolve yet. They
-# are excluded until Track 2 integrates each one into the nav with fixed links.
-exclude_docs: |
-  architecture.md
-  why-reeflex.md
-  siem.md
-  open-core.md
-  policy-guide.md
-  RELEASING.md
-  adr/
-  blog/
-  guides/
+  - Getting started:
+      - getting-started/index.md
+      - Launch article: blog/one-minute-policy.md
+  - Concepts:
+      - concepts/index.md
+      - Why Reeflex (HIL / HOTL / AIL): why-reeflex.md
+  - Architecture:
+      - architecture.md
+  - Adapters:
+      - adapters/index.md
+      - n8n (zero-code): guides/n8n.md
+  - Policy & customization:
+      - policy/index.md
+      - Adapt the policy: policy-guide.md
+  - Operations:
+      - operations/index.md
+      - SIEM export: siem.md
+  - Compliance & open core:
+      - compliance/index.md
+      - Open core: open-core.md
+  - Reference:
+      - reference/index.md
+      - "ADR 0001: deployment model": adr/0001-deployment-model.md
+      - "ADR 0002: no LLM in the decision path": adr/0002-no-llm-in-decision-path.md
+      - Releasing: RELEASING.md

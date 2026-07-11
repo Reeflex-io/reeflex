@@ -38,7 +38,7 @@ Key invariants:
 
 Shipped in core **v0.1.5** (HIL Phase 1): `GET /v1/holds`, `GET /v1/holds/{id}`,
 `POST /v1/holds/{id}/resolve`. The `reeflex-holds` MCP server (see
-[`reeflex-holds/README.md`](../reeflex-holds/README.md)) exposes the same
+[`reeflex-holds/README.md`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-holds/README.md)) exposes the same
 three calls as MCP tools to any MCP client — the socket an AIL principal
 plugs into.
 
@@ -88,7 +88,7 @@ Every backend action is normalized onto three universal axes before evaluation. 
 | `blast_radius` | `single` → `scoped` → `broad` → `systemic` |
 | `externality` | `internal` → `outbound` → `physical` |
 
-A policy rule like `irreversible + broad + production → require_approval` governs Postgres, S3, and WordPress identically. See [`reeflex-spec/SPEC.md §4`](../reeflex-spec/SPEC.md) for the full specification.
+A policy rule like `irreversible + broad + production → require_approval` governs Postgres, S3, and WordPress identically. See [`reeflex-spec/SPEC.md §4`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-spec/SPEC.md) for the full specification.
 
 ---
 
@@ -112,7 +112,7 @@ flowchart TD
     AD -->|"proceed / block / hold"| AG
 ```
 
-Requirements: Python 3.12, OPA 1.x binary, a persistent service process. Does not work on shared hosting (no persistent processes). See [`INSTALL.md`](../INSTALL.md). The holds API (`GET /v1/holds`, `POST /v1/holds/{id}/resolve`) is served from this same process, at this same base URL — see [Hold resolution (HIL, HOTL, AIL)](#hold-resolution-hil-hotl-ail) above for the resolution handover.
+Requirements: Python 3.12, OPA 1.x binary, a persistent service process. Does not work on shared hosting (no persistent processes). See [`INSTALL.md`](https://github.com/Reeflex-io/reeflex/blob/main/INSTALL.md). The holds API (`GET /v1/holds`, `POST /v1/holds/{id}/resolve`) is served from this same process, at this same base URL — see [Hold resolution (HIL, HOTL, AIL)](#hold-resolution-hil-hotl-ail) above for the resolution handover.
 
 ---
 
@@ -158,8 +158,8 @@ Multi-tenancy, authentication, and billing are part of the closed commercial tie
 
 ## References
 
-- [`reeflex-spec/SPEC.md`](../reeflex-spec/SPEC.md) — Action Envelope, Adapter Contract, conformance requirements, §5.1 Approval object semantics (HIL Phase 1)
+- [`reeflex-spec/SPEC.md`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-spec/SPEC.md) — Action Envelope, Adapter Contract, conformance requirements, §5.1 Approval object semantics (HIL Phase 1)
 - [`docs/why-reeflex.md`](why-reeflex.md#ail) — the HITL / HOTL / AIL naming and rationale (source of truth for the coined term; this document only shows the mechanics)
-- [`reeflex-holds/README.md`](../reeflex-holds/README.md) — the MCP holds surface (`reeflex-holds`), an AIL-capable resolution socket
+- [`reeflex-holds/README.md`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-holds/README.md) — the MCP holds surface (`reeflex-holds`), an AIL-capable resolution socket
 - [`docs/adr/0001-deployment-model.md`](adr/0001-deployment-model.md) — deployment model decision (engine-as-service, open-core, on-prem-first, hosted = roadmap; embedded-engine alternative documented and rejected)
 - [`docs/adr/0002-no-llm-in-decision-path.md`](adr/0002-no-llm-in-decision-path.md) — why zero LLM in `/v1/decide`. (Its §2 uses the earlier "held for a human reviewer" wording that predates AIL; the current resolution model is [why-reeflex.md#ail](why-reeflex.md#ail).)

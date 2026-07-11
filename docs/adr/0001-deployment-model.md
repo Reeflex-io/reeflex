@@ -37,7 +37,7 @@ POST /v1/decide   { ActionEnvelope }  ->  { Decision }
 
 This is the entire dependency surface (SPEC §6: "That single, stable interface is the entire
 dependency surface"). The engine's implementation language (currently Python + OPA/Rego — see
-[CONTRIBUTING.md](../../CONTRIBUTING.md) §2 for the stack) is irrelevant to the adapter
+[CONTRIBUTING.md](https://github.com/Reeflex-io/reeflex/blob/main/CONTRIBUTING.md) §2 for the stack) is irrelevant to the adapter
 — the adapter sees only HTTP JSON.
 
 ### 2. Open-core boundary
