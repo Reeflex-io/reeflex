@@ -114,10 +114,17 @@
   font-size: 2.7rem;
   line-height: 1.05;
   margin: 0.2rem 0 0.6rem;
-  background: linear-gradient(180deg, #ffffff, #b9c4e0);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+/* Scheme-scoped so the gradient stays legible in BOTH palettes
+   (a white->pale gradient is invisible on a light background). */
+[data-md-color-scheme="slate"] .reeflex-hero h1 {
+  background-image: linear-gradient(180deg, #ffffff, #b9c4e0);
+}
+[data-md-color-scheme="default"] .reeflex-hero h1 {
+  background-image: linear-gradient(180deg, #101830, #e07a50);
 }
 .reeflex-hero .lede {
   max-width: 42rem;

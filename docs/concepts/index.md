@@ -12,20 +12,19 @@ is normalized into one universal shape and priced on risk, so a single
 deterministic engine governs Postgres, S3, WordPress, and a coding agent
 identically.
 
-```mermaid
-flowchart LR
-    A["AI agent"] --> B["Adapter<br/><i>normalize to Action Envelope</i>"]
-    B -- "POST /v1/decide" --> C["reeflex-core<br/><i>OPA/Rego + session ledger</i>"]
-    C --> D{Decision}
-    D -- allow --> E["Action runs"]
-    D -- require_approval --> F["Hold -> approver you trust"]
-    D -- deny --> G["Blocked, with a reason"]
-    C -.-> H["Append-only audit record"]
-```
+Every action takes the same path: an **agent** attempts a backend action; an
+**adapter** normalizes it into an Action Envelope and `POST`s it to
+**`reeflex-core`**; the engine decides with pure OPA/Rego over a per-session
+ledger and returns <span class="rf-verdict rf-allow">allow</span> /
+<span class="rf-verdict rf-hold">hold</span> /
+<span class="rf-verdict rf-deny">deny</span>; the adapter enforces that verdict
+and writes an append-only audit record either way.
 
-*Every action takes the same path: an adapter normalizes it, `reeflex-core`
-decides with pure OPA/Rego, and the adapter enforces the verdict — recording an
-audit entry either way.*
+!!! note "Diagrams"
+    The rendered Mermaid diagrams — system overview, the `/v1/decide` sequence,
+    and the hold lifecycle — arrive with the **Architecture** section. They are
+    deliberately held back until the client-side rendering is deterministic
+    (self-hosted, instant-navigation-safe), rather than shipped flaky.
 
 ## The core ideas
 
