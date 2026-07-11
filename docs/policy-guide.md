@@ -1,8 +1,8 @@
 # Adapt Reeflex to your use case
 
 The entire decision policy that `reeflex-core` evaluates is **one Rego file**:
-[`reeflex-core/policy/reeflex.rego`](../reeflex-core/policy/reeflex.rego), backed by
-one test file, [`reeflex-core/policy/reeflex_test.rego`](../reeflex-core/policy/reeflex_test.rego).
+[`reeflex-core/policy/reeflex.rego`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-core/policy/reeflex.rego), backed by
+one test file, [`reeflex-core/policy/reeflex_test.rego`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-core/policy/reeflex_test.rego).
 There is no plugin API, no DSL, no hidden config layer — you read the rules,
 you edit the rules, `opa test` tells you whether you broke anything. That file
 IS the product's decision surface. This guide shows three levels of change,
@@ -39,8 +39,8 @@ matches and no two rules can disagree.
 This guide does not re-derive the axis model or the five shipped rules — see:
 
 - [`docs/why-reeflex.md`](why-reeflex.md) — why the model looks like this, HITL/HOTL/AIL.
-- [`reeflex-spec/IMPACT-MODEL.md`](../reeflex-spec/IMPACT-MODEL.md) — how impact is computed, layer by layer, and what the base policy deliberately does not catch (its closing section already names the mass-read guard used as this document's LEVEL 2 example).
-- [`reeflex-spec/SPEC.md`](../reeflex-spec/SPEC.md) §2–§5 — the full Action Envelope and Decision contracts.
+- [`reeflex-spec/IMPACT-MODEL.md`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-spec/IMPACT-MODEL.md) — how impact is computed, layer by layer, and what the base policy deliberately does not catch (its closing section already names the mass-read guard used as this document's LEVEL 2 example).
+- [`reeflex-spec/SPEC.md`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-spec/SPEC.md) §2–§5 — the full Action Envelope and Decision contracts.
 
 What matters for this guide is just the shape of the file you're about to
 edit: a handful of `<rule>_allow` / `<rule>_deny` / `<rule>_require_approval`
@@ -502,7 +502,7 @@ deliberately; this guide's `1000` is illustrative, not a recommendation.
 
 You are not restricted to editing the shipped file in place. `reeflex-core`
 loads the policy directory from an environment variable, read in
-[`reeflex-core/app/opa.py`](../reeflex-core/app/opa.py):
+[`reeflex-core/app/opa.py`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-core/app/opa.py):
 
 ```python
 def _policy_dir() -> str:
@@ -523,7 +523,7 @@ mounting.
 
 Two ways to use it:
 
-**Running from source** (see [`reeflex-core/README.md`](../reeflex-core/README.md) env var table):
+**Running from source** (see [`reeflex-core/README.md`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-core/README.md) env var table):
 
 ```bash
 export REEFLEX_OPA_BIN=opa
@@ -531,9 +531,9 @@ export REEFLEX_POLICY_DIR=/path/to/your-policy
 python reeflex-core/main.py
 ```
 
-**Running the container** — the [`Dockerfile`](../Dockerfile) bakes the
+**Running the container** — the [`Dockerfile`](https://github.com/Reeflex-io/reeflex/blob/main/Dockerfile) bakes the
 default in (`ENV REEFLEX_POLICY_DIR=/app/policy`); override it and bind-mount
-your directory over it in [`docker-compose.yml`](../docker-compose.yml):
+your directory over it in [`docker-compose.yml`](https://github.com/Reeflex-io/reeflex/blob/main/docker-compose.yml):
 
 ```yaml
 services:
@@ -569,7 +569,7 @@ needs):
 | `input.approval.present` | boolean | R5, R6 |
 
 Full envelope shape, including `agent`, `target.kind`, `params`, `context`,
-and `meta`: [`reeflex-spec/SPEC.md`](../reeflex-spec/SPEC.md) §2. The
+and `meta`: [`reeflex-spec/SPEC.md`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-spec/SPEC.md) §2. The
 `cumulative` object and why fragmentation resistance needs it: SPEC §4.1.
 **Any field your policy reads and finds missing should resolve conservatively
 — never toward `allow`** (the shipped R5 predicate does this explicitly with

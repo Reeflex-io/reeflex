@@ -46,7 +46,7 @@ something rare in AI-agent deployments: **a pre-execution record of what an
 agent attempted, not just a post-hoc log of what happened.** You can answer
 "what could this agent have done, and what stopped it?" from the open tier
 alone, today. (Cryptographic tamper-evidence for audit records is on the
-[roadmap](../ROADMAP.md); current records are append-only but not signed.)
+[roadmap](https://github.com/Reeflex-io/reeflex/blob/main/ROADMAP.md); current records are append-only but not signed.)
 
 ---
 

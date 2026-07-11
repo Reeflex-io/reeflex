@@ -6,13 +6,13 @@ workflow. reeflex-core exposes one plain HTTP endpoint
 `hold.resolved`). Both compose with n8n's built-in **HTTP Request**,
 **Switch**, and **Wait** nodes. This guide builds that flow with zero
 custom code. If you would rather use a dedicated node, see the
-[`n8n-nodes-reeflex`](../../n8n-nodes-reeflex/README.md) package - it wraps
+[`n8n-nodes-reeflex`](https://github.com/Reeflex-io/reeflex/blob/main/n8n-nodes-reeflex/README.md) package - it wraps
 exactly the same call.
 
 This guide assumes reeflex-core is reachable from your n8n instance and,
 for the human-in-the-loop leg, that n8n is reachable from reeflex-core (for
 the `hold.created` webhook). See
-[`../../reeflex-core/README.md`](../../reeflex-core/README.md) for how to
+[`../../reeflex-core/README.md`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-core/README.md) for how to
 run reeflex-core and its environment variables.
 
 ## 1. Ask for a decision before the risky step

@@ -1,6 +1,6 @@
 # Reeflex SIEM Integration
 
-<!-- doc-version: siem-v1.0 | source: reeflex-core/app/telemetry.py @ CORE_VERSION 0.1.3 -->
+<!-- doc-version: siem-v1.0 | source: reeflex-core/app/telemetry.py @ CORE_VERSION 0.1.8 -->
 
 Every `/v1/decide` call can emit a structured syslog event to a SIEM collector.
 The emitter is **disabled by default** and is fire-and-forget: it never blocks
@@ -38,7 +38,7 @@ curl -s -X POST http://localhost:8080/v1/decide \
 Expected line received on `nc` (JSON format, one RFC 5424 syslog line):
 
 ```
-<134>1 2026-07-03T12:00:00Z my-host reeflex 42 decision - {"ts":"2026-07-03T12:00:00Z","event":"decision","verdict":"allow","rule_id":"reeflex.core/R1_allow","verb":"create","ability":"wordpress/post.create","axes":{"reversibility":"reversible","blast_radius":"single","externality":"internal"},"magnitude_count":1,"session_id":"test-001","agent_id":"agent-a","on_behalf_of":"alice","environment":"staging","mode":"enforce","decision_latency_ms":3,"reason":"","reeflex_version":"0.1.3","epoch_ms":1751543200000}
+<134>1 2026-07-03T12:00:00Z my-host reeflex 42 decision - {"ts":"2026-07-03T12:00:00Z","event":"decision","verdict":"allow","rule_id":"reeflex.core/R1_allow","verb":"create","ability":"wordpress/post.create","axes":{"reversibility":"reversible","blast_radius":"single","externality":"internal"},"magnitude_count":1,"session_id":"test-001","agent_id":"agent-a","on_behalf_of":"alice","environment":"staging","mode":"enforce","decision_latency_ms":3,"reason":"","reeflex_version":"0.1.8","epoch_ms":1751543200000}
 ```
 
 All values above are synthetic examples. Real values depend on your envelope and
@@ -114,7 +114,7 @@ but emitted by the engine):
   "mode": "enforce",
   "decision_latency_ms": 7,
   "reason": "irreversible + systemic + production",
-  "reeflex_version": "0.1.3",
+  "reeflex_version": "0.1.8",
   "epoch_ms": 1751543200000,
   "decision_id": "9ca1ebe9b72d42ec840a8eafad5f0702",
   "envelope_hash": "d4302672fd72b87145ae5ad5d64679134b7699a2948c9738b570a36081cb512"
@@ -179,7 +179,7 @@ self-describing custom keys for the same reason.
 #### Sample CEF line
 
 ```
-CEF:0|Reeflex|reeflex-core|0.1.3|reeflex.core/R3_deny|deny|3|rt=1751543200000 act=delete suser=bob cs1=sess-abc123 cs1Label=session_id cs2=agent-writer-01 cs2Label=agent_id cs3=irreversible cs3Label=reversibility cs4=systemic cs4Label=blast_radius cs5=external cs5Label=externality cs6=production cs6Label=environment cn1=50 cn1Label=magnitude_count cn2=7 cn2Label=decision_latency_ms msg=irreversible + systemic + production flexString1=enforce flexString1Label=mode externalId=9ca1ebe9b72d42ec840a8eafad5f0702 envelopeHash=d4302672fd72b87145ae5ad5d64679134b7699a2948c9738b570a36081cb512
+CEF:0|Reeflex|reeflex-core|0.1.8|reeflex.core/R3_deny|deny|3|rt=1751543200000 act=delete suser=bob cs1=sess-abc123 cs1Label=session_id cs2=agent-writer-01 cs2Label=agent_id cs3=irreversible cs3Label=reversibility cs4=systemic cs4Label=blast_radius cs5=external cs5Label=externality cs6=production cs6Label=environment cn1=50 cn1Label=magnitude_count cn2=7 cn2Label=decision_latency_ms msg=irreversible + systemic + production flexString1=enforce flexString1Label=mode externalId=9ca1ebe9b72d42ec840a8eafad5f0702 envelopeHash=d4302672fd72b87145ae5ad5d64679134b7699a2948c9738b570a36081cb512
 ```
 
 All values are synthetic examples. `holdId`, `parentDecisionId`, and
@@ -209,7 +209,7 @@ i.e. `<131>`.
 **lifecycle** — emitted on engine start and stop. Shape:
 
 ```json
-{"ts": "2026-07-03T12:00:00Z", "event": "lifecycle", "phase": "start", "reeflex_version": "0.1.3"}
+{"ts": "2026-07-03T12:00:00Z", "event": "lifecycle", "phase": "start", "reeflex_version": "0.1.8"}
 ```
 
 MSGID in the syslog header is `lifecycle`. Severity: `5` (notice).
@@ -552,11 +552,11 @@ audit log.
 ## Consuming Reeflex in Wazuh
 
 A ready-to-use **community example** integration lives in
-[`integrations/wazuh/`](../integrations/wazuh/): a decoder (Wazuh-native JSON
+[`integrations/wazuh/`](https://github.com/Reeflex-io/reeflex/tree/main/integrations/wazuh/): a decoder (Wazuh-native JSON
 decoding + a cheap prematch), one base rule (level 3, `rule.id 100200`), and an
 example CISO/SOC dashboard — all driven by the standard syslog feed above, with
 **no custom connector, agent, or plugin**. See
-[`integrations/wazuh/README.md`](../integrations/wazuh/README.md) for the full
+[`integrations/wazuh/README.md`](https://github.com/Reeflex-io/reeflex/blob/main/integrations/wazuh/README.md) for the full
 setup (emit → receive → decode → rule → dashboard), the decoded field list
 (incl. `namespace`/`agent_id` for the calling module, `params`/`target_ref` for
 the exact command, and `srcip` for the caller IP), and the optional GeoIP note.

@@ -2,7 +2,7 @@
 
 Reeflex is a monorepo that ships to five channels from one tagged commit. This
 document describes the **one-gesture** release flow driven by
-[`.github/workflows/release.yml`](../.github/workflows/release.yml), the
+[`.github/workflows/release.yml`](https://github.com/Reeflex-io/reeflex/blob/main/.github/workflows/release.yml), the
 **one-time registry setup** a human must do, and the **manual fallback** (the
 process used for v0.1.6, before this workflow existed).
 
