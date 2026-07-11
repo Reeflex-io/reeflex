@@ -1,0 +1,146 @@
+# docs.reeflex.io — MkDocs Material configuration.
+# Source of truth: docs/. Deployed by .github/workflows/docs.yml to GitHub Pages.
+site_name: Reeflex Docs
+site_description: >-
+  Deterministic governance for AI-agent actions. Reeflex decides allow / hold /
+  deny on any backend action before it runs, with zero LLM in the decision path.
+site_url: https://docs.reeflex.io/
+site_author: Reeflex
+copyright: Apache-2.0 licensed. Reeflex is a deterministic gate, not another AI.
+
+repo_url: https://github.com/Reeflex-io/reeflex
+repo_name: Reeflex-io/reeflex
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: en
+  logo: assets/logo.png
+  favicon: assets/favicon.svg
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    # Dark is the default; toggle to light available.
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to light
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark
+  font:
+    text: Inter
+    code: JetBrains Mono
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      permalink_title: Anchor link to this section
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.critic
+  - pymdownx.caret
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.tilde
+  - pymdownx.smartsymbols
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+  # "Last updated" dates: needs the full git history the CI checkout provides
+  # (fetch-depth: 0). Runs in CI only, like social cards, so a local preview
+  # build stays clean and `--strict` reflects content, not the environment.
+  - git-revision-date-localized:
+      enabled: !ENV [CI, false]
+      enable_creation_date: true
+      enable_git_follow: false
+      type: date
+      fallback_to_build_date: true
+  # Social cards (auto OG images) need the imaging libs; build only in CI.
+  - social:
+      enabled: !ENV [CI, false]
+
+extra:
+  homepage: https://reeflex.io/
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Reeflex-io/reeflex
+      name: Reeflex on GitHub
+    - icon: fontawesome/solid/globe
+      link: https://reeflex.io/
+      name: reeflex.io
+  generator: false
+
+# Foundation nav — the section skeleton. Detailed pages land in follow-on PRs
+# (Track 2), added under these sections as their links are fixed for MkDocs.
+nav:
+  - Home: index.md
+  - Getting started: getting-started/index.md
+  - Concepts: concepts/index.md
+  - Adapters: adapters/index.md
+
+# Legacy repo docs are still GitHub-rendered (README links point at them with
+# relative paths) but use links that MkDocs --strict cannot resolve yet. They
+# are excluded until Track 2 integrates each one into the nav with fixed links.
+exclude_docs: |
+  architecture.md
+  why-reeflex.md
+  siem.md
+  open-core.md
+  policy-guide.md
+  RELEASING.md
+  adr/
+  blog/
+  guides/
