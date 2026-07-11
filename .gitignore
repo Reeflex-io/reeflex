@@ -82,3 +82,4 @@ htmlcov/
 .coverage
 coverage.xml
 *.prof
+site/

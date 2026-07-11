@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="38%" r="70%">
+      <stop offset="0%" stop-color="#16203F"/>
+      <stop offset="62%" stop-color="#0D1428"/>
+      <stop offset="100%" stop-color="#0A1020"/>
+    </radialGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F1F5FD"/>
+      <stop offset="100%" stop-color="#BCC9E5"/>
+    </linearGradient>
+    <radialGradient id="ember" cx="36%" cy="30%" r="60%">
+      <stop offset="0%" stop-color="#F6B694"/>
+      <stop offset="56%" stop-color="#E07A50"/>
+      <stop offset="100%" stop-color="#B2542F"/>
+    </radialGradient>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <!-- badge background -->
+  <rect x="4" y="4" width="56" height="56" rx="14" ry="14" fill="url(#bg)" stroke="rgba(220,228,245,0.12)" stroke-width="1"/>
+  <!-- left bar -->
+  <rect x="19" y="17" width="8" height="30" rx="4" ry="4" fill="url(#bar)" opacity="0.95"/>
+  <!-- right bar -->
+  <rect x="37" y="17" width="8" height="30" rx="4" ry="4" fill="url(#bar)" opacity="0.95"/>
+  <!-- ember dot with glow -->
+  <circle cx="32" cy="32" r="5.5" fill="url(#ember)" filter="url(#glow)"/>
+</svg>

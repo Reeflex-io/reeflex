@@ -1,0 +1,161 @@
+/* docs.reeflex.io — brand theme on top of MkDocs Material.
+   Tokens mirror reeflex.io: bg #0B1020, panel #101830, ink #E9EEF9,
+   ember #E07A50 (accent/links), allow #3DBE6C, hold #E0A32E, deny #E4573D. */
+
+@import url("https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&display=swap");
+
+:root {
+  --reeflex-ember: #e07a50;
+  --reeflex-ember-2: #f0946b;
+  --reeflex-allow: #3dbe6c;
+  --reeflex-hold: #e0a32e;
+  --reeflex-deny: #e4573d;
+
+  --md-primary-fg-color: #101830;
+  --md-primary-fg-color--light: #17224a;
+  --md-primary-fg-color--dark: #0b1020;
+  --md-accent-fg-color: var(--reeflex-ember);
+  --md-code-font: "JetBrains Mono";
+}
+
+/* Headings use Sora for a distinct, premium voice. */
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4,
+.md-header__title {
+  font-family: "Sora", var(--md-text-font-family), sans-serif;
+  letter-spacing: -0.015em;
+  font-weight: 700;
+}
+.md-typeset h1 { font-weight: 800; letter-spacing: -0.03em; }
+
+/* ---------- Dark scheme (default): the brand surface ---------- */
+[data-md-color-scheme="slate"] {
+  --md-hue: 225;
+  --md-default-bg-color: #0b1020;
+  --md-default-bg-color--light: #0e1428;
+  --md-default-fg-color: #e9eef9;
+  --md-default-fg-color--light: #c3cbe0;
+  --md-default-fg-color--lighter: #8f9abb;
+  --md-default-fg-color--lightest: #5b6a8f;
+
+  --md-primary-fg-color: #0b1020;
+  --md-primary-bg-color: #e9eef9;
+
+  --md-accent-fg-color: var(--reeflex-ember);
+  --md-typeset-a-color: var(--reeflex-ember);
+
+  --md-code-bg-color: #0e1730;
+  --md-code-fg-color: #e9eef9;
+
+  --md-footer-bg-color: #080c18;
+  --md-footer-bg-color--dark: #06090f;
+}
+
+[data-md-color-scheme="slate"] body {
+  background:
+    radial-gradient(1200px 600px at 78% -10%, rgba(224, 122, 80, 0.10), transparent 60%),
+    radial-gradient(900px 500px at 0% 0%, rgba(23, 34, 74, 0.55), transparent 55%),
+    var(--md-default-bg-color);
+}
+
+/* Links: ember, with a subtle underline on hover. */
+.md-typeset a { color: var(--reeflex-ember); text-decoration-color: rgba(224,122,80,0.35); }
+.md-typeset a:hover { color: var(--reeflex-ember-2); }
+
+/* Panels / cards / code sit on the panel color for depth. */
+[data-md-color-scheme="slate"] .md-typeset pre > code,
+[data-md-color-scheme="slate"] .md-typeset .highlight {
+  border: 1px solid rgba(233, 238, 249, 0.06);
+  border-radius: 10px;
+}
+
+/* ---------- Header ---------- */
+.md-header {
+  background: rgba(11, 16, 32, 0.85);
+  backdrop-filter: saturate(140%) blur(8px);
+  border-bottom: 1px solid rgba(233, 238, 249, 0.06);
+}
+.md-tabs { background: transparent; }
+
+/* ---------- Grid cards (home + section landings) ---------- */
+.md-typeset .grid.cards > ul > li,
+.md-typeset .grid > .card {
+  border: 1px solid rgba(233, 238, 249, 0.08);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(16, 24, 48, 0.75), rgba(11, 16, 32, 0.6));
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.md-typeset .grid.cards > ul > li:hover,
+.md-typeset .grid > .card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(224, 122, 80, 0.45);
+  box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.6);
+}
+
+/* ---------- Hero (home) ---------- */
+.reeflex-hero {
+  padding: 2.6rem 0 1.2rem;
+  text-align: center;
+}
+.reeflex-hero .tag {
+  display: inline-block;
+  font: 600 0.72rem/1 "JetBrains Mono", monospace;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--reeflex-ember);
+  border: 1px solid rgba(224, 122, 80, 0.35);
+  border-radius: 999px;
+  padding: 0.4rem 0.8rem;
+  margin-bottom: 1.1rem;
+}
+.reeflex-hero h1 {
+  font-size: 2.7rem;
+  line-height: 1.05;
+  margin: 0.2rem 0 0.6rem;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+/* Scheme-scoped so the gradient stays legible in BOTH palettes
+   (a white->pale gradient is invisible on a light background). */
+[data-md-color-scheme="slate"] .reeflex-hero h1 {
+  background-image: linear-gradient(180deg, #ffffff, #b9c4e0);
+}
+[data-md-color-scheme="default"] .reeflex-hero h1 {
+  background-image: linear-gradient(180deg, #101830, #e07a50);
+}
+.reeflex-hero .lede {
+  max-width: 42rem;
+  margin: 0 auto 1.4rem;
+  color: var(--md-default-fg-color--light);
+  font-size: 1.05rem;
+}
+.reeflex-hero .cta .md-button {
+  margin: 0.25rem 0.35rem;
+}
+.reeflex-hero .cta .md-button--primary {
+  background: var(--reeflex-ember);
+  border-color: var(--reeflex-ember);
+  color: #1a0f0a;
+}
+.reeflex-hero .cta .md-button--primary:hover {
+  background: var(--reeflex-ember-2);
+  border-color: var(--reeflex-ember-2);
+}
+
+/* ---------- Decision color chips (allow / hold / deny) ---------- */
+.rf-verdict { font-weight: 700; }
+.rf-allow { color: var(--reeflex-allow); }
+.rf-hold  { color: var(--reeflex-hold); }
+.rf-deny  { color: var(--reeflex-deny); }
+
+/* ---------- Mermaid: center + breathe ---------- */
+.md-typeset .mermaid { text-align: center; margin: 1.4rem 0; }
+
+/* ---------- Tables: quieter borders ---------- */
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) {
+  border: 1px solid rgba(233, 238, 249, 0.08);
+  border-radius: 10px;
+}

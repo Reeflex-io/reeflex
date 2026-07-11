@@ -1,0 +1,74 @@
+name: Docs
+
+# Docs-as-code: any push to main that touches docs/, mkdocs.yml, or this
+# workflow rebuilds and deploys docs.reeflex.io. No manual publishing step.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+# Deploy via the GitHub Pages artifact path (actions/deploy-pages) — no
+# gh-pages branch clutter in the repo history.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; don't cancel an in-flight publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so git-revision-date-localized works
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Imaging libraries for the Material "social" plugin (auto OG cards).
+      - name: Install imaging libraries (social cards)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libfreetype6-dev libffi-dev \
+            libjpeg-dev libpng-dev libz-dev pngquant
+
+      - name: Install MkDocs Material + plugins
+        run: |
+          python -m pip install --upgrade pip
+          pip install "mkdocs-material[imaging]" \
+            mkdocs-git-revision-date-localized-plugin
+
+      # CI=true flips the `social` plugin on (enabled: !ENV [CI, false]).
+      # --strict fails the build on any broken link or missing reference.
+      - name: Build (strict)
+        env:
+          CI: "true"
+        run: mkdocs build --strict
+
+      - name: Add CNAME (custom domain)
+        run: echo "docs.reeflex.io" > site/CNAME
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
