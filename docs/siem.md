@@ -81,6 +81,16 @@ but emitted by the engine):
 | `epoch_ms` | integer | Decision timestamp as milliseconds since Unix epoch (used by CEF `rt`) |
 | `reason` | string | Human-readable reason from OPA (may be empty string) |
 
+**Traceability fields (additive):**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `decision_id` | string | uuid4 hex primary key of this `/v1/decide` transit. Always present. |
+| `envelope_hash` | string | sha256 hex of the `{action, axes, magnitude, target}` projection — the same value as the hold record's `envelope_hash`. Always present. |
+| `hold_id` | string | Present only when a hold is involved: the hold this decision just created (`require_approval`), or the hold this decision just consumed (a resolved resubmission). Key absent otherwise. |
+| `parent_decision_id` | string | Present only on a resolved resubmission: the `decision_id` of the original `require_approval` decision that created the consumed hold. Key absent otherwise. |
+| `traceparent` | string | Opaque W3C trace-context string, echoed verbatim from `envelope.context.traceparent`. No OpenTelemetry SDK, no spans. Key absent when the envelope did not carry one. |
+
 #### Sample JSON event
 
 ```json
@@ -105,11 +115,15 @@ but emitted by the engine):
   "decision_latency_ms": 7,
   "reason": "irreversible + systemic + production",
   "reeflex_version": "0.1.3",
-  "epoch_ms": 1751543200000
+  "epoch_ms": 1751543200000,
+  "decision_id": "9ca1ebe9b72d42ec840a8eafad5f0702",
+  "envelope_hash": "d4302672fd72b87145ae5ad5d64679134b7699a2948c9738b570a36081cb512"
 }
 ```
 
-All values are synthetic examples.
+All values are synthetic examples. `hold_id`, `parent_decision_id`, and
+`traceparent` are omitted here since this sample is a plain `deny` with no
+hold and no trace-context on the envelope.
 
 ---
 
@@ -150,17 +164,27 @@ literal strings alongside their value field.
 | `msg` | reason | human-readable reason from OPA |
 | `flexString1` | mode | `enforce` \| `observe` |
 | `flexString1Label` | label | literal `'mode'` |
+| `externalId` | decision_id | uuid4 hex primary key of this `/v1/decide` transit. Always present. |
+| `envelopeHash` | envelope_hash | sha256 hex of the `{action,axes,magnitude,target}` projection. Always present. |
+| `holdId` | hold_id | present only when a hold is involved (created or consumed) |
+| `parentDecisionId` | parent_decision_id | present only on a resolved resubmission |
+| `traceparent` | traceparent | opaque W3C trace-context string, echoed verbatim; present only if the envelope carried one |
 
 The `rule_id` appears as the CEF **EventID** (4th pipe-delimited header field).
-The `verdict` is the CEF **Name** (5th field).
+The `verdict` is the CEF **Name** (5th field). `externalId` and `envelopeHash`
+are standard/self-describing CEF keys used directly (no `cs`/`cn` slot was
+free); `holdId`, `parentDecisionId`, and `traceparent` are non-standard,
+self-describing custom keys for the same reason.
 
 #### Sample CEF line
 
 ```
-CEF:0|Reeflex|reeflex-core|0.1.3|reeflex.core/R3_deny|deny|3|rt=1751543200000 act=delete suser=bob cs1=sess-abc123 cs1Label=session_id cs2=agent-writer-01 cs2Label=agent_id cs3=irreversible cs3Label=reversibility cs4=systemic cs4Label=blast_radius cs5=external cs5Label=externality cs6=production cs6Label=environment cn1=50 cn1Label=magnitude_count cn2=7 cn2Label=decision_latency_ms msg=irreversible + systemic + production flexString1=enforce flexString1Label=mode
+CEF:0|Reeflex|reeflex-core|0.1.3|reeflex.core/R3_deny|deny|3|rt=1751543200000 act=delete suser=bob cs1=sess-abc123 cs1Label=session_id cs2=agent-writer-01 cs2Label=agent_id cs3=irreversible cs3Label=reversibility cs4=systemic cs4Label=blast_radius cs5=external cs5Label=externality cs6=production cs6Label=environment cn1=50 cn1Label=magnitude_count cn2=7 cn2Label=decision_latency_ms msg=irreversible + systemic + production flexString1=enforce flexString1Label=mode externalId=9ca1ebe9b72d42ec840a8eafad5f0702 envelopeHash=d4302672fd72b87145ae5ad5d64679134b7699a2948c9738b570a36081cb512
 ```
 
-All values are synthetic examples.
+All values are synthetic examples. `holdId`, `parentDecisionId`, and
+`traceparent` extensions are omitted here since this `deny` has no hold and
+no trace-context on the envelope.
 
 ---
 

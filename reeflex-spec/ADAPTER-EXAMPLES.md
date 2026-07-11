@@ -28,6 +28,11 @@ function reeflex_gate( $proceed, string $ability, array $input ) {
     if ( $decision['decision'] === 'require_approval' && empty( $input['_reeflex_approved'] ) ) {
         return new WP_Error( 'reeflex_hold', $decision['reason'], [ 'status' => 202 ] );
     }
+    // SHOULD (traceability, SPEC §5.1/§6): stamp $decision['decision_id'] onto
+    // the effect this ability is about to execute -- e.g. a post meta field or
+    // a WordPress audit-log note -- so the executed side effect stitches back
+    // to the Reeflex decision that authorized it.
+    reeflex_stamp_decision_id( $ability, $input, $decision['decision_id'] ?? null );
     return $proceed;   // allow -> WordPress runs the ability
 }
 
@@ -88,6 +93,10 @@ def on_statement(sql: str, conn) -> None:
     if decision["decision"] == "require_approval" and not conn.ctx.approved:
         raise PolicyHold(decision["reason"])
     conn.execute(sql)                          # allow
+    # SHOULD (traceability, SPEC §5.1/§6): tag the statement's own audit trail
+    # (e.g. a SQL comment or a side table) with decision["decision_id"] so the
+    # executed row-change stitches back to the Reeflex decision that allowed it.
+    reeflex_stamp_decision_id(conn, decision.get("decision_id"))
 
 # NORMALIZE: map a SQL statement into the universal envelope.
 def normalize(sql: str, conn) -> dict:
@@ -163,6 +172,21 @@ decision := {"decision": "allow"} {
     input.axes.reversibility != "irreversible"
 }
 ```
+
+---
+
+## Closing the loop: `decision_id` on the executed effect
+
+Both examples above call a `reeflex_stamp_decision_id(...)` helper right after
+the action runs. This is a SHOULD, not a MUST (SPEC §5.1/§6): every core
+Decision now carries a `decision_id`, and core already threads it through the
+audit record and the SIEM event. Stamping that same `decision_id` onto the
+adapter's own record of the executed effect — a WordPress audit-log note, a
+SQL comment, a side table row — is what makes the full chain **decision ->
+audit -> SIEM -> the actual side effect in the governed system** navigable
+end to end, not just decision -> audit/SIEM. Adapters that skip this are still
+conformant; they just leave the last link of the chain to be reconstructed by
+timestamp/session heuristics instead of an exact key.
 
 ---
 

@@ -22,6 +22,8 @@ Hold record fields (§6 design):
   decided_ts    ISO8601 UTC or None
   reason        optional string or None
   consumed_ts   ISO8601 UTC or None
+  decision_id   uuid4 hex of the /v1/decide transit that created this hold
+                (traceability; "" for holds created before this field existed)
 
 Expiry is LAZY:
   - evaluated on read/validate
@@ -339,8 +341,14 @@ def _append_and_readback(rec: dict) -> dict:
 # Public API
 # ---------------------------------------------------------------------------
 
-def create_hold(envelope: dict, rule_id: str) -> dict:
+def create_hold(envelope: dict, rule_id: str, *, decision_id: str = "") -> dict:
     """Create a new pending hold for the given envelope + rule.
+
+    decision_id (additive, keyword-only, default ""): the decision_id of the
+    /v1/decide transit that produced the require_approval verdict creating
+    this hold — so the hold names the decision that created it.  On
+    resubmission, core falls back to this value for parent_decision_id when
+    the adapter did not pass one back (see decide.py).
 
     Returns the hold record dict that was written.
     Fail-closed: any exception propagates to the caller (decide.py wraps in try/except).
@@ -364,6 +372,7 @@ def create_hold(envelope: dict, rule_id: str) -> dict:
         "decided_ts": None,
         "reason": None,
         "consumed_ts": None,
+        "decision_id": decision_id,
         "ts": now_iso,
     }
 

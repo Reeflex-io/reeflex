@@ -43,6 +43,12 @@ def record(
     envelope: dict,
     cumulative: dict,
     decision_result: dict,
+    *,
+    decision_id: str = "",
+    hold_id: str = "",
+    envelope_hash: str = "",
+    parent_decision_id: str = "",
+    traceparent: str = "",
 ) -> dict:
     """
     Append one audit record and immediately read it back to prove it landed.
@@ -50,6 +56,21 @@ def record(
     Returns the record dict that was written.
     Raises OSError if the write or read-back fails (caller should treat as
     an internal error but NOT change the decision — audit failure != deny).
+
+    Traceability fields (additive, keyword-only, all default ""):
+      decision_id         primary key for this /v1/decide transit (uuid4 hex).
+      envelope_hash        canonical_hash(envelope) — same key holds.py stores,
+                            so audit / SIEM / hold records join on the exact
+                            same value.
+      hold_id               present when a hold is involved: on require_approval
+                            hold-creation, and on resubmission the consumed
+                            hold_id.  Omitted (key absent) when not applicable.
+      parent_decision_id    present on a resubmission once resolved (adapter-
+                            supplied or hold-fallback).  Omitted when not
+                            applicable.
+      traceparent           opaque W3C trace-context string, echoed verbatim
+                            from envelope.context.traceparent.  Omitted when
+                            the envelope did not carry one.
     """
     log_path = _log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,8 +89,16 @@ def record(
         "decision": decision_result.get("decision", ""),
         "rule": decision_result.get("rule", ""),
         "reason": decision_result.get("reason", ""),
+        "decision_id": decision_id,
+        "envelope_hash": envelope_hash,
         # TODO: add audit_signature = ed25519.sign(record_bytes, vault_key)
     }
+    if hold_id:
+        rec["hold_id"] = hold_id
+    if parent_decision_id:
+        rec["parent_decision_id"] = parent_decision_id
+    if traceparent:
+        rec["traceparent"] = traceparent
 
     line = json.dumps(rec, separators=(",", ":")) + "\n"
 
@@ -103,6 +132,7 @@ def record(
             written_rec.get("session_id") != rec["session_id"]
             or written_rec.get("decision") != rec["decision"]
             or written_rec.get("rule") != rec["rule"]
+            or written_rec.get("decision_id") != rec["decision_id"]
         ):
             raise OSError(
                 f"audit read-back mismatch: wrote {rec!r}, read back {written_rec!r}"

@@ -57,6 +57,40 @@ When the request carries approval={present:true, hold_id:"..."}:
   - Run the validation chain (6 checks).  On FIRST failure return deny with
     a machine reason code.
   - On success: mark_consumed(hold_id), return ALLOW, audit.
+
+=============================================================================
+TRACEABILITY (decision_id / hold_id / envelope_hash / parent_decision_id /
+traceparent) — additive, non-breaking
+=============================================================================
+Every call to process() generates a `decision_id` (uuid4 hex) as the very
+first statement in the function, before the envelope is even validated, so
+it is available to EVERY return path -- including the belt-and-braces
+outer `except Exception` fail-closed path.  It is added to the Decision
+response dict, the audit record, and the SIEM decision event for every
+verdict (allow / deny / require_approval), and it is threaded into
+`create_hold()` so a hold names the decision that created it.
+
+`envelope_hash` reuses `holds.canonical_hash()` verbatim (the same
+{action, axes, magnitude, target} projection already used to bind a hold to
+its approval) so audit / SIEM / hold records join on the exact same key.
+
+`parent_decision_id` (populated only on an approval resubmission): the
+adapter MAY pass the original decision_id back via `approval.parent_decision_id`
+on the envelope; if absent, core falls back to the `decision_id` recorded on
+the consumed hold (the hold that require_approval created).  This stitches
+decision -> hold -> approval -> re-decision into one navigable chain.  The
+fallback reuses the SAME hold record `_validate_approval()` already fetched
+for its six-check chain -- it does NOT issue a second get_hold(hold_id) read
+between validation and mark_consumed(), which would widen the TOCTOU window
+on this single-use hold (mark_consumed has no CAS guard; that hardening is a
+separate, out-of-scope follow-up).
+
+`traceparent` (opaque W3C trace-context passthrough, NOT OpenTelemetry — no
+SDK, no spans): if present at `envelope.context.traceparent`, it is echoed
+UNTOUCHED into the audit record and SIEM event.  Absent -> omitted.
+
+None of the above touches OPA input, the hash allowlist, or decision logic;
+it is pure enrichment of the response/audit/SIEM records.
 """
 
 from __future__ import annotations
@@ -64,12 +98,14 @@ from __future__ import annotations
 import os
 import sys
 import time
+import uuid
 
 from .envelope import validate_and_fill_defaults, ValidationError
 from .ledger import compute_cumulative, append_entry
 from .opa import evaluate, OpaEvalError
 from .audit import record
 from .telemetry import get_emitter
+from .holds import canonical_hash
 
 _WINDOW_SECONDS = int(os.environ.get("REEFLEX_WINDOW_SECONDS", "3600"))
 
@@ -187,11 +223,23 @@ def _get_agent_identity(envelope: dict) -> str:
     return (envelope.get("agent") or {}).get("id", "")
 
 
-def _validate_approval(envelope: dict) -> tuple[int, dict | None]:
+def _validate_approval(envelope: dict) -> tuple[int, dict | None, dict | None]:
     """Validate the hold approval attached to the envelope.
 
-    Returns (status_code, error_dict) on validation failure.
-    Returns (0, None) on success (caller should proceed with allow).
+    Returns (status_code, error_dict, hold) on validation failure -- `hold` is
+    whatever hold record we managed to fetch before failing (None if hold_id
+    was absent or the hold does not exist at all).
+    Returns (0, None, hold) on success (caller should proceed with allow) --
+    `hold` is the SAME fully-validated hold record read by the six checks
+    below.
+
+    TOCTOU note: callers MUST reuse this returned `hold` dict (e.g. its
+    `decision_id`) for any downstream read (e.g. parent_decision_id
+    resolution) instead of issuing a fresh get_hold(hold_id) between this
+    call and mark_consumed(hold_id) -- an extra intervening read widens the
+    window between "checked approved/not-consumed" and "marked consumed" on
+    this single-use hold (mark_consumed has no CAS guard; that hardening is
+    tracked separately, out of scope here).
 
     Validation chain per design T2c:
       1. hold exists                       else deny "reeflex_hold_not_found"
@@ -207,32 +255,32 @@ def _validate_approval(envelope: dict) -> tuple[int, dict | None]:
     hold_id = approval.get("hold_id", "")
     if not hold_id:
         # present=True but no hold_id — treat as not_found
-        return 200, _deny_response("reeflex_hold_not_found", "reeflex.core/hold_validation")
+        return 200, _deny_response("reeflex_hold_not_found", "reeflex.core/hold_validation"), None
 
     hold = get_hold(hold_id)
 
     # Check 1: hold exists
     if hold is None:
-        return 200, _deny_response("reeflex_hold_not_found", "reeflex.core/hold_validation")
+        return 200, _deny_response("reeflex_hold_not_found", "reeflex.core/hold_validation"), None
 
     # Check 2: status == approved
     if hold.get("status") != "approved":
         status_val = hold.get("status", "")
         if status_val == "consumed":
-            return 200, _deny_response("reeflex_hold_consumed", "reeflex.core/hold_validation")
+            return 200, _deny_response("reeflex_hold_consumed", "reeflex.core/hold_validation"), hold
         if status_val in ("rejected", "expired"):
             return 200, _deny_response(
                 f"reeflex_hold_{status_val}", "reeflex.core/hold_validation"
-            )
-        return 200, _deny_response("reeflex_hold_not_approved", "reeflex.core/hold_validation")
+            ), hold
+        return 200, _deny_response("reeflex_hold_not_approved", "reeflex.core/hold_validation"), hold
 
     # Check 3: not expired (lazy check may have updated status, re-read)
     if is_expired(hold):
-        return 200, _deny_response("reeflex_hold_expired", "reeflex.core/hold_validation")
+        return 200, _deny_response("reeflex_hold_expired", "reeflex.core/hold_validation"), hold
 
     # Check 4: status != consumed (re-confirm after is_expired re-read)
     if hold.get("status") == "consumed":
-        return 200, _deny_response("reeflex_hold_consumed", "reeflex.core/hold_validation")
+        return 200, _deny_response("reeflex_hold_consumed", "reeflex.core/hold_validation"), hold
 
     # Check 5: canonical_hash of THIS envelope == stored envelope_hash
     # We compute the hash of the envelope as-is (the validated, normalized copy).
@@ -240,7 +288,7 @@ def _validate_approval(envelope: dict) -> tuple[int, dict | None]:
     if this_hash != hold.get("envelope_hash", ""):
         return 200, _deny_response(
             "reeflex_hold_envelope_mismatch", "reeflex.core/hold_validation"
-        )
+        ), hold
 
     # Check 6: actor != approver
     # Actor = this request's agent identity
@@ -255,9 +303,9 @@ def _validate_approval(envelope: dict) -> tuple[int, dict | None]:
     if actor_id and approver_id and actor_id == approver_id:
         return 200, _deny_response(
             "reeflex_hold_actor_is_approver", "reeflex.core/hold_validation"
-        )
+        ), hold
 
-    return 0, None  # all checks passed
+    return 0, None, hold  # all checks passed
 
 
 def _deny_response(reason: str, rule: str) -> dict:
@@ -288,6 +336,14 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
     (status, dict) tuple — it never raises, never leaves the socket empty.
     No traceback or internal path is ever surfaced to the caller.
     """
+    # decision_id: generated FIRST, before the envelope is even validated, so
+    # it is available on every possible return path of this function,
+    # including the belt-and-braces fail-closed catch-all at the bottom.
+    # uuid4().hex cannot raise -- this is unconditionally safe.
+    decision_id: str = uuid.uuid4().hex
+    envelope_hash: str = ""   # populated once the envelope validates (Step 1)
+    traceparent: str = ""    # populated once the envelope validates, if present
+
     try:
         # Step 1: Validate and fill conservative defaults
         try:
@@ -297,6 +353,19 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
                 "error": "invalid_envelope",
                 "detail": str(exc),
             }
+
+        # envelope_hash reuses holds.canonical_hash() verbatim -- the action-
+        # defining projection {action, axes, magnitude, target} -- so audit,
+        # SIEM, and hold records all join on the exact same key.
+        envelope_hash = canonical_hash(envelope)
+
+        # traceparent (W3C trace-context, opaque passthrough): pick the
+        # location envelope.context.traceparent.  No SDK, no spans -- just an
+        # opaque string carried untouched into audit + SIEM.  Absent -> "".
+        _context = envelope.get("context")
+        if isinstance(_context, dict):
+            _tp = _context.get("traceparent", "")
+            traceparent = _tp if isinstance(_tp, str) else ""
 
         # Step 2: Extract session_id — guaranteed non-empty by validate_and_fill_defaults
         session_id: str = (envelope.get("agent") or {}).get("session_id")
@@ -317,8 +386,13 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
                     "rule": "reeflex.policy/frozen",
                     "obligations": [],
                     "modulation": None,
+                    "decision_id": decision_id,
                 }
-                _try_audit(session_id, envelope, {}, frozen_decision)
+                _try_audit(
+                    session_id, envelope, {}, frozen_decision,
+                    decision_id=decision_id, envelope_hash=envelope_hash,
+                    traceparent=traceparent,
+                )
                 return 200, frozen_decision
 
         # Step 4: Check for an approval resubmission (T2c)
@@ -328,17 +402,43 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
         if approval_present and approval.get("hold_id"):
             # Validate the approval chain — fail-closed on any exception
             try:
-                fail_code, fail_resp = _validate_approval(envelope)
+                fail_code, fail_resp, validated_hold = _validate_approval(envelope)
             except Exception:  # noqa: BLE001
                 fail_resp = dict(_INTERNAL_ERROR_DECISION)
                 fail_code = 500
+                validated_hold = None
 
             if fail_resp is not None:
-                _try_audit(session_id, envelope, {}, fail_resp)
+                # decision_id is attached regardless of which branch produced
+                # fail_resp (the six _validate_approval checks, or the
+                # exception path above) — every /v1/decide transit gets one.
+                fail_resp["decision_id"] = decision_id
+                _try_audit(
+                    session_id, envelope, {}, fail_resp,
+                    decision_id=decision_id, envelope_hash=envelope_hash,
+                    traceparent=traceparent,
+                )
                 return fail_code or 200, fail_resp
 
             # All checks passed — consume the hold and allow
             hold_id = approval.get("hold_id")
+
+            # Resolve parent_decision_id (change 2): the adapter MAY pass the
+            # original decision_id back via approval.parent_decision_id.
+            # FALLBACK: read the decision_id recorded on the hold at creation
+            # time (change 4/1) — the hold names the decision that created it.
+            # We reuse `validated_hold` (the SAME hold record _validate_approval
+            # already fetched for the six-check chain) rather than issuing a
+            # second get_hold(hold_id) here — an extra intervening read would
+            # widen the TOCTOU window between "validated" and mark_consumed()
+            # below on this single-use hold (mark_consumed has no CAS guard;
+            # that hardening is tracked separately, out of scope here).
+            parent_decision_id = approval.get("parent_decision_id") or ""
+            if not isinstance(parent_decision_id, str):
+                parent_decision_id = ""
+            if not parent_decision_id and validated_hold:
+                parent_decision_id = validated_hold.get("decision_id") or ""
+
             try:
                 from .holds import mark_consumed  # type: ignore[import]
                 mark_consumed(hold_id)
@@ -347,7 +447,12 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
                 denial = _deny_response(
                     "reeflex_hold_consume_failed", "reeflex.core/hold_validation"
                 )
-                _try_audit(session_id, envelope, {}, denial)
+                denial["decision_id"] = decision_id
+                _try_audit(
+                    session_id, envelope, {}, denial,
+                    decision_id=decision_id, envelope_hash=envelope_hash,
+                    traceparent=traceparent,
+                )
                 return 200, denial
 
             allow_decision: dict = {
@@ -356,14 +461,26 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
                 "rule": "reeflex.policy/approved_resubmission",
                 "obligations": [],
                 "modulation": None,
+                "decision_id": decision_id,
             }
+            if parent_decision_id:
+                allow_decision["parent_decision_id"] = parent_decision_id
             append_entry(session_id, envelope)
-            _try_audit(session_id, envelope, {}, allow_decision)
+            _try_audit(
+                session_id, envelope, {}, allow_decision,
+                decision_id=decision_id, hold_id=hold_id, envelope_hash=envelope_hash,
+                parent_decision_id=parent_decision_id, traceparent=traceparent,
+            )
             _try_emit_decision(
                 envelope=envelope,
                 decision_response=allow_decision,
                 decision_latency_ms=0,
                 src_ip=src_ip,
+                decision_id=decision_id,
+                hold_id=hold_id,
+                envelope_hash=envelope_hash,
+                parent_decision_id=parent_decision_id,
+                traceparent=traceparent,
             )
             return 200, allow_decision
 
@@ -383,7 +500,12 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
         except OpaEvalError:
             # FAIL-CLOSED: deny on any OPA failure — do NOT silently allow.
             decision_response = dict(_FAIL_CLOSED_DECISION)
-            _try_audit(session_id, envelope, cumulative, decision_response)
+            decision_response["decision_id"] = decision_id
+            _try_audit(
+                session_id, envelope, cumulative, decision_response,
+                decision_id=decision_id, envelope_hash=envelope_hash,
+                traceparent=traceparent,
+            )
             return 500, decision_response
         _decision_latency_ms = int((time.perf_counter() - _t0) * 1000)
 
@@ -394,6 +516,7 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
             "rule": opa_result["rule"],
             "obligations": opa_result.get("obligations", []),
             "modulation": None,  # reserved (SPEC §5)
+            "decision_id": decision_id,
         }
 
         # Step 9: HIL hold creation (T2b) — when verdict is require_approval
@@ -407,7 +530,9 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
             try:
                 from .holds import create_hold  # type: ignore[import]
                 from .webhook import fire as wh_fire  # type: ignore[import]
-                hold_rec = create_hold(envelope, decision_response["rule"])
+                hold_rec = create_hold(
+                    envelope, decision_response["rule"], decision_id=decision_id,
+                )
                 hold_id = hold_rec["id"]
                 expires_ts = hold_rec["expires_ts"]
                 # Annotate the response with hold info
@@ -425,14 +550,27 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
                 denial = dict(_INTERNAL_ERROR_DECISION)
                 denial["reason"] = "hold creation failed - failing closed"
                 denial["rule"] = "reeflex.core/hold_creation_failed"
-                _try_audit(session_id, envelope, cumulative, denial)
+                denial["decision_id"] = decision_id
+                _try_audit(
+                    session_id, envelope, cumulative, denial,
+                    decision_id=decision_id, envelope_hash=envelope_hash,
+                    traceparent=traceparent,
+                )
                 return 500, denial
 
         # Step 10: Append to session ledger AFTER eval
         append_entry(session_id, envelope)
 
         # Step 11: Audit (best-effort; audit failure does not change the decision)
-        _try_audit(session_id, envelope, cumulative, decision_response)
+        # hold_id is carried through only when a hold was just created above
+        # (decision_response.get("hold_id", "") is "" on allow/deny).
+        _try_audit(
+            session_id, envelope, cumulative, decision_response,
+            decision_id=decision_id,
+            hold_id=decision_response.get("hold_id", "") or "",
+            envelope_hash=envelope_hash,
+            traceparent=traceparent,
+        )
 
         # Step 12: Telemetry emit — FIRE-AND-FORGET, NON-BLOCKING.
         # =========================================================
@@ -445,6 +583,10 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
             decision_response=decision_response,
             decision_latency_ms=_decision_latency_ms,
             src_ip=src_ip,
+            decision_id=decision_id,
+            hold_id=decision_response.get("hold_id", "") or "",
+            envelope_hash=envelope_hash,
+            traceparent=traceparent,
         )
 
         return 200, decision_response
@@ -453,7 +595,9 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
         # BELT: catch any unguarded exception anywhere in the pipeline.
         # LOG a sanitized one-line message — NO traceback, NO file paths.
         print("[reeflex-core] ERROR: unexpected internal error - failing closed", file=sys.stderr)
-        return 500, dict(_INTERNAL_ERROR_DECISION)
+        _internal_error = dict(_INTERNAL_ERROR_DECISION)
+        _internal_error["decision_id"] = decision_id
+        return 500, _internal_error
 
 
 # ---------------------------------------------------------------------------
@@ -465,10 +609,27 @@ def _try_audit(
     envelope: dict,
     cumulative: dict,
     decision_response: dict,
+    *,
+    decision_id: str = "",
+    hold_id: str = "",
+    envelope_hash: str = "",
+    parent_decision_id: str = "",
+    traceparent: str = "",
 ) -> None:
-    """Best-effort audit write; logs to stderr on failure but never raises."""
+    """Best-effort audit write; logs to stderr on failure but never raises.
+
+    The keyword-only traceability fields are additive (default "") so any
+    existing/older call site keeps working unmodified.
+    """
     try:
-        record(session_id, envelope, cumulative, decision_response)
+        record(
+            session_id, envelope, cumulative, decision_response,
+            decision_id=decision_id,
+            hold_id=hold_id,
+            envelope_hash=envelope_hash,
+            parent_decision_id=parent_decision_id,
+            traceparent=traceparent,
+        )
     except Exception as exc:  # noqa: BLE001
         print(f"[reeflex-core] WARN: audit write failed: {exc}", file=sys.stderr)
 
@@ -478,12 +639,21 @@ def _try_emit_decision(
     decision_response: dict,
     decision_latency_ms: int,
     src_ip: str = "",
+    *,
+    decision_id: str = "",
+    hold_id: str = "",
+    envelope_hash: str = "",
+    parent_decision_id: str = "",
+    traceparent: str = "",
 ) -> None:
     """
     Fire-and-forget telemetry emit for one decision event.
 
     THE INVARIANT: this function MUST NEVER raise. Any failure (queue full,
     disabled emitter, unexpected exception) is silently swallowed.
+
+    The keyword-only traceability fields are additive (default "") so any
+    existing/older call site keeps working unmodified.
     """
     try:
         emitter = get_emitter()
@@ -515,6 +685,11 @@ def _try_emit_decision(
             src_ip=src_ip,
             target_ref=str(target.get("ref") or ""),
             params=envelope.get("params") or {},
+            decision_id=decision_id,
+            hold_id=hold_id,
+            envelope_hash=envelope_hash,
+            parent_decision_id=parent_decision_id,
+            traceparent=traceparent,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[reeflex-core] WARN: telemetry emit failed: {exc}", file=sys.stderr)
