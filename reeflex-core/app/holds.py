@@ -500,7 +500,23 @@ def resolve_hold(
 def mark_consumed(hold_id: str) -> dict | None:
     """Mark an approved hold as consumed (called after a successful resubmission).
 
-    Returns the updated hold dict, or None if the hold does not exist.
+    CAS (compare-and-set) GUARANTEE: this is a true single-use guard.  The
+    status check (`status == "approved"`) and the append that flips it to
+    "consumed" both happen INSIDE the same `_lock` acquisition, so the two
+    steps are atomic with respect to any other thread calling mark_consumed
+    concurrently.  Exactly one concurrent caller can observe status ==
+    "approved" and win the consume; every other caller -- whether it arrives
+    a nanosecond later on another thread or reads a hold that was never
+    approved -- observes status != "approved" (already "consumed", or
+    "pending"/"rejected"/"expired") and is refused.  This is what makes a
+    single-use hold single-use under concurrency: it prevents an approved-
+    once irreversible action from being double-consumed and double-executed.
+
+    Returns the updated hold dict on a successful consume, or None if the
+    hold does not exist OR the hold is not currently "approved".  Both None
+    cases are "refuse consumption" from the caller's point of view -- the
+    caller (decide.py) MUST treat a None return as "do not allow", not as
+    "nothing happened".
     """
     consumed_ts = _iso_now()
     rec: dict = {
@@ -514,6 +530,13 @@ def mark_consumed(hold_id: str) -> dict | None:
     with _lock:
         _ensure_loaded()
         if hold_id not in _index:
+            return None
+        # CAS guard: only an "approved" hold may be consumed.  Checking this
+        # status AND appending the consumed record both happen under the
+        # single module-level _lock, so no other thread can observe
+        # "approved" between this check and the append below -- exactly one
+        # racing caller wins the consume.
+        if _index[hold_id].get("status") != "approved":
             return None
         _append_and_readback(rec)
         return dict(_index[hold_id])
