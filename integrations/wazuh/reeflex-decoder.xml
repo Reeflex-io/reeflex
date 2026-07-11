@@ -9,9 +9,12 @@
   " reeflex <procid> <msgid> - " marker scopes the decoder to Reeflex lines only;
   every field is extracted by Wazuh's native JSON_Decoder (verdict, rule_id, verb,
   ability, axes.*, magnitude_count, session_id, agent_id, on_behalf_of, environment,
-  mode, decision_latency_ms, reason, namespace, target_ref, params.*, and srcip -
+  mode, decision_latency_ms, reason, namespace, target_ref, params.*, srcip -
   the /v1/decide caller IP, named "srcip" so Wazuh GeoIP enriches it when a
-  GeoLite2 database is configured). No per-field regex to maintain.
+  GeoLite2 database is configured - and the traceability keys decision_id,
+  hold_id, envelope_hash, parent_decision_id, traceparent). No per-field regex
+  to maintain: JSON_Decoder auto-decodes any additive field, so new keys map to
+  data.* with no decoder change (join alerts on data.decision_id).
 
   Install: copy to /var/ossec/etc/decoders/ on the Wazuh manager, then
   `systemctl restart wazuh-manager`. Test with /var/ossec/bin/wazuh-logtest.

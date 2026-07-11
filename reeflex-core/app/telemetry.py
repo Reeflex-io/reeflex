@@ -93,9 +93,51 @@ CEF FORMAT MAPPING
     (rule_id as the EventID field) and as extensions:
     flexString1  -> mode               flexString1Label=mode
 
+  Traceability extensions (added for decision_id / hold / envelope / trace
+  correlation; see TRACEABILITY note below):
+    externalId   -> decision_id (standard CEF key for "the event ID as
+                    reported by the source" -- an exact semantic match for
+                    our per-decision primary key). Always present.
+    envelopeHash -> envelope_hash (non-standard custom key; no cs/cn slot
+                    left, so a self-describing key is used). Always present.
+    holdId       -> hold_id (non-standard). Present only when a hold is
+                    involved (hold creation, or the consumed hold on
+                    resubmission).
+    parentDecisionId -> parent_decision_id (non-standard). Present only on
+                    a resolved resubmission.
+    traceparent  -> traceparent (non-standard). Present only when the
+                    envelope carried one; echoed verbatim, unescaped beyond
+                    the standard CEF pipe/backslash/equals escaping.
+
   VERSION is read dynamically from app._version.CORE_VERSION.
   CEF_MAPPING_TABLE constant at the bottom of this module documents all fields
   so that docs/siem.md can be generated from it without re-reading source.
+
+=============================================================================
+TRACEABILITY (decision_id / hold_id / envelope_hash / parent_decision_id /
+traceparent) — additive fields on the decision event
+=============================================================================
+
+  decision_id          uuid4 hex; the primary key of the /v1/decide transit
+                        that produced this event.  Always present.
+  envelope_hash         sha256 hex of the {action, axes, magnitude, target}
+                        projection (same value as holds.canonical_hash() /
+                        the hold record's envelope_hash).  Always present.
+  hold_id               present only when a hold is involved: the hold this
+                        decision just created (require_approval), or the
+                        hold this decision just consumed (resubmission
+                        allow).  Absent (key omitted) otherwise.
+  parent_decision_id    present only on a resolved resubmission: the
+                        decision_id of the original require_approval
+                        decision that created the consumed hold.  Absent
+                        otherwise.
+  traceparent           opaque W3C trace-context string, echoed verbatim
+                        from envelope.context.traceparent.  No OpenTelemetry
+                        SDK, no spans -- pure passthrough.  Absent when the
+                        envelope did not carry one.
+
+  emit_decision() accepts all five as keyword-only arguments defaulting to
+  "" -- additive, non-breaking for any existing call site.
 
 =============================================================================
 EVENTS
@@ -278,6 +320,11 @@ CEF_MAPPING_TABLE: tuple[tuple[str, str, str], ...] = (
     ("msg",          "reason",             "human-readable reason from OPA"),
     ("flexString1",  "mode",               "enforce | observe"),
     ("flexString1Label","label",           "literal 'mode'"),
+    ("externalId",   "decision_id",        "uuid4 hex primary key of this /v1/decide transit"),
+    ("envelopeHash", "envelope_hash",      "sha256 hex of the {action,axes,magnitude,target} projection"),
+    ("holdId",       "hold_id",            "present only when a hold is involved (created or consumed)"),
+    ("parentDecisionId", "parent_decision_id", "present only on a resolved resubmission"),
+    ("traceparent",  "traceparent",        "opaque W3C trace-context string, echoed verbatim; present only if the envelope carried one"),
 )
 
 
@@ -373,6 +420,27 @@ def format_decision_cef(event: dict[str, Any], version: str = "") -> str:
         f"flexString1={_cef_escape(str(event.get('mode', 'enforce')))}",
         "flexString1Label=mode",
     ]
+
+    # Traceability extensions (additive). decision_id / envelope_hash are
+    # always present on a real decision event; hold_id / parent_decision_id /
+    # traceparent are conditional -- only emitted when the underlying value
+    # is non-empty, to avoid noise on every allow/deny line.
+    decision_id = event.get("decision_id", "")
+    if decision_id:
+        ext_pairs.append(f"externalId={_cef_escape(str(decision_id))}")
+    envelope_hash = event.get("envelope_hash", "")
+    if envelope_hash:
+        ext_pairs.append(f"envelopeHash={_cef_escape(str(envelope_hash))}")
+    hold_id = event.get("hold_id", "")
+    if hold_id:
+        ext_pairs.append(f"holdId={_cef_escape(str(hold_id))}")
+    parent_decision_id = event.get("parent_decision_id", "")
+    if parent_decision_id:
+        ext_pairs.append(f"parentDecisionId={_cef_escape(str(parent_decision_id))}")
+    traceparent = event.get("traceparent", "")
+    if traceparent:
+        ext_pairs.append(f"traceparent={_cef_escape(str(traceparent))}")
+
     extensions = " ".join(ext_pairs)
 
     return (
@@ -573,12 +641,26 @@ class SyslogEmitter:
         src_ip: str = "",
         target_ref: str = "",
         params: dict | None = None,
+        decision_id: str = "",
+        hold_id: str = "",
+        envelope_hash: str = "",
+        parent_decision_id: str = "",
+        traceparent: str = "",
     ) -> None:
         """
         Emit one decision event.
 
         INVARIANT: non-blocking. Any failure (queue full, disabled) is silently
         swallowed — never raises into /v1/decide.
+
+        Traceability fields (additive, keyword-only, default ""):
+          decision_id, envelope_hash   always populated by the decision path;
+                                       always included in the event dict.
+          hold_id, parent_decision_id  conditional -- included only when
+                                       non-empty (a hold is involved / a
+                                       resubmission resolved its parent).
+          traceparent                  conditional -- included only when the
+                                       envelope carried one.
         """
         # Guard: if disabled, this is a one-line check, zero overhead
         if not self._enabled or not self._address_valid:
@@ -615,7 +697,15 @@ class SyslogEmitter:
             "params": params or {},
             "reeflex_version": self._version,
             "epoch_ms": epoch_ms,
+            "decision_id": decision_id,
+            "envelope_hash": envelope_hash,
         }
+        if hold_id:
+            event["hold_id"] = hold_id
+        if parent_decision_id:
+            event["parent_decision_id"] = parent_decision_id
+        if traceparent:
+            event["traceparent"] = traceparent
 
         if self._format == "cef":
             msg_body = format_decision_cef(event, version=self._version)

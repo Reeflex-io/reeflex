@@ -200,6 +200,19 @@ extension, not a breaking change to the `decision`/`reason`/`rule`/
 }
 ```
 
+**Additive field (traceability): `decision_id`.** Every `/v1/decide`
+response — `allow`, `deny`, and `require_approval` alike — carries a
+`decision_id` (a uuid4 hex string): the primary key of that decision transit.
+It is written verbatim into the audit record and the SIEM decision event, so
+the three observability surfaces (response, audit, SIEM) join on an exact key
+instead of a ts+session heuristic. On a resolved approval resubmission, the
+response additionally carries `parent_decision_id` — the `decision_id` of the
+original `require_approval` decision that created the consumed hold (see §5.1).
+Both fields are absent on cores that predate the traceability feature;
+consumers MUST continue to tolerate unknown/absent fields on the Decision
+object — this is a forward-compatible, additive extension, same rule as the
+`hold_id`/`expires_ts` addition above.
+
 ---
 
 ## 5.1 Approval object semantics (HIL Phase 1)
@@ -239,6 +252,37 @@ The holds API (`GET /v1/holds`, `POST /v1/holds/{id}/resolve`) is core's output.
 
 Phase 2 (adapter surfaces) will add re-submission logic to the WordPress adapter and other reference adapters. In Phase 1, core provides the mechanism; adapters must implement re-submission themselves.
 
+### Traceability: `parent_decision_id` and `traceparent` (additive)
+
+On resubmission, the adapter MAY carry the original decision's `decision_id`
+back to core as `approval.parent_decision_id`:
+
+```jsonc
+"approval": {
+  "present": true,
+  "hold_id": "b2bece3cf6ff45f7b738ee3f48978c4e",
+  "parent_decision_id": "9ca1ebe9b72d42ec840a8eafad5f0702"   // optional
+}
+```
+
+If the adapter does not supply it, core falls back to the `decision_id` it
+recorded on the hold at creation time — the hold always names the decision
+that created it — so `parent_decision_id` is populated on a successful
+resubmission either way. This stitches `decision -> hold -> approval ->
+re-decision` into one navigable chain across the audit trail and SIEM feed.
+
+An adapter MAY also carry an opaque W3C trace-context string at
+`context.traceparent` on the envelope. Core does not parse or validate it —
+no tracing SDK, no spans — it is echoed verbatim into the audit record and
+the SIEM decision event so an adapter's own distributed trace can be
+correlated with the Reeflex decision that gated it. Absent when not supplied.
+
+**SHOULD:** the adapter propagates the `decision_id` it received back from
+core onto the executed effect — its own application log line, a WordPress
+audit-log note, a database comment, etc. — so the final link of the chain
+(the actual side effect in the governed system) stitches back to the
+Reeflex decision that authorized it.
+
 ## 6. The Adapter Contract
 
 An adapter is anything that connects a backend to Reeflex. To be **Reeflex-compliant**, it MUST implement four responsibilities:
@@ -246,7 +290,7 @@ An adapter is anything that connects a backend to Reeflex. To be **Reeflex-compl
 1. **INTERCEPT** — capture the backend action *before* it executes (via MCP gateway, API proxy, hook, or eBPF — adapter's choice).
 2. **NORMALIZE** — produce a valid, signed Action Envelope (section 2). This is the hard, valuable part and where adapter quality lives.
 3. **ENFORCE** — submit the envelope to core, receive the Decision, and apply it faithfully: proceed, block, or hold-for-approval. Fail **closed** — if core is unreachable, deny or hold; never silently allow.
-4. **AUDIT** — emit the signed decision record to the observation plane.
+4. **AUDIT** — emit the signed decision record to the observation plane. **SHOULD:** stamp the Decision's `decision_id` onto the executed effect (adapter log line, WordPress audit note, DB comment, …) so the chain from Reeflex decision to actual side effect stitches — see §5.1.
 
 Core exposes one call the adapter depends on:
 

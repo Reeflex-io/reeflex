@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+### Added
+- **Decision traceability: `decision_id` primary key.** Every `/v1/decide` transit (allow / deny / require_approval) now generates a `decision_id` (uuid4 hex), added to the Decision response, the audit record, and the SIEM decision event, so those three surfaces join on an exact key instead of a ts+session heuristic. `envelope_hash` (reusing `holds.canonical_hash()` — the `{action, axes, magnitude, target}` projection already used to bind a hold to its approval) is likewise carried into the audit record and SIEM event. Holds now store the `decision_id` of the decision that created them (`create_hold(..., decision_id=...)`), and a resolved approval resubmission carries `parent_decision_id` — either adapter-supplied via `approval.parent_decision_id` or, as a fallback, resolved from the consumed hold's `decision_id` — so `decision -> hold -> approval -> re-decision` is fully navigable. An opaque W3C trace-context string at `envelope.context.traceparent`, if present, is echoed verbatim into the audit record and SIEM event (no OpenTelemetry SDK, no spans — pure passthrough). All additions are additive/keyword-only with safe defaults; no decision verdict, decision logic, or existing field is changed. SPEC.md and ADAPTER-EXAMPLES.md gain a SHOULD: adapters propagate `decision_id` onto the executed effect (their own log / audit note) so the final link of the chain stitches too.
+
 ## [0.1.10] - 2026-07-06
 
 PyPI publish path: `reeflex-claude` and `reeflex-holds` now ship through CI with SLSA provenance via PyPI Trusted Publishing. No runtime behaviour change to either package.
