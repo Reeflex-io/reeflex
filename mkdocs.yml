@@ -65,6 +65,14 @@ theme:
 extra_css:
   - stylesheets/extra.css
 
+# Self-hosted Mermaid. Vendoring the library so window.mermaid is defined
+# BEFORE Material's built-in handler runs defeats the CDN lazy-fetch race that
+# rendered diagrams blank on most loads (measured). Material's own handler then
+# does the render + live theming; no custom init is needed or wanted (a second
+# run() only races Material's and throws UnknownDiagramError on every load).
+extra_javascript:
+  - javascripts/mermaid.min.js
+
 markdown_extensions:
   - abbr
   - admonition
@@ -145,6 +153,7 @@ nav:
           - Adapt the policy: policy-guide.md
   - Architecture:
       - architecture.md
+      - Diagrams: architecture/diagrams.md
   - Adapters:
       - adapters/index.md
       - n8n (zero-code): guides/n8n.md
