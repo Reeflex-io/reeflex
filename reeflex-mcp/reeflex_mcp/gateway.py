@@ -49,9 +49,15 @@ spike notes):
 
 TRACK 3 -- full enforce-mode verdict -> MCP mapping + hold/resubmission
 ------------------------------------------------------------------------
-`observe` mode is UNCHANGED from Track 2 (design doc section 15: observe must
-never break traffic) -- `_handle_call_tool` still just calls core, always
-forwards, fails OPEN, and tags `gateway_correlation_id` only.
+`observe` mode is UNCHANGED from Track 2 in verdict handling (design doc
+section 15: observe must never break traffic) -- `_handle_call_tool` still
+just calls core, always forwards, and fails OPEN. As of 0.1.1 (GAP-1 fix,
+additive/observability-only) it ALSO tags the forwarded result's `_meta`
+with core's `decision_id` (+ `parent_decision_id` when present) alongside
+`gateway_correlation_id`, and logs the observed verdict/`decision_id` to
+stderr -- at parity with enforce's allow-path tagging, so an observed call
+can be correlated to core's audit/SIEM record. This does NOT change observe's
+verdict handling: it still always forwards regardless of decision.
 
 `enforce` mode is now the FULL design doc section 9 mapping, wired to core's
 landed `decision_id`/`parent_decision_id` traceability (ADDENDUM v1.3 section
@@ -684,6 +690,23 @@ class Gateway:
             # decide (for the audit trail) and always forward.
             decision, note = await self._decide(envelope)
             self._apply_mode_observe(decision, note)
+            # GAP-1 fix (reeflex-mcp 0.1.1): observe must tag the forwarded
+            # result's _meta with core's decision_id (+ parent_decision_id
+            # when present) at parity with enforce's allow path, so an
+            # observed call can be correlated to core's audit/SIEM record.
+            # _apply_mode_observe() already logs the fail-open WARN when
+            # decision is None -- only log the verdict line when there IS a
+            # decision, to avoid duplicating that warning.
+            decision_id = (decision or {}).get("decision_id") or ""
+            parent_decision_id = (decision or {}).get("parent_decision_id") or None
+            if decision is not None:
+                verdict = decision.get("decision")
+                rule = decision.get("rule", "unknown")
+                print(
+                    f"[reeflex-mcp] observe: would-{verdict} decision_id={decision_id} "
+                    f"rule={rule} -- forwarding (observe never blocks)",
+                    file=sys.stderr,
+                )
             # Track 5.1 (design doc section 25): RECORD obligations, never
             # apply/enforce them here -- observe must never break traffic,
             # but recording is what keeps it from silently dropping them.
@@ -693,7 +716,14 @@ class Gateway:
                 tool_name=tool_name,
                 gateway_correlation_id=gateway_correlation_id,
             )
-            return await self._dispatch_and_tag(upstream_name, tool_name, arguments, gateway_correlation_id)
+            return await self._dispatch_and_tag(
+                upstream_name,
+                tool_name,
+                arguments,
+                gateway_correlation_id,
+                decision_id=decision_id or None,
+                parent_decision_id=parent_decision_id,
+            )
 
         # -- enforce mode: Track 3 full verdict -> MCP mapping -------------
         action_hash = canonical.canonical_hash(envelope)
