@@ -6,7 +6,7 @@
 #
 # Fan-out (from a single tagged commit):
 #   - GitHub Release  <- all built artifacts + SHA256SUMS attached
-#   - PyPI            <- reeflex-claude + reeflex-holds (OIDC Trusted Publishing)
+#   - PyPI            <- reeflex-claude + reeflex-holds + reeflex-mcp (OIDC Trusted Publishing)
 #   - npm             <- n8n-nodes-reeflex (with provenance)
 #   - GHCR            <- ghcr.io/reeflex-io/reeflex-core  (ONLY if core changed)
 #
@@ -18,7 +18,7 @@
 # workflow_dispatch, and (transitively) publishing a release.
 #
 # Registry-side setup a human must do ONCE — see docs/RELEASING.md:
-#   - PyPI Trusted Publisher for reeflex-claude AND reeflex-holds
+#   - PyPI Trusted Publisher for reeflex-claude, reeflex-holds AND reeflex-mcp
 #     (repo Reeflex-io/reeflex, workflow release.yml).
 #   - npm: OIDC trusted publishing OR an NPM_TOKEN repo secret (bootstrap/fallback).
 
@@ -63,6 +63,7 @@ jobs:
       core_reason: ${{ steps.core.outputs.core_reason }}
       claude_version: ${{ steps.ver.outputs.claude_version }}
       holds_version: ${{ steps.ver.outputs.holds_version }}
+      mcp_version: ${{ steps.ver.outputs.mcp_version }}
       n8n_version: ${{ steps.ver.outputs.n8n_version }}
       gate_version: ${{ steps.ver.outputs.gate_version }}
     steps:
@@ -125,13 +126,15 @@ jobs:
           extract_pyproj() { grep -m1 -E '^version[[:space:]]*=' "$1" | sed -E 's/.*"([^"]+)".*/\1/'; }
           CLAUDE="$(extract_pyproj reeflex-claude/pyproject.toml)"
           HOLDS="$(extract_pyproj reeflex-holds/pyproject.toml)"
+          MCP="$(extract_pyproj reeflex-mcp/pyproject.toml)"
           N8N="$(grep -m1 -E '"version"[[:space:]]*:' n8n-nodes-reeflex/package.json | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
           GATE="$(grep -m1 -E '^\s*\*\s*Version:' reeflex-wordpress/reeflex-gate.php | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')"
           echo "claude_version=$CLAUDE" >> "$GITHUB_OUTPUT"
           echo "holds_version=$HOLDS"  >> "$GITHUB_OUTPUT"
+          echo "mcp_version=$MCP"      >> "$GITHUB_OUTPUT"
           echo "n8n_version=$N8N"      >> "$GITHUB_OUTPUT"
           echo "gate_version=$GATE"    >> "$GITHUB_OUTPUT"
-          echo "reeflex-claude=$CLAUDE  reeflex-holds=$HOLDS  n8n=$N8N  reeflex-gate=$GATE"
+          echo "reeflex-claude=$CLAUDE  reeflex-holds=$HOLDS  reeflex-mcp=$MCP  n8n=$N8N  reeflex-gate=$GATE"
 
   # ---------------------------------------------------------------------------
   # build: produce every artifact ONCE, then hand them to the publish jobs.
@@ -162,15 +165,17 @@ jobs:
       - name: Build the WordPress + verify zips (stdlib zipfile — no `zip` binary needed)
         run: python scripts/build-wp-zips.py --out dist-artifacts
 
-      - name: Build the Python sdists + wheels (reeflex-claude, reeflex-holds)
+      - name: Build the Python sdists + wheels (reeflex-claude, reeflex-holds, reeflex-mcp)
         run: |
           set -euo pipefail
           # Per-project dirs so the PyPI job can publish each independently.
           python -m build --outdir pypi-dist/reeflex-claude reeflex-claude
           python -m build --outdir pypi-dist/reeflex-holds  reeflex-holds
+          python -m build --outdir pypi-dist/reeflex-mcp    reeflex-mcp
           # Also fold them into the combined release-assets set.
           cp pypi-dist/reeflex-claude/* dist-artifacts/
           cp pypi-dist/reeflex-holds/*  dist-artifacts/
+          cp pypi-dist/reeflex-mcp/*    dist-artifacts/
 
       - name: Build the n8n community node tarball
         working-directory: n8n-nodes-reeflex
@@ -218,6 +223,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload PyPI dist — reeflex-mcp
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-reeflex-mcp
+          path: pypi-dist/reeflex-mcp/
+          if-no-files-found: error
+          retention-days: 7
+
   # ---------------------------------------------------------------------------
   # github-release: attach every built artifact to the release for this tag.
   # Creates the release if it does not exist yet (bare tag push); otherwise
@@ -252,7 +265,7 @@ jobs:
   # skipped, not an error).
   # ---------------------------------------------------------------------------
   pypi:
-    name: PyPI publish (reeflex-claude + reeflex-holds)
+    name: PyPI publish (reeflex-claude + reeflex-holds + reeflex-mcp)
     runs-on: ubuntu-latest
     needs: [prepare, build]
     permissions:
@@ -274,6 +287,12 @@ jobs:
           name: pypi-reeflex-holds
           path: dist-holds
 
+      - name: Download reeflex-mcp dist
+        uses: actions/download-artifact@v4
+        with:
+          name: pypi-reeflex-mcp
+          path: dist-mcp
+
       - name: Publish reeflex-claude to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
@@ -288,6 +307,14 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist-holds
+          skip-existing: true
+          # BOOTSTRAP FALLBACK (see note above):
+          # password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Publish reeflex-mcp to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-mcp
           skip-existing: true
           # BOOTSTRAP FALLBACK (see note above):
           # password: ${{ secrets.PYPI_API_TOKEN }}
@@ -410,6 +437,7 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
           CLAUDE_V: ${{ needs.prepare.outputs.claude_version }}
           HOLDS_V: ${{ needs.prepare.outputs.holds_version }}
+          MCP_V: ${{ needs.prepare.outputs.mcp_version }}
           N8N_V: ${{ needs.prepare.outputs.n8n_version }}
           GATE_V: ${{ needs.prepare.outputs.gate_version }}
           CORE_CHANGED: ${{ needs.prepare.outputs.core_changed }}
@@ -441,6 +469,7 @@ jobs:
             echo "| GitHub Release | reeflex (${TAG}) | ${TAG} | $(mark "$R_RELEASE") | https://github.com/${REPO}/releases/tag/${TAG} |"
             echo "| PyPI | reeflex-claude | ${CLAUDE_V} | $(mark "$R_PYPI") | https://pypi.org/project/reeflex-claude/${CLAUDE_V}/ |"
             echo "| PyPI | reeflex-holds | ${HOLDS_V} | $(mark "$R_PYPI") | https://pypi.org/project/reeflex-holds/${HOLDS_V}/ |"
+            echo "| PyPI | reeflex-mcp | ${MCP_V} | $(mark "$R_PYPI") | https://pypi.org/project/reeflex-mcp/${MCP_V}/ |"
             echo "| npm | n8n-nodes-reeflex | ${N8N_V} | $(mark "$R_NPM") | https://www.npmjs.com/package/n8n-nodes-reeflex/v/${N8N_V} |"
             echo "| GHCR | reeflex-core | ${TAG} + latest | ${GHCR_STATUS} | https://github.com/${REPO}/pkgs/container/reeflex-core |"
             echo ""

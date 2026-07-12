@@ -343,11 +343,12 @@ reeflex-spec/         # this document + JSON schemas + conformance suite
 reeflex-mock/         # runnable mock reference adapter + demo (ships with v0.1)
 reeflex-claude/       # Claude Code adapter — reference, conformance-tested (source-side)
 reeflex-wordpress/    # WordPress adapter — reference, conformance-tested (resource-side)
+reeflex-mcp/          # MCP gateway adapter — reference, conformance-tested (network-boundary side; any MCP upstream)
 reeflex-postgres/     # future / community
 reeflex-s3/           # future / community
 ```
 
-The core and the contract are the product. Adapters are the ecosystem — `reeflex-mock` is the worked in-memory reference (v0.1); `reeflex-claude` and `reeflex-wordpress` are conformance-tested reference adapters for the source and resource sides. The rest the community can build against this spec.
+The core and the contract are the product. Adapters are the ecosystem — `reeflex-mock` is the worked in-memory reference (v0.1); `reeflex-claude`, `reeflex-wordpress`, and `reeflex-mcp` are conformance-tested reference adapters for the source, resource, and network-boundary sides respectively. The rest the community can build against this spec.
 
 ---
 

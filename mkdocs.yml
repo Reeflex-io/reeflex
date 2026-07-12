@@ -136,6 +136,7 @@ nav:
   - Adapters:
       - adapters/index.md
       - n8n (zero-code): guides/n8n.md
+      - MCP gateway: mcp-gateway.md
   - Policy & customization:
       - policy/index.md
       - Adapt the policy: policy-guide.md

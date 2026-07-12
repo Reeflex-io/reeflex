@@ -11,8 +11,9 @@
 Reeflex governs at the resource, on impact — complementary to source-side
 agent-governance platforms (identity/authorization), not a replacement for
 them. Reference adapters ship for WordPress/WooCommerce (standard plugin and
-mu-plugin) and Claude Code; any backend can be covered by implementing the
-public adapter contract: intercept → normalize → enforce → audit.
+mu-plugin), Claude Code, and any MCP upstream (`reeflex-mcp`, the MCP
+gateway); any backend can be covered by implementing the public adapter
+contract: intercept → normalize → enforce → audit.
 
 ## Docs
 
@@ -22,6 +23,7 @@ public adapter contract: intercept → normalize → enforce → audit.
 - [Impact model](reeflex-spec/IMPACT-MODEL.md): how impact is computed, in depth
 - [WordPress adapter](reeflex-wordpress/README.md): install from the wp-admin UI or as a mu-plugin
 - [Claude Code adapter](reeflex-claude/README.md): gate every Claude Code tool call
+- [MCP gateway](docs/mcp-gateway.md): govern any existing MCP server, no client rewrite (`reeflex-mcp/README.md` for the package docs)
 - [Open-core boundary](docs/open-core.md): everything that keeps you safe is free, forever
 - [Architecture whitepaper (PDF)](docs/Reeflex_Architecture.pdf): visual walkthrough and use cases
 - [Roadmap](ROADMAP.md): what is planned vs. what ships today

@@ -1,0 +1,82 @@
+# mappings/postgres.yaml -- Postgres MCP Pro (crystaldba/postgres-mcp,
+# github.com/crystaldba/postgres-mcp -- a real, actively-maintained, widely
+# starred community Postgres MCP server with explicit read/write access
+# modes). Tool names verified against the server's REAL source
+# (src/postgres_mcp/server.py, `@mcp.tool(...)` / `mcp.add_tool(...)` calls)
+# while building this mapping.
+#
+# HONEST NOTE -- read this before trusting the "magnitude from row count"
+# framing: the design doc's own justification for the postgres starter
+# mapping is "the canonical magnitude-from-args case (DELETE/UPDATE row
+# counts) exercising R5's cumulative delete budget". VERIFIED WHILE BUILDING
+# THIS FILE: no real, publicly available Postgres MCP server -- this one
+# included, and also the older archived @modelcontextprotocol/server-postgres
+# reference (which is READ-ONLY by design, a single "query" tool that always
+# runs inside `BEGIN TRANSACTION READ ONLY`) -- exposes row counts as a
+# CALLABLE ARGUMENT. A raw SQL string (`execute_sql(sql: str)`, this server's
+# one write-capable tool) has no structured, countable argument the way
+# filesystem's `read_multiple_files(paths)` or github's `push_files(files)`
+# do; a row count is a RUNTIME property of executing/EXPLAIN-ing the
+# statement, not something the caller passes in. Track 4's declarative
+# schema classifies by TOOL NAME + ARGUMENT SHAPE, not by parsing SQL text --
+# that would be a materially different (and heavier) feature, matching
+# reeflex-spec/ADAPTER-EXAMPLES.md section B's own EXPLAIN-based Postgres
+# adapter design, not this gateway's tool-call proxy model.
+#
+# Resolution taken here (deliberate, not a bug): `execute_sql` -- the single,
+# generic, unrestricted-mode SQL-execution primitive (real annotation:
+# destructiveHint: true) -- is conservatively classified as delete /
+# irreversible / broad. It could just as easily be a SELECT; since the
+# mapping cannot see the SQL text, treating the worst case (a mass DELETE)
+# as the classification is the SAME fail-closed spirit as SPEC section 2's
+# "unknown -> safe-conservative default", applied at the single-tool level
+# instead of the whole-envelope level. This DOES make execute_sql count
+# toward core's R5 session delete budget on every call (by design: an agent
+# with unrestricted raw-SQL access is exactly the fragmentation-guard's
+# intended target). Magnitude is NOT set from an argument (there is none to
+# read) -- every call counts as 1 (see the shared heuristic fallback in
+# normalize.py; this file has no `magnitude:` block).
+#
+# The genuine "magnitude from a real list-typed argument" demonstration the
+# design doc asks for lives in mappings/filesystem.yaml (`read_multiple_files`)
+# and mappings/github.yaml (`push_files`) instead -- both real tools with
+# real array arguments.
+
+tools:
+  list_schemas:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  list_objects:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  get_object_details:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  explain_query:
+    # EXPLAIN plans the query -- it does not execute/modify data.
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  analyze_workload_indexes:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: scoped, externality: internal }
+  analyze_query_indexes:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  analyze_db_health:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: scoped, externality: internal }
+  get_top_queries:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+
+  execute_sql:
+    # See the module-level HONEST NOTE above -- deliberately conservative:
+    # a raw, unparsed SQL string could be a mass DELETE, so it is treated as
+    # one. Real annotation in unrestricted mode: destructiveHint: true.
+    verb: delete
+    axes: { reversibility: irreversible, blast_radius: broad, externality: internal }
+
+# No magnitude rule: execute_sql's only argument is an opaque SQL string, not
+# a structured/countable list -- see the HONEST NOTE above. Every call
+# defaults to magnitude.count = 1 via the shared heuristic fallback
+# (normalize.magnitude_count).

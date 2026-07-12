@@ -25,7 +25,7 @@ Reeflex has an open-core model. The open core covers:
   - reeflex-core (the engine, policy evaluation, audit)
   - reeflex-spec (the Action Envelope + Adapter Contract)
   - Community adapters that implement the SPEC §6 adapter contract
-  - reeflex-claude and reeflex-wordpress (reference adapters)
+  - reeflex-claude, reeflex-wordpress, and reeflex-mcp (reference adapters)
 
 Out of scope for community contributions:
   - The commercial compliance tier (NIS2/DORA/GDPR reporting, ANAF/SmartBill

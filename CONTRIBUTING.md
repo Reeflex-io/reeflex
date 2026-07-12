@@ -31,6 +31,7 @@ reeflex-spec/         # SPEC.md (Action Envelope + Adapter Contract) + JSON sche
 reeflex-mock/         # mock adapter + end-to-end demo (worked example for adapter authors)
 reeflex-claude/       # Claude Code adapter (reference, conformance-tested)
 reeflex-wordpress/    # WordPress adapter (reference, conformance-tested)
+reeflex-mcp/          # MCP gateway adapter (reference, conformance-tested; any MCP upstream)
 docs/adr/             # Architecture Decision Records
 QUICKSTART.md         # 10-minute walkthrough from zero to watching core stop a bulk delete
 INSTALL.md            # OPA installation instructions (per OS)
@@ -167,10 +168,12 @@ for a decision, and enforce it faithfully.
 
 **INTERCEPT** — Capture the backend action before it executes.
 
-Your interception point is adapter-specific: an MCP gateway, an API proxy,
-a WordPress hook, a database driver wrapper. The constraint is that the
-backend must not be touched until a decision is received and applied. In
-`adapter.py`, the interception seam is `MockAdapter.apply(intent)`.
+Your interception point is adapter-specific: an MCP gateway (see
+[`reeflex-mcp/`](reeflex-mcp/), the reference MCP gateway adapter — it puts
+this seam in front of *any* MCP upstream), an API proxy, a WordPress hook, a
+database driver wrapper. The constraint is that the backend must not be
+touched until a decision is received and applied. In `adapter.py`, the
+interception seam is `MockAdapter.apply(intent)`.
 
 **NORMALIZE** — Produce a valid Action Envelope (SPEC §2).
 
@@ -298,6 +301,9 @@ Contributions are welcome for:
 - `reeflex-spec` — spec clarifications, schema definitions, conformance cases.
 - Community adapters (`reeflex-postgres`, `reeflex-s3`, etc.) that implement
   the SPEC §6 adapter contract.
+- `reeflex-mcp` — the MCP gateway now ships as a reference adapter; additional
+  declarative per-server mappings (`reeflex_mcp/mappings/<system>.yaml`) for
+  MCP servers beyond the filesystem/github/postgres starters are welcome.
 - `reeflex-mock` — improvements to the demo and mock adapter.
 - Documentation and QUICKSTART improvements.
 
