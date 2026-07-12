@@ -12,9 +12,9 @@ decision path.
 > Apache-2.0 / open source. The `reeflex-gate/` plugin published to the
 > WordPress.org directory is **additionally licensed GPLv2-or-later** for
 > WordPress.org compatibility — we hold the copyright and dual-license it; the
-> rest of the project stays Apache-2.0. The planned commercial compliance tier
-> (NIS2/DORA/GDPR reporting, ANAF/SmartBill integrations) is a separate, closed
-> package and will never be present in this repository.
+> rest of the project stays Apache-2.0. The commercial tier (Attest / Fleet /
+> Cloud — audit-ready evidence, multi-site management, hosted) is a separate,
+> closed package and will never be present in this repository.
 
 ---
 

@@ -28,8 +28,8 @@ Reeflex has an open-core model. The open core covers:
   - reeflex-claude, reeflex-wordpress, and reeflex-mcp (reference adapters)
 
 Out of scope for community contributions:
-  - The commercial compliance tier (NIS2/DORA/GDPR reporting, ANAF/SmartBill
-    integrations) — this code does not live in the open repos
+  - The commercial tier (Attest / Fleet / Cloud — audit-ready evidence,
+    multi-site management, hosted) — this code does not live in the open repos
   - Any change that introduces an LLM or stochastic model into the /v1/decide
     decision path (see ADR-0002 — this is a hard limit)
 

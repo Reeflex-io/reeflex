@@ -309,8 +309,8 @@ Contributions are welcome for:
 
 Out of scope for community PRs:
 
-- The commercial compliance tier (NIS2/DORA/GDPR reporting, ANAF/SmartBill
-  integrations). This code does not live in the open repos.
+- The commercial tier (Attest / Fleet / Cloud — audit-ready evidence, multi-site
+  management, hosted). This code does not live in the open repos.
 - Any change that introduces an LLM, stochastic model, or free-text
   interpretation into the `/v1/decide` decision path.
 
