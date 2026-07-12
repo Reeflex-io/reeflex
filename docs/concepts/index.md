@@ -20,11 +20,22 @@ ledger and returns <span class="rf-verdict rf-allow">allow</span> /
 <span class="rf-verdict rf-deny">deny</span>; the adapter enforces that verdict
 and writes an append-only audit record either way.
 
-!!! note "Diagrams"
-    The rendered Mermaid diagrams — system overview, the `/v1/decide` sequence,
-    and the hold lifecycle — arrive with the **Architecture** section. They are
-    deliberately held back until the client-side rendering is deterministic
-    (self-hosted, instant-navigation-safe), rather than shipped flaky.
+```mermaid
+flowchart LR
+    A["AI agent"] --> B["Adapter"]
+    B -- "POST /v1/decide" --> C["reeflex-core (OPA/Rego)"]
+    C --> D{Decision}
+    D -- allow --> E["Action runs"]
+    D -- require_approval --> F["Hold: your approver"]
+    D -- deny --> G["Blocked, with a reason"]
+    C -.-> H["Append-only audit record"]
+```
+
+*System overview. Every action takes this path exactly once: the adapter
+normalizes it and asks `reeflex-core`, the engine decides deterministically over
+the per-session ledger, and the adapter enforces the verdict — writing an audit
+record either way. The `/v1/decide` sequence and the hold lifecycle are in
+[Architecture](../architecture.md).*
 
 ## The core ideas
 
