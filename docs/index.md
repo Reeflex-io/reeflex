@@ -25,6 +25,8 @@ safe to run, needs a human, or must be blocked. Across any backend, with
 [View on GitHub](https://github.com/Reeflex-io/reeflex){ .md-button }
 </div>
 
+<p class="hero-tease" markdown>Or **[try a real decision in 30 seconds](getting-started/index.md#try-a-real-decision-in-30-seconds)** — one `curl`, no install.</p>
+
 </div>
 
 ---

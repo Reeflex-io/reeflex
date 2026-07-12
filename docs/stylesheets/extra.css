@@ -159,3 +159,66 @@
   border: 1px solid rgba(233, 238, 249, 0.08);
   border-radius: 10px;
 }
+
+/* ================= Interior polish (C4) ================= */
+
+/* Ember section accent: a short bar under every H2, so content pages carry the
+   brand the way the home does, not just in link color. */
+.md-typeset h2 {
+  padding-top: 0.6rem;
+}
+.md-typeset h2::after {
+  content: "";
+  display: block;
+  width: 2.4rem;
+  height: 2px;
+  margin-top: 0.5rem;
+  background: var(--reeflex-ember);
+  border-radius: 2px;
+  opacity: 0.85;
+}
+
+/* Code block title bar (```lang title="...") — give it the panel look. */
+.md-typeset .highlight span.filename {
+  border-bottom: 1px solid rgba(233, 238, 249, 0.08);
+  font: 500 0.72rem/1.6 "JetBrains Mono", monospace;
+  color: var(--md-default-fg-color--light);
+  background: rgba(16, 24, 48, 0.6);
+}
+
+/* Admonition titles: a touch more weight, consistent across page types. */
+.md-typeset .admonition-title,
+.md-typeset summary {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* Section index "overview" card grids inherit the home card styling above;
+   this just tightens their vertical rhythm. */
+.md-typeset .grid.cards {
+  margin-top: 1rem;
+}
+
+/* ---------- Branded 404 ---------- */
+.reeflex-404 {
+  min-height: 52vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  gap: 0.4rem;
+  padding: 2rem 1rem;
+}
+.reeflex-404 img { margin-bottom: 0.8rem; }
+.reeflex-404 .lede {
+  max-width: 34rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* Home hero "try it" tease under the CTA buttons. */
+.reeflex-hero .hero-tease {
+  margin-top: 0.9rem;
+  font-size: 0.9rem;
+  color: var(--md-default-fg-color--light);
+}

@@ -1,30 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <defs>
-    <radialGradient id="bg" cx="50%" cy="38%" r="70%">
-      <stop offset="0%" stop-color="#16203F"/>
-      <stop offset="62%" stop-color="#0D1428"/>
-      <stop offset="100%" stop-color="#0A1020"/>
-    </radialGradient>
-    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#F1F5FD"/>
-      <stop offset="100%" stop-color="#BCC9E5"/>
-    </linearGradient>
-    <radialGradient id="ember" cx="36%" cy="30%" r="60%">
-      <stop offset="0%" stop-color="#F6B694"/>
-      <stop offset="56%" stop-color="#E07A50"/>
-      <stop offset="100%" stop-color="#B2542F"/>
-    </radialGradient>
-    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
-      <feGaussianBlur in="SourceGraphic" stdDeviation="2.5" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-  </defs>
-  <!-- badge background -->
-  <rect x="4" y="4" width="56" height="56" rx="14" ry="14" fill="url(#bg)" stroke="rgba(220,228,245,0.12)" stroke-width="1"/>
-  <!-- left bar -->
-  <rect x="19" y="17" width="8" height="30" rx="4" ry="4" fill="url(#bar)" opacity="0.95"/>
-  <!-- right bar -->
-  <rect x="37" y="17" width="8" height="30" rx="4" ry="4" fill="url(#bar)" opacity="0.95"/>
-  <!-- ember dot with glow -->
-  <circle cx="32" cy="32" r="5.5" fill="url(#ember)" filter="url(#glow)"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"><defs>
+  <radialGradient id="badge" cx="50%" cy="30%" r="85%">
+    <stop offset="0%" stop-color="#151F3D"/><stop offset="55%" stop-color="#0D1428"/><stop offset="100%" stop-color="#070C18"/>
+  </radialGradient>
+  <linearGradient id="badgeEdge" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="rgba(233,238,249,0.22)"/><stop offset="35%" stop-color="rgba(233,238,249,0.05)"/><stop offset="100%" stop-color="rgba(233,238,249,0.02)"/>
+  </linearGradient>
+  <linearGradient id="steel" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#FFFFFF"/><stop offset="45%" stop-color="#DCE4F5"/><stop offset="100%" stop-color="#9FAECF"/>
+  </linearGradient>
+  <radialGradient id="orb" cx="35%" cy="28%" r="75%">
+    <stop offset="0%" stop-color="#FFD9C2"/><stop offset="35%" stop-color="#F09A6E"/><stop offset="72%" stop-color="#E07A50"/><stop offset="100%" stop-color="#8F3F20"/>
+  </radialGradient>
+  <radialGradient id="haloG">
+    <stop offset="0%" stop-color="#E07A50" stop-opacity="0.30"/><stop offset="55%" stop-color="#E07A50" stop-opacity="0.10"/><stop offset="100%" stop-color="#E07A50" stop-opacity="0"/>
+  </radialGradient>
+</defs><g transform="translate(0,0) scale(1.0)"><rect x="3" y="3" width="58" height="58" rx="15" fill="url(#badge)"/><rect x="3.5" y="3.5" width="57" height="57" rx="14.5" fill="none" stroke="url(#badgeEdge)" stroke-width="1"/><path d="M 24.5 20 L 15.5 32 L 24.5 44" fill="none" stroke="url(#steel)" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M 39.5 20 L 48.5 32 L 39.5 44" fill="none" stroke="url(#steel)" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="32" cy="32" r="12.8" fill="url(#haloG)"/><circle cx="32" cy="32" r="6.4" fill="url(#orb)"/><ellipse cx="29.951999999999998" cy="29.312" rx="2.176" ry="1.4080000000000001" fill="#FFFFFF" opacity="0.75"/></g></svg>

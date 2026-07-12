@@ -14,8 +14,13 @@ edit_uri: edit/main/docs/
 
 theme:
   name: material
+  custom_dir: overrides
   language: en
-  logo: assets/logo.png
+  # No header logo image: the official brand mark (favicon.svg) is a dark-navy
+  # badge that blends into the navy header (verified ~1.04:1 contrast in dark
+  # mode). Per the copy-not-recreate rule we do NOT alter the asset; the header
+  # uses the "Reeflex Docs" text wordmark instead (legible in both palettes,
+  # matching reeflex.io). The official favicon still serves the browser tab.
   favicon: assets/favicon.svg
   icon:
     repo: fontawesome/brands/github
@@ -104,7 +109,7 @@ plugins:
   # build stays clean and `--strict` reflects content, not the environment.
   - git-revision-date-localized:
       enabled: !ENV [CI, false]
-      enable_creation_date: true
+      enable_creation_date: false # show a single "last updated" date, not two
       enable_git_follow: false
       type: date
       fallback_to_build_date: true
@@ -123,6 +128,10 @@ extra:
       name: reeflex.io
   generator: false
 
+# 7 top-level tabs (no crowding/wrap at 1280-1366px). Policy is nested under
+# Concepts (customizing the five rules is an extension of understanding them);
+# Compliance is nested under Operations (it is a run-time evidence concern).
+# FAQ + Roadmap will live in the footer + Home, not as tabs, when they land.
 nav:
   - Home: index.md
   - Getting started:
@@ -131,21 +140,21 @@ nav:
   - Concepts:
       - concepts/index.md
       - Why Reeflex (HIL / HOTL / AIL): why-reeflex.md
+      - Policy & customization:
+          - policy/index.md
+          - Adapt the policy: policy-guide.md
   - Architecture:
       - architecture.md
   - Adapters:
       - adapters/index.md
       - n8n (zero-code): guides/n8n.md
       - MCP gateway: mcp-gateway.md
-  - Policy & customization:
-      - policy/index.md
-      - Adapt the policy: policy-guide.md
   - Operations:
       - operations/index.md
       - SIEM export: siem.md
-  - Compliance & open core:
-      - compliance/index.md
-      - Open core: open-core.md
+      - Compliance & open core:
+          - compliance/index.md
+          - Open core: open-core.md
   - Reference:
       - reference/index.md
       - "ADR 0001: deployment model": adr/0001-deployment-model.md
