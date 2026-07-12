@@ -146,10 +146,11 @@ EVENTS
   1. decision     — emitted AFTER every /v1/decide response, just before
                     returning to the caller.  Fields: see DECISION_EVENT_FIELDS.
   2. lifecycle    — emitted on engine start and stop.
-  3. kill_switch  — TODO Phase 1: emit_kill_switch() is fully designed and
-                    wired here. The kill-switch enforcement module (Phase 1)
-                    MUST call emit_kill_switch(action, reason) to fire it.
-                    Shape: see KILL_SWITCH_EVENT_FIELDS.
+  3. kill_switch  — emitted on a freeze (REEFLEX_FREEZE) FLIP:
+                    decide._try_fire_freeze_flipped() calls emit_kill_switch()
+                    when the freeze engages (action="flipped") or clears
+                    (action="cleared"), alongside the freeze.flipped audit +
+                    webhook. Shape: see KILL_SWITCH_EVENT_FIELDS.
 
 =============================================================================
 SEVERITY MAP (RFC 5424)
@@ -279,9 +280,9 @@ DECISION_EVENT_FIELDS: tuple[tuple[str, str], ...] = (
 # ---------------------------------------------------------------------------
 # KILL_SWITCH_EVENT_FIELDS — shape for the kill-switch event
 # ---------------------------------------------------------------------------
-# TODO Phase 1: the kill-switch enforcement module MUST call emit_kill_switch()
-#   below.  This constant documents the event shape so docs/siem.md can be
-#   generated independently.
+# emit_kill_switch() (below) is called by decide._try_fire_freeze_flipped() on a
+#   REEFLEX_FREEZE flip.  This constant documents the event shape so docs/siem.md
+#   can be generated independently.
 
 KILL_SWITCH_EVENT_FIELDS: tuple[tuple[str, str], ...] = (
     ("ts",             "RFC3339 UTC timestamp of the kill-switch flip"),
@@ -769,10 +770,10 @@ class SyslogEmitter:
         reason: human-readable explanation of the flip.
         Severity: critical (2) — a kill-switch flip is a critical event.
 
-        TODO Phase 1: the kill-switch enforcement module MUST call this method
-        when the kill switch is activated or deactivated. The event shape is
-        defined in KILL_SWITCH_EVENT_FIELDS above. This method is fully
-        implemented and ready to call; Phase 1 only needs to add the call site.
+        Called by decide._try_fire_freeze_flipped() on a REEFLEX_FREEZE flip:
+        freeze engaged -> action="flipped"; freeze cleared -> action="cleared",
+        alongside the freeze.flipped audit record + webhook. The event shape is
+        defined in KILL_SWITCH_EVENT_FIELDS above.
         """
         if not self._enabled or not self._address_valid:
             return
