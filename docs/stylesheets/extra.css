@@ -1,224 +1,490 @@
-/* docs.reeflex.io — brand theme on top of MkDocs Material.
-   Tokens mirror reeflex.io: bg #0B1020, panel #101830, ink #E9EEF9,
-   ember #E07A50 (accent/links), allow #3DBE6C, hold #E0A32E, deny #E4573D. */
+/* docs.reeflex.io — light-first brand theme on MkDocs Material.
+   Register: the marketing site (reeflex.io) is dark & dramatic; the DOCS are
+   light & readable (Stripe / Pydantic / FastAPI convention — read for hours).
+   Same brand, two registers.
+
+   Contrast is measured, not assumed. Ember (#E07A50) mid-tone fails AA as text
+   on white, so it survives ONLY as a non-text accent (buttons, active nav,
+   borders, eyebrow rule). Link / eyebrow TEXT uses a deepened ember
+   (--rf-ember-link #B0512A, ~5.2:1 on white). Verdict colors carry two shades:
+   a bright dot/chip (semantic, large) and a darkened ink for inline words. */
 
 @import url("https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&display=swap");
 
 :root {
-  --reeflex-ember: #e07a50;
-  --reeflex-ember-2: #f0946b;
-  --reeflex-allow: #3dbe6c;
-  --reeflex-hold: #e0a32e;
-  --reeflex-deny: #e4573d;
+  /* Brand accents (palette-independent) */
+  --rf-ember: #e07a50;          /* non-text accent only */
+  --rf-ember-2: #f0946b;        /* hover / dark-mode link */
+  --rf-ember-link: #b0512a;     /* link + eyebrow TEXT on white — measured ~5.2:1 */
 
-  --md-primary-fg-color: #101830;
-  --md-primary-fg-color--light: #17224a;
-  --md-primary-fg-color--dark: #0b1020;
-  --md-accent-fg-color: var(--reeflex-ember);
+  /* Verdict — bright (dot/chip, large) */
+  --rf-allow: #3dbe6c;
+  --rf-hold: #e0a32e;
+  --rf-deny: #e4573d;
+
+  --rf-radius: 12px;
+  --rf-radius-sm: 8px;
+
   --md-code-font: "JetBrains Mono";
 }
 
-/* Headings use Sora for a distinct, premium voice. */
+/* =====================================================================
+   LIGHT scheme (DEFAULT) — the docs surface
+   ===================================================================== */
+[data-md-color-scheme="default"] {
+  --md-hue: 225;
+
+  --md-default-bg-color: #ffffff;
+  --md-default-bg-color--light: #faf9f7;
+  --md-default-fg-color: #33404f;          /* body ink — ~10.6:1 on white */
+  --md-default-fg-color--light: #5d6675;    /* muted — ~5.8:1 */
+  --md-default-fg-color--lighter: #8a93a3;
+  --md-default-fg-color--lightest: #c4cad4;
+
+  /* Header: near-white, dark wordmark, hairline rule */
+  --md-primary-fg-color: #ffffff;
+  --md-primary-fg-color--light: #ffffff;
+  --md-primary-fg-color--dark: #f4f3f1;
+  --md-primary-bg-color: #0b1020;
+  --md-primary-bg-color--light: #5d6675;
+
+  /* Material paints ALL hover text (nav, toc, links, search) with
+     --md-accent-fg-color. Bright ember fails AA as text on white, so on light
+     it must be the deep AA ember; the vivid ember still leads via --rf-ember
+     where WE place it (buttons, eyebrow, borders, card hover). */
+  --md-accent-fg-color: var(--rf-link-hover);
+  --md-typeset-a-color: var(--rf-ember-link);
+
+  --md-code-bg-color: #f6f7f9;
+  --md-code-fg-color: #263041;
+
+  --md-footer-bg-color: #0b1020;
+  --md-footer-bg-color--dark: #080c18;
+
+  /* Local tokens */
+  --rf-heading: #0b1020;
+  --rf-surface: #faf9f7;
+  --rf-surface-2: #f3f2ef;
+  --rf-border: rgba(11, 16, 32, 0.08);
+  --rf-border-strong: rgba(11, 16, 32, 0.14);
+  --rf-shadow: 0 1px 2px rgba(11, 16, 32, 0.04), 0 8px 24px -16px rgba(11, 16, 32, 0.18);
+  --rf-allow-ink: #0c7e3e;   /* ~4.9:1 on white */
+  --rf-hold-ink: #946a00;    /* ~4.9:1 on white */
+  --rf-deny-ink: #c7381f;    /* ~5.2:1 on white */
+  --rf-hero-h1: #0b1020;
+  --rf-link-hover: #8f3f1e;  /* darker ember for hover on white — ~7.3:1 (bright ember would fail AA) */
+}
+
+/* Soft warm wash — barely there, keeps the page from feeling clinical. */
+[data-md-color-scheme="default"] body {
+  background:
+    radial-gradient(1100px 520px at 88% -8%, rgba(224, 122, 80, 0.045), transparent 60%),
+    var(--md-default-bg-color);
+}
+
+/* =====================================================================
+   DARK scheme (TOGGLE) — reworked: lifted surfaces, softer grays
+   ===================================================================== */
+[data-md-color-scheme="slate"] {
+  --md-hue: 225;
+
+  --md-default-bg-color: #0d1322;          /* lifted from the old #0b1020 */
+  --md-default-bg-color--light: #121a2c;
+  --md-default-fg-color: #cbd3e6;           /* body — softer than pure white */
+  --md-default-fg-color--light: #93a0bc;
+  --md-default-fg-color--lighter: #6b7793;
+  --md-default-fg-color--lightest: #47516b;
+
+  --md-primary-fg-color: #0d1322;
+  --md-primary-fg-color--light: #141c30;
+  --md-primary-fg-color--dark: #0a0f1b;
+  --md-primary-bg-color: #e9eef9;
+  --md-primary-bg-color--light: #93a0bc;
+
+  --md-accent-fg-color: var(--rf-ember-2);
+  --md-typeset-a-color: var(--rf-ember-2);
+
+  --md-code-bg-color: #131b2e;
+  --md-code-fg-color: #dfe6f5;
+
+  --md-footer-bg-color: #090e1a;
+  --md-footer-bg-color--dark: #070b14;
+
+  --rf-heading: #f2f5fc;
+  --rf-surface: #161e33;
+  --rf-surface-2: #1b2440;
+  --rf-border: rgba(233, 238, 249, 0.10);
+  --rf-border-strong: rgba(233, 238, 249, 0.18);
+  --rf-shadow: 0 8px 30px -16px rgba(0, 0, 0, 0.6);
+  --rf-allow-ink: #5ed08a;
+  --rf-hold-ink: #ecba54;
+  --rf-deny-ink: #f2795f;
+  --rf-hero-h1: #f4f7fd;
+  --rf-link-hover: var(--rf-ember-2);  /* bright ember reads fine on dark */
+}
+
+[data-md-color-scheme="slate"] body {
+  background:
+    radial-gradient(1200px 560px at 82% -10%, rgba(224, 122, 80, 0.09), transparent 60%),
+    radial-gradient(900px 500px at 0% 0%, rgba(23, 34, 74, 0.5), transparent 55%),
+    var(--md-default-bg-color);
+}
+
+/* =====================================================================
+   Typography — Sora headings, Inter body, JetBrains Mono code
+   ===================================================================== */
+.md-typeset {
+  font-size: 0.8rem;      /* = 16px at Material's 125% root */
+  line-height: 1.68;
+}
 .md-typeset h1,
 .md-typeset h2,
 .md-typeset h3,
 .md-typeset h4,
 .md-header__title {
-  font-family: "Sora", var(--md-text-font-family), sans-serif;
-  letter-spacing: -0.015em;
+  font-family: "Sora", var(--md-text-font-family, "Inter"), sans-serif;
+  letter-spacing: -0.017em;
   font-weight: 700;
+  color: var(--rf-heading);
 }
-.md-typeset h1 { font-weight: 800; letter-spacing: -0.03em; }
-
-/* ---------- Dark scheme (default): the brand surface ---------- */
-[data-md-color-scheme="slate"] {
-  --md-hue: 225;
-  --md-default-bg-color: #0b1020;
-  --md-default-bg-color--light: #0e1428;
-  --md-default-fg-color: #e9eef9;
-  --md-default-fg-color--light: #c3cbe0;
-  --md-default-fg-color--lighter: #8f9abb;
-  --md-default-fg-color--lightest: #5b6a8f;
-
-  --md-primary-fg-color: #0b1020;
-  --md-primary-bg-color: #e9eef9;
-
-  --md-accent-fg-color: var(--reeflex-ember);
-  --md-typeset-a-color: var(--reeflex-ember);
-
-  --md-code-bg-color: #0e1730;
-  --md-code-fg-color: #e9eef9;
-
-  --md-footer-bg-color: #080c18;
-  --md-footer-bg-color--dark: #06090f;
+.md-typeset h1 {
+  font-weight: 800;
+  letter-spacing: -0.028em;
+  font-size: 2rem;
+  line-height: 1.15;
+  margin-bottom: 0.7em;
 }
-
-[data-md-color-scheme="slate"] body {
-  background:
-    radial-gradient(1200px 600px at 78% -10%, rgba(224, 122, 80, 0.10), transparent 60%),
-    radial-gradient(900px 500px at 0% 0%, rgba(23, 34, 74, 0.55), transparent 55%),
-    var(--md-default-bg-color);
+.md-typeset h2 {
+  font-size: 1.4rem;
+  margin-top: 2.4em;
+  padding-top: 0.2em;
+  letter-spacing: -0.02em;
 }
+.md-typeset h3 { font-size: 1.08rem; margin-top: 1.8em; }
+.md-typeset h2 + h3 { margin-top: 1em; }
 
-/* Links: ember, with a subtle underline on hover. */
-.md-typeset a { color: var(--reeflex-ember); text-decoration-color: rgba(224,122,80,0.35); }
-.md-typeset a:hover { color: var(--reeflex-ember-2); }
-
-/* Panels / cards / code sit on the panel color for depth. */
-[data-md-color-scheme="slate"] .md-typeset pre > code,
-[data-md-color-scheme="slate"] .md-typeset .highlight {
-  border: 1px solid rgba(233, 238, 249, 0.06);
-  border-radius: 10px;
+/* Reading measure: three-column anatomy. The grid bounds the whole row; the
+   content column itself is capped to ~740px (~74ch) and centred — but ONLY on
+   pages that show a TOC (interior docs). The home hero + card grid have no TOC
+   and stay full-width. (:has + :not([hidden]) so a hidden secondary sidebar on
+   home does not trigger the cap.) */
+.md-grid { max-width: 72rem; }
+/* Cap the measure on interior (TOC) pages only — home has a hidden secondary
+   sidebar, so it stays full-width. We MATCH Material's own selector structure
+   and specificity (0,5,0) inside the same breakpoint so our centering margins
+   actually win: at >=76.25em Material pins the column with fixed 1.2rem
+   left/right margins ([dir] .md-sidebar--*:not([hidden]) ~ .md-content >
+   .md-content__inner) that outrank a plain margin-inline:auto. extra.css loads
+   after the theme CSS, so equal specificity + later source = ours wins. */
+.md-sidebar--secondary:not([hidden]) ~ .md-content > .md-content__inner {
+  max-width: 37rem;         /* ~740px at Material's 20px rem */
+  margin-inline: auto;      /* effective below the sidebar breakpoint */
+}
+@media screen and (min-width: 76.25em) {
+  [dir="ltr"] .md-sidebar--secondary:not([hidden]) ~ .md-content > .md-content__inner,
+  [dir="rtl"] .md-sidebar--secondary:not([hidden]) ~ .md-content > .md-content__inner {
+    margin-inline: auto;    /* (0,5,0): beats Material's fixed 1.2rem margins */
+  }
 }
 
-/* ---------- Header ---------- */
+/* =====================================================================
+   Title artifacts (T3) — pilcrow gone on H1, hover-only on the rest
+   ===================================================================== */
+.md-typeset h1 .headerlink { display: none !important; }
+.md-typeset h2 .headerlink,
+.md-typeset h3 .headerlink,
+.md-typeset h4 .headerlink,
+.md-typeset h5 .headerlink,
+.md-typeset h6 .headerlink {
+  color: var(--md-default-fg-color--lightest);
+  opacity: 0;
+  transition: opacity 0.2s, color 0.2s;
+}
+.md-typeset h2:hover .headerlink,
+.md-typeset h3:hover .headerlink,
+.md-typeset h4:hover .headerlink,
+.md-typeset h5:hover .headerlink,
+.md-typeset h6:hover .headerlink,
+.md-typeset :target > .headerlink,
+.md-typeset .headerlink:focus { opacity: 1; color: var(--rf-ember-link); }
+
+/* =====================================================================
+   Links
+   ===================================================================== */
+.md-typeset a {
+  color: var(--md-typeset-a-color);
+  text-decoration-color: color-mix(in srgb, var(--md-typeset-a-color) 32%, transparent);
+  text-underline-offset: 2px;
+}
+.md-typeset a:hover {
+  color: var(--rf-link-hover);
+  text-decoration-color: currentColor;
+}
+
+/* =====================================================================
+   Header — slim, hairline rule, wordmark
+   ===================================================================== */
 .md-header {
-  background: rgba(11, 16, 32, 0.85);
-  backdrop-filter: saturate(140%) blur(8px);
-  border-bottom: 1px solid rgba(233, 238, 249, 0.06);
+  box-shadow: none;
+  border-bottom: 1px solid var(--rf-border);
+  backdrop-filter: saturate(120%) blur(6px);
 }
-.md-tabs { background: transparent; }
+[data-md-color-scheme="default"] .md-header { background-color: rgba(255, 255, 255, 0.88); }
+[data-md-color-scheme="slate"] .md-header { background-color: rgba(13, 19, 34, 0.85); }
+.md-header__title { font-weight: 700; font-size: 0.86rem; }
+.md-header__inner { min-height: 2.9rem; }
 
-/* ---------- Grid cards (home + section landings) ---------- */
+/* Header brand badge (official favicon mark). Crisp on the white header; on the
+   dark toggle the badge's own navy blends into the header, so a faint rounded
+   backdrop lifts its tile edge back out. */
+.md-header__button.md-logo img,
+.md-nav__button.md-logo img { height: 1.7rem; width: auto; }
+.md-header__button.md-logo { padding-right: 0.5rem; }
+[data-md-color-scheme="slate"] .md-header__button.md-logo {
+  background: rgba(233, 238, 249, 0.06);
+  border-radius: 9px;
+}
+
+/* Active nav item — ember (the one place ember leads in the chrome). */
+.md-nav__link--active,
+.md-nav__item .md-nav__link--active {
+  color: var(--md-typeset-a-color);
+  font-weight: 600;
+}
+.md-nav__link:focus,
+.md-nav__link:hover { color: var(--rf-link-hover); }
+
+/* Section headers in the left tree — quiet, uppercase, tracked. */
+.md-nav__item--section > .md-nav__link,
+.md-nav--primary .md-nav__title {
+  color: var(--md-default-fg-color--light);
+}
+
+/* =====================================================================
+   Grid cards (home + section landings)
+   ===================================================================== */
 .md-typeset .grid.cards > ul > li,
 .md-typeset .grid > .card {
-  border: 1px solid rgba(233, 238, 249, 0.08);
-  border-radius: 14px;
-  background: linear-gradient(180deg, rgba(16, 24, 48, 0.75), rgba(11, 16, 32, 0.6));
-  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  border: 1px solid var(--rf-border);
+  border-radius: var(--rf-radius);
+  background: var(--rf-surface);
+  box-shadow: var(--rf-shadow);
+  padding: 1.1rem 1.15rem;
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
 }
 .md-typeset .grid.cards > ul > li:hover,
 .md-typeset .grid > .card:hover {
-  transform: translateY(-3px);
-  border-color: rgba(224, 122, 80, 0.45);
-  box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.6);
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--rf-ember) 55%, var(--rf-border));
+  box-shadow: 0 1px 2px rgba(11, 16, 32, 0.05), 0 14px 34px -18px rgba(224, 122, 80, 0.4);
+}
+.md-typeset .grid.cards > ul > li > :first-child { margin-top: 0; }
+
+/* =====================================================================
+   Admonitions — light, subtle 1px border, no heavy fill
+   ===================================================================== */
+.md-typeset .admonition,
+.md-typeset details {
+  border: 1px solid var(--rf-border);
+  border-left-width: 3px;
+  border-radius: var(--rf-radius-sm);
+  background: var(--rf-surface);
+  box-shadow: none;
+  font-size: 0.76rem;
+}
+.md-typeset .admonition-title,
+.md-typeset summary { background: transparent; font-weight: 600; }
+
+/* =====================================================================
+   Code — light card, subtle border, filename title bar
+   ===================================================================== */
+.md-typeset pre > code,
+.md-typeset .highlight {
+  border-radius: var(--rf-radius-sm);
+}
+[data-md-color-scheme="default"] .md-typeset pre > code {
+  border: 1px solid var(--rf-border);
+}
+[data-md-color-scheme="slate"] .md-typeset pre > code {
+  border: 1px solid rgba(233, 238, 249, 0.07);
+}
+.md-typeset code {
+  font-feature-settings: "liga" 0;
+  border-radius: 5px;
+}
+/* Inline code — quiet chip */
+.md-typeset :not(pre) > code {
+  background: var(--rf-surface-2);
+  padding: 0.12em 0.38em;
+}
+/* Filename / title bar on fenced blocks */
+.md-typeset .highlight span.filename {
+  background: var(--rf-surface-2);
+  border: 1px solid var(--rf-border);
+  border-bottom: none;
+  border-radius: var(--rf-radius-sm) var(--rf-radius-sm) 0 0;
+  color: var(--md-default-fg-color--light);
+  font: 600 0.68rem/1 "JetBrains Mono", monospace;
+  letter-spacing: 0.02em;
+  padding: 0.5rem 0.9rem;
+  margin-bottom: 0;
 }
 
-/* ---------- Hero (home) ---------- */
-.reeflex-hero {
-  padding: 2.6rem 0 1.2rem;
-  text-align: center;
+/* =====================================================================
+   Tables — quiet borders, comfortable padding
+   ===================================================================== */
+.md-typeset table:not([class]) {
+  border: 1px solid var(--rf-border);
+  border-radius: var(--rf-radius-sm);
+  font-size: 0.74rem;
 }
+.md-typeset table:not([class]) th {
+  background: var(--rf-surface);
+  font-weight: 700;
+  color: var(--rf-heading);
+}
+.md-typeset table:not([class]) td { border-top: 1px solid var(--rf-border); }
+
+/* =====================================================================
+   Decision verdicts — inline words use the AA ink; dots stay bright
+   ===================================================================== */
+.rf-verdict { font-weight: 700; }
+.rf-allow { color: var(--rf-allow-ink); }
+.rf-hold  { color: var(--rf-hold-ink); }
+.rf-deny  { color: var(--rf-deny-ink); }
+
+/* =====================================================================
+   Mermaid — centered + BRANDED (theme follows the palette via Material's
+   renderer over the vendored library). Material derives node fills from
+   --md-accent-fg-color--transparent, which is undefined for a custom accent,
+   so flowchart boxes fell back to Mermaid's default lavender. Define the
+   --md-mermaid-* vars explicitly, per palette, so ALL diagram types (sequence,
+   state, flowchart) share one ember/ink brand look. */
+[data-md-color-scheme="default"] {
+  --md-mermaid-node-bg-color: #fbeee7;        /* soft ember fill */
+  --md-mermaid-node-fg-color: #b0512a;        /* ember border */
+  --md-mermaid-edge-color: #5d6675;           /* muted ink lines/arrows */
+  --md-mermaid-label-fg-color: #263041;       /* ink node text */
+  --md-mermaid-label-bg-color: #ffffff;
+  --md-mermaid-sequence-actor-border-color: #b0512a;
+  --md-mermaid-sequence-actorline-color: #b0512a;
+}
+[data-md-color-scheme="slate"] {
+  --md-mermaid-node-bg-color: #202a46;        /* lifted panel */
+  --md-mermaid-node-fg-color: #f0946b;        /* ember border */
+  --md-mermaid-edge-color: #93a0bc;
+  --md-mermaid-label-fg-color: #dfe6f5;
+  --md-mermaid-label-bg-color: #0d1322;
+  --md-mermaid-sequence-actor-border-color: #f0946b;
+  --md-mermaid-sequence-actorline-color: #f0946b;
+}
+.md-typeset .mermaid { text-align: center; margin: 1.6rem 0; }
+/* Wide architecture diagrams may exceed the 740px reading column — let them
+   scroll rather than clip or force an awkward shrink. */
+.md-typeset .mermaid > svg { max-width: 100%; }
+.md-typeset .mermaid + em,
+.md-typeset .mermaid + p > em {
+  display: block;
+  color: var(--md-default-fg-color--light);
+  font-size: 0.72rem;
+  max-width: 40rem;
+  margin: -0.4rem auto 0;
+  line-height: 1.5;
+}
+/* Inline code inside a diagram caption: no chunky chip — it wraps awkwardly and
+   reads unpolished. Keep the mono face, drop the background/padding. */
+.md-typeset .mermaid + em code,
+.md-typeset .mermaid + p > em code {
+  background: none;
+  padding: 0;
+  font-size: 0.95em;
+  color: inherit;
+}
+
+/* =====================================================================
+   Hero (home) — SOLID-ink headline (no gradient), ember eyebrow
+   ===================================================================== */
+.reeflex-hero { padding: 3rem 0 1.2rem; text-align: center; }
 .reeflex-hero .tag {
   display: inline-block;
-  font: 600 0.72rem/1 "JetBrains Mono", monospace;
-  letter-spacing: 0.14em;
+  font: 700 0.68rem/1 "JetBrains Mono", monospace;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--reeflex-ember);
-  border: 1px solid rgba(224, 122, 80, 0.35);
+  color: var(--rf-ember-link);       /* AA on white */
+  border: 1px solid color-mix(in srgb, var(--rf-ember) 45%, transparent);
   border-radius: 999px;
-  padding: 0.4rem 0.8rem;
-  margin-bottom: 1.1rem;
+  padding: 0.42rem 0.85rem;
+  margin-bottom: 1.2rem;
 }
+[data-md-color-scheme="slate"] .reeflex-hero .tag { color: var(--rf-ember-2); }
 .reeflex-hero h1 {
-  font-size: 2.7rem;
-  line-height: 1.05;
-  margin: 0.2rem 0 0.6rem;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  font-size: 2.9rem;
+  line-height: 1.06;
+  margin: 0.2rem auto 0.55rem;
+  max-width: 20ch;
+  color: var(--rf-hero-h1);
+  /* explicitly NO gradient / text-fill trickery */
+  background: none;
+  -webkit-text-fill-color: currentColor;
 }
-/* Scheme-scoped so the gradient stays legible in BOTH palettes
-   (a white->pale gradient is invisible on a light background). */
-[data-md-color-scheme="slate"] .reeflex-hero h1 {
-  background-image: linear-gradient(180deg, #ffffff, #b9c4e0);
-}
-[data-md-color-scheme="default"] .reeflex-hero h1 {
-  background-image: linear-gradient(180deg, #101830, #e07a50);
-}
-.reeflex-hero .lede {
-  max-width: 42rem;
-  margin: 0 auto 1.4rem;
+/* The hero description is an unclassed <p> right after the H1 — target it
+   directly (the old `.lede` class was never in the markup) so the hierarchy
+   reads bold headline -> muted lede -> body. */
+.reeflex-hero .lede,
+.reeflex-hero > h1 + p {
+  max-width: 40rem;
+  margin: 0 auto 1.5rem;
   color: var(--md-default-fg-color--light);
-  font-size: 1.05rem;
+  font-size: 1.06rem;
+  line-height: 1.6;
 }
+.reeflex-hero .cta { margin-top: 0.4rem; }
 .reeflex-hero .cta .md-button {
-  margin: 0.25rem 0.35rem;
+  margin: 0.3rem 0.3rem;
+  border-radius: var(--rf-radius-sm);
+  font-weight: 600;
 }
 .reeflex-hero .cta .md-button--primary {
-  background: var(--reeflex-ember);
-  border-color: var(--reeflex-ember);
-  color: #1a0f0a;
+  background: var(--rf-ember);
+  border-color: var(--rf-ember);
+  color: #241009;                    /* dark ink on ember — ~6.3:1 */
 }
 .reeflex-hero .cta .md-button--primary:hover {
-  background: var(--reeflex-ember-2);
-  border-color: var(--reeflex-ember-2);
+  background: var(--rf-ember-2);
+  border-color: var(--rf-ember-2);
+  color: #241009;
 }
-
-/* ---------- Decision color chips (allow / hold / deny) ---------- */
-.rf-verdict { font-weight: 700; }
-.rf-allow { color: var(--reeflex-allow); }
-.rf-hold  { color: var(--reeflex-hold); }
-.rf-deny  { color: var(--reeflex-deny); }
-
-/* ---------- Mermaid: center + breathe ---------- */
-.md-typeset .mermaid { text-align: center; margin: 1.4rem 0; }
-
-/* ---------- Tables: quieter borders ---------- */
-[data-md-color-scheme="slate"] .md-typeset table:not([class]) {
-  border: 1px solid rgba(233, 238, 249, 0.08);
-  border-radius: 10px;
+.reeflex-hero .cta .md-button:not(.md-button--primary) {
+  border-color: var(--rf-border-strong);
+  color: var(--md-default-fg-color);
 }
-
-/* ================= Interior polish (C4) ================= */
-
-/* Ember section accent: a short bar under every H2, so content pages carry the
-   brand the way the home does, not just in link color. */
-.md-typeset h2 {
-  padding-top: 0.6rem;
+.reeflex-hero .cta .md-button:not(.md-button--primary):hover {
+  border-color: var(--rf-ember);
+  color: var(--rf-ember-link);
 }
-.md-typeset h2::after {
-  content: "";
-  display: block;
-  width: 2.4rem;
-  height: 2px;
-  margin-top: 0.5rem;
-  background: var(--reeflex-ember);
-  border-radius: 2px;
-  opacity: 0.85;
+[data-md-color-scheme="slate"] .reeflex-hero .cta .md-button:not(.md-button--primary):hover {
+  color: var(--rf-ember-2);
 }
-
-/* Code block title bar (```lang title="...") — give it the panel look. */
-.md-typeset .highlight span.filename {
-  border-bottom: 1px solid rgba(233, 238, 249, 0.08);
-  font: 500 0.72rem/1.6 "JetBrains Mono", monospace;
-  color: var(--md-default-fg-color--light);
-  background: rgba(16, 24, 48, 0.6);
-}
-
-/* Admonition titles: a touch more weight, consistent across page types. */
-.md-typeset .admonition-title,
-.md-typeset summary {
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-
-/* Section index "overview" card grids inherit the home card styling above;
-   this just tightens their vertical rhythm. */
-.md-typeset .grid.cards {
-  margin-top: 1rem;
-}
-
-/* ---------- Branded 404 ---------- */
-.reeflex-404 {
-  min-height: 52vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  text-align: center;
-  gap: 0.4rem;
-  padding: 2rem 1rem;
-}
-.reeflex-404 img { margin-bottom: 0.8rem; }
-.reeflex-404 .lede {
-  max-width: 34rem;
-  color: var(--md-default-fg-color--light);
-}
-
-/* Home hero "try it" tease under the CTA buttons. */
 .reeflex-hero .hero-tease {
-  margin-top: 0.9rem;
-  font-size: 0.9rem;
   color: var(--md-default-fg-color--light);
+  font-size: 0.82rem;
+  margin-top: 0.4rem;
+}
+/* Mobile: step the hero down so the headline doesn't wrap to 5-6 ragged lines. */
+@media screen and (max-width: 480px) {
+  .reeflex-hero { padding: 1.8rem 0 0.6rem; }
+  .reeflex-hero h1 { font-size: 1.85rem; max-width: 16ch; }
+  .reeflex-hero .lede { font-size: 0.98rem; }
+}
+
+/* =====================================================================
+   Branded 404 — light, official mark reads on white
+   ===================================================================== */
+.reeflex-404 { text-align: center; padding: 3.5rem 1rem 4rem; }
+.reeflex-404 img { opacity: 0.95; margin-bottom: 1rem; }
+.reeflex-404 h1 { border: none; margin: 0.4rem 0 0.6rem; }
+.reeflex-404 .lede {
+  color: var(--md-default-fg-color--light);
+  max-width: 30rem;
+  margin: 0 auto 1.6rem;
 }
