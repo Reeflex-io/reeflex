@@ -40,8 +40,9 @@ Do not summarize — paste the actual terminal output.
 
 ## Boundary check
 
-- [ ] No closed-tier content (NIS2/DORA/GDPR reporting code, ANAF/SmartBill
-      integrations, internal commercial-tier endpoints) is included.
+- [ ] No closed-tier content (Attest / Fleet / Cloud — compliance-evidence,
+      multi-site-management, or hosted-operations code, or internal
+      commercial-tier endpoints) is included.
 - [ ] No secrets, credentials, API keys, or real PII are included. All examples
       use synthetic data.
 - [ ] License headers and the root LICENSE file are unchanged (Apache 2.0 —

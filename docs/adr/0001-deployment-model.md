@@ -2,6 +2,13 @@
 
 **Status:** Accepted — 2026-06-29
 
+> **Amended 2026-07-12 (non-substantive):** the closed-tier examples in §2 were
+> refreshed to the current commercial framing — **Attest** (audit-ready control
+> evidence), **Fleet** (multi-site management), **Cloud** (hosted). The
+> deployment decision (engine-as-service, on-prem-first, the absolute open-core
+> boundary) is unchanged; only the illustrative product names were updated. The
+> canonical boundary lives in [docs/open-core.md](../open-core.md).
+
 ---
 
 ## Context
@@ -45,7 +52,7 @@ dependency surface"). The engine's implementation language (currently Python + O
 | Tier | Components | License |
 |---|---|---|
 | Open-source | `reeflex-core`, all adapters, base policy packs, `reeflex-spec` | Apache 2.0 |
-| Commercial / closed | Multi-tenancy, authentication, billing, regulated compliance reporting (NIS2/DORA/GDPR), ANAF/SmartBill integrations | Proprietary — never in a public repo |
+| Commercial / closed | Attest (audit-ready control evidence: NIS2, DORA, EU AI Act, SOC 2), Fleet (multi-site management), Cloud (hosted) | Proprietary — never in a public repo |
 
 The closed tier never appears in any public repository. This is an absolute project limit;
 see [docs/open-core.md](../open-core.md) for the full boundary definition.

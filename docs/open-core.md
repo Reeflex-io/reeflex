@@ -21,22 +21,22 @@ any public repository, in any form — no code, no configuration, no schema, no 
 | Community adapters (`reeflex-postgres`, `reeflex-s3`, etc.) | Open | Apache 2.0 | Community-built against the spec |
 | Base policy packs (Rego rules for the Action Envelope) | Open | Apache 2.0 | Available |
 | Mock adapter + demo | Open | Apache 2.0 | Available |
-| Regulated compliance mapping and reporting (NIS2, DORA, GDPR) | Commercial / closed | Proprietary | Not in any public repo |
-| ANAF / SmartBill integrations (RO fiscal) | Commercial / closed | Proprietary | Not in any public repo |
-| Hosted multi-tenancy, authentication, billing | Commercial / closed | Proprietary | **[ROADMAP — not built, not available]** |
-| Management UI | Commercial / closed | Proprietary | **[ROADMAP — not built, not available]** |
+| **Attest** — audit-ready control evidence (NIS2, DORA, EU AI Act, SOC 2) | Commercial / closed | Proprietary | Not in any public repo |
+| **Fleet** — multi-site management | Commercial / closed | Proprietary | **[ROADMAP — not built, not available]** |
+| **Cloud** — hosted Reeflex (multi-tenancy, auth, billing) | Commercial / closed | Proprietary | **[ROADMAP — not built, not available]** |
 
 ## The line, in one sentence
 
 **Everything that keeps you safe is free. What you pay for is help proving it.**
 
 The gate, the decisions, the adapters, the base policy packs, and the full
-audit trail are open — permanently. The planned commercial tier does not add
-safety; it adds *attestation*: curated mappings from Reeflex decisions to
-specific regulatory obligations (NIS2, DORA, GDPR), auditor-ready reports,
-managed policy-pack updates as regulations change, and a hosted engine for
-teams that don't want to operate one. Evidence is free; packaging that
-evidence in the language a regulator expects is the product.
+audit trail are open — permanently. The commercial tier does not add safety;
+it adds *attestation*: **Attest** maps Reeflex decisions to specific control
+frameworks (NIS2, DORA, EU AI Act, SOC 2) with auditor-ready reports and
+managed policy-pack updates as regulations change; **Fleet** manages policy and
+approvals across many sites; **Cloud** is a hosted engine for teams that don't
+want to operate one. Evidence is free; packaging that evidence in the language
+a regulator expects is the product.
 
 ### For auditors: the open tier is already an evidence source
 
@@ -125,38 +125,32 @@ The closed tier is never published to any public repository. Contributors will n
 here. If you believe you are looking at closed-tier material in a public Reeflex repository,
 that is a bug — report it.
 
-### Regulated compliance mapping and reporting
+### Attest — audit-ready control evidence
 
-Structured mappings between the Reeflex decision vocabulary and the specific obligations
-of NIS2, DORA, and GDPR. Pre-built reporting templates and evidence packages for regulated
-organizations in the EU/RO market. This is the commercial value-add for regulated
-organizations; it is not part of the open-source governance engine.
+Structured mappings between the Reeflex decision vocabulary and the specific obligations of
+NIS2, DORA, the EU AI Act, and SOC 2. Pre-built reporting templates and evidence packages
+for teams that must prove control to an auditor. This is the commercial value-add; it is
+not part of the open-source governance engine.
 
-### ANAF / SmartBill integrations
-
-Integrations with Romanian fiscal authority systems (ANAF) and the SmartBill invoicing
-platform. These are RO-market-specific commercial integrations. They do not belong in the
-open-source layer.
-
-### Hosted multi-tenancy, authentication, and billing
+### Fleet — multi-site management
 
 **[ROADMAP — not built, not available today.]**
 
-When the hosted variant of Reeflex is built (see ADR-0001 §3, Variant B), it will require
-multi-tenancy isolation, authentication, and subscription billing. These components are
-part of the closed commercial tier. The open-source engine and adapters are identical in
-the hosted and on-prem variants; only the operational wrapper is closed.
+A management surface for policy authoring, approval workflow, and audit review **across
+many sites** is planned as part of the commercial tier (**Fleet**). It is not available and
+is not part of the open-source repositories.
+
+### Cloud — hosted Reeflex
+
+**[ROADMAP — not built, not available today.]**
+
+When the hosted variant of Reeflex (**Cloud**) is built (see ADR-0001 §3, Variant B), it
+will require multi-tenancy isolation, authentication, and subscription billing. These
+components are part of the closed commercial tier. The open-source engine and adapters are
+identical in the hosted and on-prem variants; only the operational wrapper is closed.
 
 No hosted engine is operated today. Do not present hosted availability as a current
 capability.
-
-### Management UI
-
-**[ROADMAP — not built, not available today.]**
-
-A web-based management interface for policy authoring, approval workflow, and audit review
-is planned as part of the commercial tier. It is not available and is not part of the
-open-source repositories.
 
 ---
 
@@ -171,7 +165,7 @@ Concretely this means:
 
 - No compliance-mapping code, schema, or configuration in `reeflex-core`, `reeflex-spec`,
   `reeflex-wordpress`, or any open community repository.
-- No ANAF/SmartBill integration code or configuration in any open repository.
+- No Attest, Fleet, or Cloud (compliance-evidence, multi-site-management, or hosted-operations) code or configuration in any open repository.
 - No multi-tenancy, authentication, or billing code in any open repository.
 - No secrets, API keys, or credentials anywhere in any repository (open or closed) — secrets
   are referenced by name via Vault or environment variables only.

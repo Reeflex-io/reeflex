@@ -167,7 +167,7 @@ Multi-tenancy, authentication, and billing are part of the closed commercial tie
 | Tier | Components | License |
 |---|---|---|
 | Open-source (this repo) | `reeflex-core`, all adapters, base policy packs, `reeflex-spec` | Apache 2.0 |
-| Commercial / closed | Multi-tenancy, auth, billing, EU/RO regulated compliance reporting (NIS2/DORA/GDPR), ANAF/SmartBill integrations | Proprietary — never in this repo |
+| Commercial / closed | Attest (audit-ready control evidence: NIS2, DORA, EU AI Act, SOC 2), Fleet (multi-site management), Cloud (hosted) | Proprietary — never in this repo |
 
 ---
 
