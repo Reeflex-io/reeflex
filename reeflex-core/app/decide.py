@@ -167,7 +167,13 @@ def _check_freeze_flip(current: bool) -> None:
 
 
 def _try_fire_freeze_flipped(freeze_on: bool) -> None:
-    """Audit + webhook for a freeze.flipped event. Best-effort; never raises."""
+    """Audit + webhook + SIEM for a freeze.flipped event. Best-effort; never raises.
+
+    The freeze (REEFLEX_FREEZE) IS the operator kill switch, so a flip must
+    surface on ALL THREE observability surfaces — the webhook, the audit log,
+    AND the SIEM (a SOC's primary surface). Emitting on the flip only (a state
+    CHANGE), never per request, so there is no per-decision noise.
+    """
     try:
         from .webhook import fire as wh_fire  # type: ignore[import]
         wh_fire("freeze.flipped", {
@@ -178,6 +184,22 @@ def _try_fire_freeze_flipped(freeze_on: bool) -> None:
     # Audit the flip (best-effort)
     try:
         _audit_freeze_flip(freeze_on)
+    except Exception:  # noqa: BLE001
+        pass
+    # SIEM kill-switch event (best-effort, fire-and-forget — never blocks/raises).
+    try:
+        from .telemetry import get_emitter  # type: ignore[import]
+        if freeze_on:
+            action, reason = "flipped", (
+                "operator engaged the freeze kill-switch (REEFLEX_FREEZE on) — "
+                "all non-read actions now denied"
+            )
+        else:
+            action, reason = "cleared", (
+                "operator cleared the freeze kill-switch (REEFLEX_FREEZE off) — "
+                "normal gating resumed"
+            )
+        get_emitter().emit_kill_switch(action, reason)
     except Exception:  # noqa: BLE001
         pass
 

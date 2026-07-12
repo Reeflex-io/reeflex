@@ -214,9 +214,11 @@ i.e. `<131>`.
 
 MSGID in the syslog header is `lifecycle`. Severity: `5` (notice).
 
-**kill_switch** — designed and wired; arrives with Phase 1. When the
-kill-switch enforcement module ships it will call `emit_kill_switch()`, which
-emits the following shape with severity `2` (critical) and MSGID `kill_switch`:
+**kill_switch** — emitted when the freeze kill-switch (`REEFLEX_FREEZE`) flips.
+On a state change reeflex-core calls `emit_kill_switch()` (freeze engaged →
+`flipped`, freeze cleared → `cleared`), alongside the `freeze.flipped` audit
+record + webhook. It emits the following shape with severity `2` (critical) and
+MSGID `kill_switch`:
 
 | Field | Type | Meaning |
 |---|---|---|
