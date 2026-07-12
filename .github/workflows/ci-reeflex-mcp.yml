@@ -1,0 +1,52 @@
+# ci-reeflex-mcp.yml — CI for the reeflex-mcp gateway.
+# A SEPARATE workflow (not folded into ci.yml) so the `paths:` filter keeps it
+# from running on PRs that do not touch the gateway — unrelated PRs stay fast,
+# while every PR that changes reeflex-mcp/** gates on its own test suite.
+
+name: CI — reeflex-mcp
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "reeflex-mcp/**"
+      - ".github/workflows/ci-reeflex-mcp.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "reeflex-mcp/**"
+      - ".github/workflows/ci-reeflex-mcp.yml"
+
+concurrency:
+  group: ci-mcp-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  reeflex-mcp-tests:
+    name: reeflex-mcp unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install reeflex-mcp + pytest
+        working-directory: reeflex-mcp
+        # Editable install pulls the runtime deps (mcp, pyyaml); pytest is the runner.
+        # The suite is pure-Python (no OPA/core needed) — the gateway's fail-closed
+        # and normalization paths are exercised against in-process stubs.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+
+      - name: Run reeflex-mcp unit tests
+        working-directory: reeflex-mcp
+        run: python -m pytest tests/ -q

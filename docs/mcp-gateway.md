@@ -328,9 +328,12 @@ Everything below is UX around that limit, not a way around it.
   project's `.mcp.json`, `.claude/settings.json`), derives a
   `reeflex-mcp.yaml` upstream from each, **backs up the client config**
   (`<path>.reeflex-mcp-backup`, never overwritten by a later run), and
-  **rewrites it to a single `reeflex-mcp` entry**. Idempotent. Never copies
-  an inline secret out of a client config — it warns and tells you to set
-  `auth: { token_env: ... }` yourself.
+  **rewrites it to a single `reeflex-mcp` entry**. Idempotent. A remote
+  (streamable-HTTP) upstream's `auth` token is kept **by-reference** — `setup`
+  never inlines it; it warns and tells you to set `auth: { token_env: ... }`
+  yourself. A stdio upstream's `env` block is copied **verbatim** (the child
+  process needs those variables to launch), and `setup` warns you to review it
+  for any inline secret and prefer an env-var reference where possible.
 - **`reeflex-mcp restore`** — undoes `setup`/`import`'s rewrite from the
   backup it made.
 - **`reeflex-mcp add <name>`** — registers a new upstream and, in
