@@ -346,7 +346,11 @@ jobs:
       - name: Upgrade npm (OIDC Trusted Publishing requires npm >= 11.5.1)
         # Node 20 ships npm 10.x, which cannot do OIDC trusted publishing. npm 11.5.1+
         # performs the OIDC token exchange at `npm publish` time.
-        run: npm install -g npm@latest
+        # PINNED to ^11 on purpose — do NOT bump to @latest: npm@12 dropped Node 20
+        # (EBADENGINE, requires node >=22) and broke this job on the v0.1.11 run. 11.x
+        # supports Node 20 AND OIDC + --provenance. Revisit only when the runner's
+        # node-version is raised to >=22.
+        run: npm install -g "npm@^11"
 
       - name: Build the node
         working-directory: n8n-nodes-reeflex
