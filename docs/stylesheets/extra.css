@@ -133,8 +133,16 @@
 /* =====================================================================
    Typography — Sora headings, Inter body, JetBrains Mono code
    ===================================================================== */
+/* Documentation keeps a fixed ~16px body. Material scales its root UP on wide
+   monitors (125% -> 137.5% at 100em -> 150% at 125em), which pushed body to
+   17.6px / hero to 63.8px on a >=1600px screen — that reads landing-page, not
+   reference. Pin the root to 125% (20px) at those breakpoints so the scale
+   stays put. */
+@media screen and (min-width: 100em) { html { font-size: 125%; } }
+@media screen and (min-width: 125em) { html { font-size: 125%; } }
+
 .md-typeset {
-  font-size: 0.8rem;      /* = 16px at Material's 125% root */
+  font-size: 0.8rem;      /* = 16px at the pinned 125% root */
   line-height: 1.68;
 }
 .md-typeset h1,
@@ -150,17 +158,17 @@
 .md-typeset h1 {
   font-weight: 800;
   letter-spacing: -0.028em;
-  font-size: 2rem;
+  font-size: 1.9rem;      /* 38px — content H1, within the 32-40px doc range */
   line-height: 1.15;
   margin-bottom: 0.7em;
 }
 .md-typeset h2 {
-  font-size: 1.4rem;
+  font-size: 1.3rem;      /* 26px — within the 24-28px doc range */
   margin-top: 2.4em;
   padding-top: 0.2em;
   letter-spacing: -0.02em;
 }
-.md-typeset h3 { font-size: 1.08rem; margin-top: 1.8em; }
+.md-typeset h3 { font-size: 1.05rem; margin-top: 1.8em; }  /* 21px */
 .md-typeset h2 + h3 { margin-top: 1em; }
 
 /* Reading measure: three-column anatomy. The grid bounds the whole row; the
@@ -169,18 +177,16 @@
    and stay full-width. (:has + :not([hidden]) so a hidden secondary sidebar on
    home does not trigger the cap.) */
 .md-grid { max-width: 72rem; }
-/* Cap the measure on interior (TOC) pages only — home has a hidden secondary
-   sidebar, so it stays full-width. We MATCH Material's own selector structure
-   and specificity (0,5,0) inside the same breakpoint so our centering margins
-   actually win: at >=76.25em Material pins the column with fixed 1.2rem
-   left/right margins ([dir] .md-sidebar--*:not([hidden]) ~ .md-content >
-   .md-content__inner) that outrank a plain margin-inline:auto. extra.css loads
-   after the theme CSS, so equal specificity + later source = ours wins. */
-.md-sidebar--secondary:not([hidden]) ~ .md-content > .md-content__inner {
-  max-width: 37rem;         /* ~740px at Material's 20px rem */
-  margin-inline: auto;      /* effective below the sidebar breakpoint */
-}
+/* Reading measure — ONLY on desktop (>=76.25em), where the 3-column layout
+   shows. Cap the content column to ~740px and centre it. This MUST stay inside
+   the media query: below the breakpoint the content fills the viewport, so a
+   margin-inline:auto would collapse to 0 and push text to the screen edge on
+   mobile. The [dir] variants match Material's own (0,5,0) selector so our
+   centering wins over its fixed 1.2rem margins (extra.css loads later). */
 @media screen and (min-width: 76.25em) {
+  .md-sidebar--secondary:not([hidden]) ~ .md-content > .md-content__inner {
+    max-width: 37rem;       /* ~740px at the pinned 20px rem */
+  }
   [dir="ltr"] .md-sidebar--secondary:not([hidden]) ~ .md-content > .md-content__inner,
   [dir="rtl"] .md-sidebar--secondary:not([hidden]) ~ .md-content > .md-content__inner {
     margin-inline: auto;    /* (0,5,0): beats Material's fixed 1.2rem margins */
@@ -418,8 +424,8 @@
 }
 [data-md-color-scheme="slate"] .reeflex-hero .tag { color: var(--rf-ember-2); }
 .reeflex-hero h1 {
-  font-size: 2.9rem;
-  line-height: 1.06;
+  font-size: 2.5rem;      /* 50px — home hero may run larger than content H1, capped ~52 */
+  line-height: 1.07;
   margin: 0.2rem auto 0.55rem;
   max-width: 20ch;
   color: var(--rf-hero-h1);
@@ -473,8 +479,34 @@
 /* Mobile: step the hero down so the headline doesn't wrap to 5-6 ragged lines. */
 @media screen and (max-width: 480px) {
   .reeflex-hero { padding: 1.8rem 0 0.6rem; }
-  .reeflex-hero h1 { font-size: 1.85rem; max-width: 16ch; }
+  .reeflex-hero h1 { font-size: 1.7rem; max-width: 15ch; }
   .reeflex-hero .lede { font-size: 0.98rem; }
+  .reeflex-hero .cta .md-button { display: block; margin: 0.4rem auto; max-width: 16rem; }
+}
+
+/* =====================================================================
+   Mobile hardening (F4) — zero horizontal overflow, comfortable spacing,
+   >=44px tap targets. Verified at 390px + 360px, both palettes.
+   ===================================================================== */
+/* Long unbroken strings (URLs, hashes, IDs) in prose wrap instead of pushing
+   the page wider than the viewport. */
+.md-typeset { overflow-wrap: break-word; }
+.md-typeset a { word-break: break-word; }
+
+@media screen and (max-width: 76.1875em) {
+  /* Mobile/tablet (below the sidebar breakpoint): comfortable side padding so
+     text, cards, and admonitions never touch the screen edge (>=16px). */
+  .md-main .md-content__inner { margin-left: 0.9rem; margin-right: 0.9rem; }
+  /* Code and tables scroll WITHIN their own box, never the page. */
+  .md-typeset pre,
+  .md-typeset .highlight { max-width: 100%; }
+  .md-typeset pre > code { overflow-x: auto; }
+  .md-typeset .md-typeset__scrollwrap { overflow-x: auto; }
+}
+
+@media screen and (max-width: 44.9375em) {
+  /* Phones: header controls are comfortable >=44px tap targets. */
+  .md-header__button { padding: 0.55rem; }
 }
 
 /* =====================================================================
