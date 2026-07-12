@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+<!-- Branded 404: official mark + one line + link home. Absolute paths so it
+     resolves regardless of the (missing) URL depth it is served at. -->
+{% block content %}
+<div class="reeflex-404" markdown>
+  <img src="/assets/favicon.svg" alt="Reeflex" width="72" height="72" />
+  <h1>404 &mdash; not in the decision path</h1>
+  <p class="lede">That page doesn't exist (or it moved). Reeflex fails closed &mdash; this link just did too.</p>
+  <p><a href="/" class="md-button md-button--primary">Back to the docs home</a></p>
+</div>
+{% endblock %}

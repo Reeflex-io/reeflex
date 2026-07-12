@@ -12,6 +12,44 @@ Reeflex governs an agent's actions through an **adapter** that intercepts each
 action, normalizes it into an Action Envelope, asks `reeflex-core` for a
 verdict, and enforces it. Pick the adapter that matches where your agent runs.
 
+## Try a real decision in 30 seconds
+
+No install, no signup. Send one action to the public evaluation endpoint and
+watch Reeflex **hold** a dangerous bulk delete instead of running it:
+
+```bash title="Ask Reeflex to approve deleting 200 products in production"
+curl -s https://api-dev.reeflex.io/v1/decide \
+  -H "Authorization: Bearer reeflex-eval-public-2026" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent":     { "id": "agent:demo", "session_id": "try-it-30s" },
+    "action":    { "namespace": "store", "verb": "delete", "ability": "store/bulk-delete-products" },
+    "target":    { "environment": "production" },
+    "magnitude": { "count": 200 },
+    "axes":      { "reversibility": "irreversible", "blast_radius": "broad", "externality": "internal" },
+    "approval":  { "present": false }
+  }'
+```
+
+Reeflex returns `require_approval` — the delete is held for a human, not run:
+
+```json
+{
+  "decision": "require_approval",
+  "reason": "irreversible broad change in production requires human approval",
+  "rule": "reeflex.policy/irreversible_broad_prod",
+  "hold_id": "1bdbbcd1...",
+  "expires_ts": "2026-07-11T18:24:35Z"
+}
+```
+
+!!! note "About the eval endpoint"
+    `api-dev.reeflex.io` is a shared, rate-limited evaluation endpoint with a
+    publicly-trusted certificate (keep `verify_ssl` **on** — no `-k` needed).
+    The token above is a public eval token: dev/eval only, not for production.
+    Change `target.environment` to `dev` or `staging` and the same action is
+    allowed — R2/R3 only arm in `production`.
+
 !!! tip "Observe first, enforce later"
     Every adapter supports **observe mode**: it records the verdict it *would*
     have applied and lets the action proceed, so you can calibrate policy
@@ -75,15 +113,9 @@ verdict, and enforces it. Pick the adapter that matches where your agent runs.
 
     Full guide: [docs/mcp-gateway.md](../mcp-gateway.md).
 
-## Try it in 30 seconds (no install)
-
-Point any adapter — or a single `curl` — at the public evaluation endpoint
-`https://api-dev.reeflex.io` (publicly-trusted certificate; a shared,
-rate-limited dev endpoint, not for production). The full request/response
-examples live in the **Reference → REST API** section as it lands, each tested
-live before it ships.
-
 ---
 
-*More detailed getting-started pages (per-adapter walkthroughs, the eval-token
-curl, and the observe → enforce playbook) are being added under this section.*
+*More detailed getting-started pages (per-adapter walkthroughs and the
+observe → enforce playbook) are being added under this section. The full REST
+API reference — every request/response tested live — lands in
+[Reference](../reference/index.md).*
