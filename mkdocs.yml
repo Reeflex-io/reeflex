@@ -16,36 +16,39 @@ theme:
   name: material
   custom_dir: overrides
   language: en
-  # No header logo image: the official brand mark (favicon.svg) is a dark-navy
-  # badge that blends into the navy header (verified ~1.04:1 contrast in dark
-  # mode). Per the copy-not-recreate rule we do NOT alter the asset; the header
-  # uses the "Reeflex Docs" text wordmark instead (legible in both palettes,
-  # matching reeflex.io). The official favicon still serves the browser tab.
+  # Header mark = the OFFICIAL brand badge (favicon.svg), not Material's stock
+  # library glyph (that default was the top "recolored Material" tell). The
+  # badge is a self-contained dark tile + steel chevrons + ember orb: crisp on
+  # the white default header; on the dark toggle the tile blends into the navy,
+  # so extra.css adds a hairline ring in slate to keep it reading. Same approved
+  # asset also serves the browser tab.
+  logo: assets/favicon.svg
   favicon: assets/favicon.svg
   icon:
     repo: fontawesome/brands/github
   palette:
-    # Dark is the default; toggle to light available.
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
+    # LIGHT is the deterministic default (docs are read for hours — Stripe /
+    # Pydantic / FastAPI convention). Dark stays one click away via the toggle.
+    # No prefers-color-scheme media here on purpose: a dark-OS visitor still
+    # lands on the readable light docs, then opts into dark if they want it.
+    - scheme: default
       primary: custom
       accent: custom
       toggle:
         icon: material/weather-night
-        name: Switch to light
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
+        name: Switch to dark
+    - scheme: slate
       primary: custom
       accent: custom
       toggle:
         icon: material/weather-sunny
-        name: Switch to dark
+        name: Switch to light
   font:
     text: Inter
     code: JetBrains Mono
   features:
-    - navigation.tabs
-    - navigation.tabs.sticky
+    # Classic docs anatomy: a persistent LEFT sidebar tree (NO top tabs), the
+    # 7 groups as its top level, "On this page" TOC on the right.
     - navigation.sections
     - navigation.instant
     - navigation.instant.progress
@@ -64,6 +67,14 @@ theme:
 
 extra_css:
   - stylesheets/extra.css
+
+# Self-hosted Mermaid. Vendoring the library so window.mermaid is defined
+# BEFORE Material's built-in handler runs defeats the CDN lazy-fetch race that
+# rendered diagrams blank on most loads (measured). Material's own handler then
+# does the render + live theming; no custom init is needed or wanted (a second
+# run() only races Material's and throws UnknownDiagramError on every load).
+extra_javascript:
+  - javascripts/mermaid.min.js
 
 markdown_extensions:
   - abbr
@@ -128,10 +139,10 @@ extra:
       name: reeflex.io
   generator: false
 
-# 7 top-level tabs (no crowding/wrap at 1280-1366px). Policy is nested under
+# 7 top-level sidebar groups (the left-tree top level). Policy is nested under
 # Concepts (customizing the five rules is an extension of understanding them);
 # Compliance is nested under Operations (it is a run-time evidence concern).
-# FAQ + Roadmap will live in the footer + Home, not as tabs, when they land.
+# FAQ + Roadmap will live in the footer + Home, not in the tree, when they land.
 nav:
   - Home: index.md
   - Getting started:
@@ -145,6 +156,7 @@ nav:
           - Adapt the policy: policy-guide.md
   - Architecture:
       - architecture.md
+      - Diagrams: architecture/diagrams.md
   - Adapters:
       - adapters/index.md
       - n8n (zero-code): guides/n8n.md

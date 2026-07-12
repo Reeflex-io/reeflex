@@ -64,7 +64,7 @@ Reeflex returns `require_approval` — the delete is held for a human, not run:
     the official PreToolUse hook — a real `rm -rf /` is held or denied before it
     runs.
 
-    ```bash
+    ```bash title="Claude Code — install & wire the hook"
     # Requires Python 3.8+ (upgrade pip on an old box:
     #   python3 -m pip install --upgrade pip)
     pip install reeflex-claude
@@ -79,7 +79,7 @@ Reeflex returns `require_approval` — the delete is held for a human, not run:
     Drop the **Reeflex Gate** node before a risky step; route the workflow on
     the returned verdict (allow / hold / deny).
 
-    ```bash
+    ```bash title="n8n — install the node"
     npm i n8n-nodes-reeflex   # requires Node.js >= 20.15
     ```
 
@@ -104,7 +104,7 @@ Reeflex returns `require_approval` — the delete is held for a human, not run:
     filesystem, GitHub, Postgres, or your own — with no client rewrite.
     `observe` mode by default; `setup` migrates a client's MCP config for you.
 
-    ```bash
+    ```bash title="MCP gateway — run from source"
     # Not yet published to PyPI — install from source (repo root):
     cd reeflex-mcp && pip install -e .
     cp reeflex-mcp.yaml.example reeflex-mcp.yaml   # edit: point upstreams: at a real MCP server
