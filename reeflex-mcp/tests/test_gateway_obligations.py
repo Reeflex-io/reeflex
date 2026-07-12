@@ -245,6 +245,72 @@ class TestObserveObligations(_ObligationsTestBase):
         self.assertFalse(result.isError)
         self.assertEqual(self.fake_conn.dispatched, [("read_file", {"path": "x"})])
 
+    async def test_observe_tags_decision_id_in_meta_and_logs_verdict(self) -> None:
+        # GAP-1 fix (0.1.1): observe forwards AND tags decision_id in _meta +
+        # logs the observed verdict, at parity with enforce's allow path.
+        self._stub_decide(
+            {"decision": "allow", "decision_id": "dec-obs-1", "rule": "reeflex.policy/default_allow"}
+        )
+        import io
+        import sys
+
+        captured = io.StringIO()
+        old_stderr = sys.stderr
+        sys.stderr = captured
+        try:
+            result = await self.gateway._handle_call_tool("fs__read_file", {"path": "x"})
+        finally:
+            sys.stderr = old_stderr
+
+        self.assertFalse(result.isError)  # observe NEVER blocks
+        self.assertEqual(self.fake_conn.dispatched, [("read_file", {"path": "x"})])  # still forwarded
+        self.assertEqual(result.meta.get("decision_id"), "dec-obs-1")
+        log_output = captured.getvalue()
+        self.assertIn("observe", log_output)
+        self.assertIn("would-allow", log_output)
+        self.assertIn("dec-obs-1", log_output)
+
+    async def test_observe_tags_parent_decision_id_when_present(self) -> None:
+        self._stub_decide(
+            {
+                "decision": "deny",
+                "decision_id": "dec-obs-2",
+                "parent_decision_id": "dec-obs-0",
+                "rule": "reeflex.core/hold_validation",
+                "reason": "reeflex_hold_not_approved",
+            }
+        )
+        result = await self.gateway._handle_call_tool("fs__read_file", {"path": "x"})
+        self.assertFalse(result.isError)  # observe never blocks, even on a deny verdict
+        self.assertEqual(self.fake_conn.dispatched, [("read_file", {"path": "x"})])
+        self.assertEqual(result.meta.get("decision_id"), "dec-obs-2")
+        self.assertEqual(result.meta.get("parent_decision_id"), "dec-obs-0")
+
+    async def test_observe_no_decision_id_key_omitted_from_meta_no_duplicate_warn(self) -> None:
+        # decision is None (core unreachable) -- _apply_mode_observe() already
+        # logs the fail-open WARN; the GAP-1 verdict log line must NOT also
+        # fire (no decision to report), and no decision_id key should be tagged.
+        async def fake_decide(envelope):
+            return None, "core unreachable: connection refused"
+
+        self.gateway._decide = fake_decide
+        import io
+        import sys
+
+        captured = io.StringIO()
+        old_stderr = sys.stderr
+        sys.stderr = captured
+        try:
+            result = await self.gateway._handle_call_tool("fs__read_file", {"path": "x"})
+        finally:
+            sys.stderr = old_stderr
+
+        self.assertFalse(result.isError)
+        self.assertNotIn("decision_id", result.meta or {})
+        log_output = captured.getvalue()
+        self.assertIn("WARN", log_output)  # the existing fail-open warning
+        self.assertNotIn("would-", log_output)  # no duplicate verdict line
+
 
 if __name__ == "__main__":
     unittest.main()
