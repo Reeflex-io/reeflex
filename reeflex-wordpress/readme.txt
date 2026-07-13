@@ -81,9 +81,9 @@ have stopped, before you turn it on.*
 **Open-core & licensing**
 
 This plugin is free and open source, licensed GPLv2-or-later. `reeflex-core` and
-the specification are Apache-2.0. The planned commercial compliance tier
-(NIS2/DORA/GDPR reporting) is a separate, closed package and is never bundled
-here.
+the specification are Apache-2.0. The commercial tier (audit-ready compliance
+evidence and managed operation) is a separate, closed package and is never
+bundled here.
 
 == External services ==
 
