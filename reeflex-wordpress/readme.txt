@@ -81,9 +81,9 @@ have stopped, before you turn it on.*
 **Open-core & licensing**
 
 This plugin is free and open source, licensed GPLv2-or-later. `reeflex-core` and
-the specification are Apache-2.0. The planned commercial compliance tier
-(NIS2/DORA/GDPR reporting) is a separate, closed package and is never bundled
-here.
+the specification are Apache-2.0. The commercial tier (audit-ready compliance
+evidence and managed operation) is a separate, closed package and is never
+bundled here.
 
 == External services ==
 
@@ -205,7 +205,8 @@ immediately — no other changes needed.
 == Screenshots ==
 
 1. Settings > Reeflex Gate — configure the decision engine URL, optional token,
-   and TLS verification. Constants set in wp-config.php show as locked.
+   TLS verification, and the enforcement mode (observe / enforce). Constants set
+   in wp-config.php show as locked.
 2. Verdicts enforced live: a read and a single delete are allowed, bulk and
    force-deletes are held for a human, and a site-wide wipe is denied.
 
