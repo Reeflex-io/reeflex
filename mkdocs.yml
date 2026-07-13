@@ -6,7 +6,9 @@ site_description: >-
   deny on any backend action before it runs, with zero LLM in the decision path.
 site_url: https://docs.reeflex.io/
 site_author: Reeflex
-copyright: Apache-2.0 licensed. Reeflex is a deterministic gate, not another AI.
+copyright: >-
+  Apache-2.0 licensed. A deterministic gate, not another AI. &middot;
+  <a href="https://reeflex.io/">reeflex.io &rarr;</a>
 
 repo_url: https://github.com/Reeflex-io/reeflex
 repo_name: Reeflex-io/reeflex
@@ -129,7 +131,10 @@ plugins:
       enabled: !ENV [CI, false]
 
 extra:
-  homepage: https://reeflex.io/
+  # NO `homepage:` — it would repoint the header/drawer/footer logo at the
+  # marketing site (reeflex.io). The logo must go to the DOCS home (site_url).
+  # The marketing cross-link stays explicit + labeled in the footer (copyright
+  # line below + the globe social icon).
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/Reeflex-io/reeflex

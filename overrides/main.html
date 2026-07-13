@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{#
+  Reeflex docs template override. Currently only injects the one-time palette
+  migration (F3). Keep this file minimal so Material's base template drives
+  everything else.
+#}
+{% block extrahead %}
+  {{ super() }}
+  <script>
+    /* F3 — one-time palette migration. docs.reeflex.io moved from a dark-default
+       era to LIGHT-default. Clear any palette preference persisted during that
+       era (Material stores it under path-scoped "…__palette" keys) so returning
+       visitors land on the new light default. Runs in <head>, before Material's
+       bundle applies a stored scheme. Choices made after this run persist
+       normally; the version flag ensures it never runs twice. */
+    (function () {
+      try {
+        if (!localStorage.getItem("__rf_palette_migrated_v2")) {
+          for (var i = localStorage.length - 1; i >= 0; i--) {
+            var k = localStorage.key(i);
+            if (k && k.indexOf("__palette") !== -1) localStorage.removeItem(k);
+          }
+          localStorage.setItem("__rf_palette_migrated_v2", "1");
+        }
+      } catch (e) {}
+    })();
+  </script>
+{% endblock %}
