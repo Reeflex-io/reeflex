@@ -92,3 +92,9 @@ it **fails closed**: nothing goes through.
     compliance, and the REST API. Everything here is organized from the honest
     content already in the repository — including [what the base policy does
     **not** catch](concepts/index.md).
+
+---
+
+*New here? Start with **[Getting started](getting-started/index.md)**. Common
+questions are in the [FAQ](faq.md); what's shipped vs planned is on the
+[Roadmap](roadmap.md).*

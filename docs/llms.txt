@@ -1,0 +1,24 @@
+# Reeflex Docs
+
+> Reeflex is a deterministic gate that decides allow / hold / deny on an AI agent's action before it runs — on any backend, with zero LLM in the decision path. Same action in, same decision out, every time.
+
+Documentation for the open-source `reeflex-core` engine and its reference adapters. The engine evaluates a universal Action Envelope with OPA/Rego and returns allow, deny, or require_approval (a hold). Open tier is Apache 2.0.
+
+## Docs
+- [Getting started](https://docs.reeflex.io/getting-started/): install an adapter, try a real decision in 30 seconds, and the observe → enforce playbook
+- [Concepts](https://docs.reeflex.io/concepts/): the Action Envelope, the five rules (R1–R5), allow/hold/deny, the fail-closed invariant, sessions, HIL/HOTL/AIL
+- [Architecture](https://docs.reeflex.io/architecture/): the seams, guarantees, and the decision round-trip diagrams
+- [Adapters](https://docs.reeflex.io/adapters/): Claude Code, WordPress, n8n, and the MCP gateway
+- [Reference — REST API](https://docs.reeflex.io/reference/rest-api/): POST /v1/decide, the holds API, auth, and errors
+- [Reference — Action Envelope](https://docs.reeflex.io/reference/action-envelope/): verb + three risk axes + magnitude + session + approval
+- [Reference — Configuration](https://docs.reeflex.io/reference/configuration/): every environment variable
+
+## Policy & operations
+- [Open core](https://docs.reeflex.io/open-core/): what is open (Apache 2.0) versus the commercial tier
+- [Operations](https://docs.reeflex.io/operations/) and [SIEM export](https://docs.reeflex.io/siem/)
+- [FAQ](https://docs.reeflex.io/faq/)
+- [Roadmap](https://docs.reeflex.io/roadmap/)
+
+## Source
+- [GitHub repository](https://github.com/Reeflex-io/reeflex)
+- [SPEC — Action Envelope + Adapter Contract](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-spec/SPEC.md)

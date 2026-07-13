@@ -8,6 +8,7 @@ site_url: https://docs.reeflex.io/
 site_author: Reeflex
 copyright: >-
   Apache-2.0 licensed. A deterministic gate, not another AI. &middot;
+  <a href="/faq/">FAQ</a> &middot; <a href="/roadmap/">Roadmap</a> &middot;
   <a href="https://reeflex.io/">reeflex.io &rarr;</a>
 
 repo_url: https://github.com/Reeflex-io/reeflex
@@ -148,6 +149,13 @@ extra:
 # Concepts (customizing the five rules is an extension of understanding them);
 # Compliance is nested under Operations (it is a run-time evidence concern).
 # FAQ + Roadmap will live in the footer + Home, not in the tree, when they land.
+# FAQ + Roadmap live in the footer + Home, not in the sidebar tree (they are
+# orientation pages, not part of the reading spine). not_in_nav keeps them out
+# of the tree while --strict stays happy that they are intentionally excluded.
+not_in_nav: |
+  /faq.md
+  /roadmap.md
+
 nav:
   - Home: index.md
   - Getting started:
