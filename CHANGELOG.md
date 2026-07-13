@@ -5,7 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-07-13
+
+Core: the freeze kill-switch now surfaces on the SIEM (#45). Gateway: `reeflex-mcp` 0.1.1 observe-mode traceability parity (GAP-1, #46). No decision verdict or decision-logic change; additive only.
+
 ### Fixed
+- **SIEM `kill_switch` event now emitted on a freeze (`REEFLEX_FREEZE`) flip.** `emit_kill_switch()` was fully implemented but had no production call site — `docs/siem.md` advertised a `kill_switch` event that never fired (a facade). `decide._try_fire_freeze_flipped()` now emits it on a freeze state CHANGE (engage → `flipped`, clear → `cleared`), alongside the existing `freeze.flipped` audit record + webhook, so the SIEM (a SOC's primary surface) is no longer the one surface blind to the operator kill-switch. Fire-and-forget, best-effort, only on a state change (no per-request noise); no decision verdict or decision-logic change.
 - **`reeflex-mcp` 0.1.1 — observe mode now tags `decision_id` (GAP-1).** In `observe` mode, `_handle_call_tool()` called `_decide()` for the audit trail but forwarded the result without tagging its `_meta` with core's `decision_id`/`parent_decision_id` and without logging the verdict — unlike `enforce`'s allow path, which does both. The forwarded result's `_meta` now carries `decision_id` (+ `parent_decision_id` when core returns one), at parity with enforce, and a stderr line logs the observed verdict/`decision_id`/`rule` (`would-<verdict> ... -- forwarding (observe never blocks)`) so an operator can correlate an observed call to core's audit/SIEM record. Additive/observability-only: observe still always forwards and fails open regardless of verdict — no change to verdict handling in either mode.
 
 ## [0.1.11] - 2026-07-11
