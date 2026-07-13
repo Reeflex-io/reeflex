@@ -217,9 +217,14 @@
 /* =====================================================================
    Links
    ===================================================================== */
-.md-typeset a {
+/* In-content links carry a persistent (subtle) underline so they are
+   distinguishable by more than colour — a11y (Lighthouse link-in-text-block).
+   Buttons keep their own styling. */
+.md-typeset a:not(.md-button) {
   color: var(--md-typeset-a-color);
-  text-decoration-color: color-mix(in srgb, var(--md-typeset-a-color) 32%, transparent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--md-typeset-a-color) 45%, transparent);
+  text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
 .md-typeset a:hover {
