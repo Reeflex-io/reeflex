@@ -7,8 +7,10 @@
 # Fan-out (from a single tagged commit):
 #   - GitHub Release  <- all built artifacts + SHA256SUMS attached
 #   - PyPI            <- reeflex-claude + reeflex-holds + reeflex-mcp (OIDC Trusted Publishing)
-#   - npm             <- n8n-nodes-reeflex (with provenance)
 #   - GHCR            <- ghcr.io/reeflex-io/reeflex-core  (ONLY if core changed)
+#
+# n8n-nodes-reeflex now lives in its own dedicated repo (Reeflex-io/n8n-nodes-reeflex)
+# with its own OIDC publish workflow — it is NOT built or published from here anymore.
 #
 # The GHCR image is rebuilt ONLY when reeflex-core/ or the Dockerfile actually
 # changed since the previous tag (v0.1.6 shipped with core unchanged, so it stayed
@@ -20,7 +22,6 @@
 # Registry-side setup a human must do ONCE — see docs/RELEASING.md:
 #   - PyPI Trusted Publisher for reeflex-claude, reeflex-holds AND reeflex-mcp
 #     (repo Reeflex-io/reeflex, workflow release.yml).
-#   - npm: OIDC trusted publishing OR an NPM_TOKEN repo secret (bootstrap/fallback).
 
 name: Release
 
@@ -64,7 +65,6 @@ jobs:
       claude_version: ${{ steps.ver.outputs.claude_version }}
       holds_version: ${{ steps.ver.outputs.holds_version }}
       mcp_version: ${{ steps.ver.outputs.mcp_version }}
-      n8n_version: ${{ steps.ver.outputs.n8n_version }}
       gate_version: ${{ steps.ver.outputs.gate_version }}
     steps:
       - name: Resolve the release tag
@@ -127,14 +127,12 @@ jobs:
           CLAUDE="$(extract_pyproj reeflex-claude/pyproject.toml)"
           HOLDS="$(extract_pyproj reeflex-holds/pyproject.toml)"
           MCP="$(extract_pyproj reeflex-mcp/pyproject.toml)"
-          N8N="$(grep -m1 -E '"version"[[:space:]]*:' n8n-nodes-reeflex/package.json | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
           GATE="$(grep -m1 -E '^\s*\*\s*Version:' reeflex-wordpress/reeflex-gate.php | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')"
           echo "claude_version=$CLAUDE" >> "$GITHUB_OUTPUT"
           echo "holds_version=$HOLDS"  >> "$GITHUB_OUTPUT"
           echo "mcp_version=$MCP"      >> "$GITHUB_OUTPUT"
-          echo "n8n_version=$N8N"      >> "$GITHUB_OUTPUT"
           echo "gate_version=$GATE"    >> "$GITHUB_OUTPUT"
-          echo "reeflex-claude=$CLAUDE  reeflex-holds=$HOLDS  reeflex-mcp=$MCP  n8n=$N8N  reeflex-gate=$GATE"
+          echo "reeflex-claude=$CLAUDE  reeflex-holds=$HOLDS  reeflex-mcp=$MCP  reeflex-gate=$GATE"
 
   # ---------------------------------------------------------------------------
   # build: produce every artifact ONCE, then hand them to the publish jobs.
@@ -154,11 +152,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
       - name: Install the Python build backend
         run: python -m pip install --upgrade build
 
@@ -176,18 +169,6 @@ jobs:
           cp pypi-dist/reeflex-claude/* dist-artifacts/
           cp pypi-dist/reeflex-holds/*  dist-artifacts/
           cp pypi-dist/reeflex-mcp/*    dist-artifacts/
-
-      - name: Build the n8n community node tarball
-        working-directory: n8n-nodes-reeflex
-        run: |
-          set -euo pipefail
-          # --ignore-scripts: skip native compiles at install. @n8n/node-cli pulls
-          # isolated-vm (via @n8n/expression-runtime) whose node-gyp build fails on the
-          # runner; it is NOT needed to build/pack the node (tsc + eslint only). The
-          # published package keeps zero runtime dependencies.
-          npm ci --ignore-scripts
-          npm run build
-          npm pack --pack-destination ../dist-artifacts
 
       - name: Generate SHA256SUMS over every artifact
         run: |
@@ -320,65 +301,6 @@ jobs:
           # password: ${{ secrets.PYPI_API_TOKEN }}
 
   # ---------------------------------------------------------------------------
-  # npm: publish n8n-nodes-reeflex with provenance. Rebuilt from the tagged
-  # source (the canonical, reliable provenance path). Skips cleanly if the
-  # version is already on npm so re-runs do not hard-fail the workflow.
-  # ---------------------------------------------------------------------------
-  npm:
-    name: npm publish (n8n-nodes-reeflex)
-    runs-on: ubuntu-latest
-    needs: [prepare, build]
-    permissions:
-      id-token: write # required for `npm publish --provenance`
-      contents: read
-    steps:
-      - name: Checkout at the tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.tag }}
-
-      - name: Set up Node.js 20 (npmjs registry)
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Upgrade npm (OIDC Trusted Publishing requires npm >= 11.5.1)
-        # Node 20 ships npm 10.x, which cannot do OIDC trusted publishing. npm 11.5.1+
-        # performs the OIDC token exchange at `npm publish` time.
-        # PINNED to ^11 on purpose — do NOT bump to @latest: npm@12 dropped Node 20
-        # (EBADENGINE, requires node >=22) and broke this job on the v0.1.11 run. 11.x
-        # supports Node 20 AND OIDC + --provenance. Revisit only when the runner's
-        # node-version is raised to >=22.
-        run: npm install -g "npm@^11"
-
-      - name: Build the node
-        working-directory: n8n-nodes-reeflex
-        run: |
-          npm ci --ignore-scripts   # skip isolated-vm native compile (see the build job)
-          npm run build
-
-      - name: Publish to npm (guard against a duplicate version)
-        working-directory: n8n-nodes-reeflex
-        # Auth = npm OIDC Trusted Publishing (configured on npmjs.com for repo
-        # Reeflex-io/reeflex + release.yml). No token: the job's `id-token: write`
-        # does the OIDC exchange, which also signs the `--provenance` attestation.
-        run: |
-          set -euo pipefail
-          VER="${{ needs.prepare.outputs.n8n_version }}"
-          if npm view "n8n-nodes-reeflex@${VER}" version >/dev/null 2>&1; then
-            echo "n8n-nodes-reeflex@${VER} is already published — skipping."
-          else
-            # --ignore-scripts: the package's prepublishOnly hook runs `n8n-node
-            # prerelease`, which intentionally blocks a raw `npm publish` ("Run
-            # `npm run release`…", exit 1). We publish the already-built dist/ in
-            # CI, so skip that guard. Provenance is unaffected (native to npm
-            # publish, not a package script).
-            npm publish --provenance --access public --tag latest --ignore-scripts
-            echo "Published n8n-nodes-reeflex@${VER}."
-          fi
-
-  # ---------------------------------------------------------------------------
   # ghcr: build + push ghcr.io/reeflex-io/reeflex-core, tagged with the release
   # tag AND latest. Runs ONLY when core (or the Dockerfile) changed, or when
   # forced via the push_core dispatch input.
@@ -433,7 +355,7 @@ jobs:
   summary:
     name: Channel checklist
     runs-on: ubuntu-latest
-    needs: [prepare, build, github-release, pypi, npm, ghcr]
+    needs: [prepare, build, github-release, pypi, ghcr]
     if: always()
     steps:
       - name: Write channel checklist
@@ -442,13 +364,11 @@ jobs:
           CLAUDE_V: ${{ needs.prepare.outputs.claude_version }}
           HOLDS_V: ${{ needs.prepare.outputs.holds_version }}
           MCP_V: ${{ needs.prepare.outputs.mcp_version }}
-          N8N_V: ${{ needs.prepare.outputs.n8n_version }}
           GATE_V: ${{ needs.prepare.outputs.gate_version }}
           CORE_CHANGED: ${{ needs.prepare.outputs.core_changed }}
           CORE_REASON: ${{ needs.prepare.outputs.core_reason }}
           R_RELEASE: ${{ needs.github-release.result }}
           R_PYPI: ${{ needs.pypi.result }}
-          R_NPM: ${{ needs.npm.result }}
           R_GHCR: ${{ needs.ghcr.result }}
           REPO: ${{ github.repository }}
         run: |
@@ -474,7 +394,6 @@ jobs:
             echo "| PyPI | reeflex-claude | ${CLAUDE_V} | $(mark "$R_PYPI") | https://pypi.org/project/reeflex-claude/${CLAUDE_V}/ |"
             echo "| PyPI | reeflex-holds | ${HOLDS_V} | $(mark "$R_PYPI") | https://pypi.org/project/reeflex-holds/${HOLDS_V}/ |"
             echo "| PyPI | reeflex-mcp | ${MCP_V} | $(mark "$R_PYPI") | https://pypi.org/project/reeflex-mcp/${MCP_V}/ |"
-            echo "| npm | n8n-nodes-reeflex | ${N8N_V} | $(mark "$R_NPM") | https://www.npmjs.com/package/n8n-nodes-reeflex/v/${N8N_V} |"
             echo "| GHCR | reeflex-core | ${TAG} + latest | ${GHCR_STATUS} | https://github.com/${REPO}/pkgs/container/reeflex-core |"
             echo ""
             echo "GHCR decision: ${CORE_REASON}"
@@ -482,5 +401,5 @@ jobs:
             echo "WordPress adapter (reeflex-gate) version in the attached zips: ${GATE_V}."
             echo ""
             echo "> PyPI status shows the result of the combined publish job (both dists)."
-            echo "> npm skips silently if the version already exists; PyPI uses skip-existing."
+            echo "> n8n-nodes-reeflex is released from its own repo (Reeflex-io/n8n-nodes-reeflex), not from here."
           } >> "$GITHUB_STEP_SUMMARY"
