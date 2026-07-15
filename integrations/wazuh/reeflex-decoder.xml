@@ -16,6 +16,20 @@
   to maintain: JSON_Decoder auto-decodes any additive field, so new keys map to
   data.* with no decoder change (join alerts on data.decision_id).
 
+  v0.1.13 (audit enrichment - Attest evidence, additive, no decoder change):
+  the reeflex-core AUDIT LOG (decisions.jsonl -- NOT this syslog stream, but
+  documented here so operators bridging the audit file into Wazuh via a
+  file-based log collector recognize the same field vocabulary) gained
+  agent_id + action.target_system on every decision record, and a NEW event
+  shape sharing the same JSONL stream: hold_resolution ("event":
+  "hold_resolution", fields hold_id, resolution [approved|rejected|expired],
+  decided_by, decision_id, resolved_ts) -- the AI Act Art.14 human-oversight
+  evidence trail for a hold's approve/reject/expiry. If a hold_resolution
+  record is ever forwarded over THIS syslog channel (e.g. a future SIEM-sync
+  emitter), JSON_Decoder auto-decodes it identically -- data.event ==
+  "hold_resolution" distinguishes it from a decision record (which carries
+  no "event" key) with no decoder change required.
+
   Install: copy to /var/ossec/etc/decoders/ on the Wazuh manager, then
   `systemctl restart wazuh-manager`. Test with /var/ossec/bin/wazuh-logtest.
 -->

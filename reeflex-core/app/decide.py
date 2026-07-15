@@ -525,6 +525,12 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
                 decision_id=decision_id, hold_id=hold_id, envelope_hash=envelope_hash,
                 parent_decision_id=parent_decision_id, traceparent=traceparent,
             )
+            # NB: the hold_resolution "approved" event is emitted at the human
+            # DECISION point (holds.resolve_hold(), symmetric with "rejected"),
+            # NOT here at consumption -- so an approved-but-never-consumed hold
+            # is still evidenced (Art.14). This resubmission's decision record
+            # (above) carries hold_id, correlating the executed action back to
+            # that approval. See holds.py + audit.record_hold_resolution().
             _try_emit_decision(
                 envelope=envelope,
                 decision_response=allow_decision,

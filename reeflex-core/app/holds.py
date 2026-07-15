@@ -227,6 +227,49 @@ def _fire_webhook(event: str, payload: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Hold-resolution audit (Art.14 evidence) — imported lazily, same pattern as
+# _fire_webhook, to avoid a module-load-order dependency between holds.py
+# and audit.py.  Fail-open: an audit write failure here must never break the
+# hold state-machine transition that already succeeded (the append+readback
+# into holds.jsonl above is the source of truth for the hold's own state;
+# this is an ADDITIONAL evidence record on the separate decisions.jsonl
+# stream -- see audit.record_hold_resolution() docstring).
+#
+# Emission points in THIS module (ALL at the resolution/decision moment, so
+# every hold resolution is evidenced regardless of any later consumption):
+#   "approved"/"rejected" -- resolve_hold(), immediately after the human's
+#                 approve/reject decision is durably written to the hold store.
+#                 Emitted symmetrically: the audited fact is the HUMAN OVERSIGHT
+#                 DECISION (Art.14), which happens here whether or not an
+#                 approved hold is ever resubmitted/consumed. decision_id="" at
+#                 this point; the eventual resubmission's decision record carries
+#                 this hold_id, correlating the executed action to the approval.
+#   "expired"  -- _append_expired_event(), immediately after the lazy expiry
+#                 transition is durably written (see its docstring: expiry
+#                 is detected on next read/access, not by a background
+#                 sweep, so this event fires the FIRST time a pending hold
+#                 is observed past its expires_ts).
+# ---------------------------------------------------------------------------
+
+def _audit_hold_resolution(
+    hold_id: str,
+    resolution: str,
+    decided_by: str,
+    resolved_ts: str,
+    decision_id: str = "",
+) -> None:
+    """Best-effort hold_resolution audit write. Fail-open: swallows all errors."""
+    try:
+        from app.audit import record_hold_resolution  # type: ignore[import]
+        record_hold_resolution(
+            hold_id, resolution, decided_by,
+            decision_id=decision_id, resolved_ts=resolved_ts,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Expiry evaluation (lazy; called on read/validate)
 # ---------------------------------------------------------------------------
 
@@ -289,6 +332,13 @@ def _append_expired_event(hold_id: str) -> None:
         "status": "expired",
         "ts": expired_ts,
     })
+    # Art.14 evidence: expiry has no deciding principal (a timeout, not a
+    # decision by any actor) -- "system:reeflex-core" is a documented
+    # best-effort sentinel for decided_by, distinct from any real
+    # "human:*"/"agent:*" principal format so it is never mistaken for one.
+    _audit_hold_resolution(
+        hold_id, "expired", "system:reeflex-core", expired_ts,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -494,7 +544,22 @@ def resolve_hold(
         if hold_id not in _index:
             return None
         _append_and_readback(rec)
-        return dict(_index[hold_id])
+        result = dict(_index[hold_id])
+
+    # Art.14 evidence: emit the hold_resolution event HERE, at the HUMAN
+    # DECISION point (resolve time), for BOTH "approved" and "rejected" --
+    # outside _lock, immediately once the resolution is durably in the hold
+    # store. Symmetric on purpose: the audited fact is the human's oversight
+    # DECISION, which happens here regardless of whether an approved hold is
+    # ever resubmitted/consumed. (An approved-but-never-consumed hold must
+    # still be evidenced.) There is no /v1/decide transit at this point, so
+    # decision_id is "" -- the eventual resubmission's decision record carries
+    # this hold_id, so the two correlate. "expired" is emitted separately in
+    # _append_expired_event(). See audit.record_hold_resolution() docstring.
+    if new_status in ("approved", "rejected"):
+        _audit_hold_resolution(hold_id, new_status, decided_by, decided_ts)
+
+    return result
 
 
 def mark_consumed(hold_id: str) -> dict | None:

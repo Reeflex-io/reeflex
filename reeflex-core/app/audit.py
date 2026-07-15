@@ -6,6 +6,23 @@ Records are immutable once written: we append, never update or delete.
 
 Log path: env REEFLEX_AUDIT_LOG (default: <repo>/reeflex-core/audit/decisions.jsonl).
 
+Two record shapes share this SAME append-only stream (one ordered, tamper-
+evident log; same lock, same fsync, same read-back-after-write discipline):
+
+  1. DECISION records (record(), no "event" key on the historical shape —
+     see below) — one per /v1/decide transit.
+  2. HOLD_RESOLUTION events (record_hold_resolution(), "event": "hold_resolution")
+     — one per hold state resolution (approved / rejected / expired). This is
+     the AI Act Art.14 human-oversight evidence trail: it captures WHO decided
+     and WHEN, keyed to the decision_id of the transit the resolution enabled
+     (see record_hold_resolution() docstring for exact emission points).
+
+Both shapes are distinguished by the "event" key (absent/omitted on legacy
+decision records for backward compatibility with existing consumers that
+never looked for it; present and equal to "hold_resolution" on resolution
+events). A consumer that only understands decision records can keep
+filtering on `"decision" in record` / ignoring unknown "event" values.
+
 SKELETON SHORTCUTS (upgrade path documented):
   - Signing: TODO — sign each record with an ed25519 key (Vault-backed) so
     the audit trail is tamper-evident end to end (SPEC §2).
@@ -36,6 +53,56 @@ def _log_path() -> pathlib.Path:
         return pathlib.Path(env_path)
     here = pathlib.Path(__file__).resolve()
     return here.parent.parent / "audit" / "decisions.jsonl"
+
+
+def _append_and_readback(rec: dict, *, verify: dict) -> dict:
+    """Append one JSONL line to the audit log and read the last line back.
+
+    Shared by record() and record_hold_resolution() so both record shapes
+    get the identical append-only + fsync + read-back-proof discipline on
+    the SAME file/lock.
+
+    `verify` is a small dict of {key: expected_value} checked against the
+    read-back line; a mismatch raises OSError (tamper-evident / write-torn
+    detection). Returns `rec` unchanged on success.
+    """
+    log_path = _log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    line = json.dumps(rec, separators=(",", ":")) + "\n"
+
+    with _lock:
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(line)
+            fh.flush()
+            os.fsync(fh.fileno())
+
+        # Read-back proof: verify the last line matches what we wrote.
+        with open(log_path, "rb") as fh:
+            # Seek to end, walk back past final newline to find the last record
+            fh.seek(0, 2)
+            size = fh.tell()
+            if size == 0:
+                raise OSError("audit file empty immediately after write")
+            # Walk backwards to find start of last line
+            pos = size - 1
+            while pos > 0:
+                fh.seek(pos)
+                ch = fh.read(1)
+                if ch == b"\n" and pos < size - 1:
+                    break
+                pos -= 1
+            fh.seek(max(pos, 0))
+            last_line = fh.read().decode("utf-8").strip()
+
+        written_rec = json.loads(last_line)
+        for key, expected in verify.items():
+            if written_rec.get(key) != expected:
+                raise OSError(
+                    f"audit read-back mismatch: wrote {rec!r}, read back {written_rec!r}"
+                )
+
+    return rec
 
 
 def record(
@@ -71,18 +138,36 @@ def record(
       traceparent           opaque W3C trace-context string, echoed verbatim
                             from envelope.context.traceparent.  Omitted when
                             the envelope did not carry one.
-    """
-    log_path = _log_path()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
 
+    Attest evidence fields (additive, v0.1.13):
+      action.target_system  envelope.target.system (e.g. the backend/system
+                            name an adapter is fronting — "wordpress-prod-db",
+                            "s3-eu-west-1"). Sits alongside the pre-existing
+                            action.environment key (itself sourced from
+                            envelope.target.environment, not renamed/moved —
+                            this is additive nesting under the same "action"
+                            sub-object for consistency with that established,
+                            if originally target-shaped, convention). Empty
+                            string if envelope.target.system is absent — this
+                            is non-load-bearing metadata, fail-open on absence
+                            (consistent with every other `.get(..., "")` in
+                            this record; it never affects the decision).
+      agent_id               envelope.agent.id — the same source
+                            decide.py._get_agent_identity() uses for the hold
+                            actor==approver check, so this field and that
+                            check are always reading the identical value.
+                            Empty string if absent.
+    """
     rec: dict = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "session_id": session_id,
+        "agent_id": (envelope.get("agent") or {}).get("id", ""),
         "action": {
             "namespace": (envelope.get("action") or {}).get("namespace", ""),
             "verb": (envelope.get("action") or {}).get("verb", ""),
             "ability": (envelope.get("action") or {}).get("ability", ""),
             "environment": (envelope.get("target") or {}).get("environment", ""),
+            "target_system": (envelope.get("target") or {}).get("system", ""),
         },
         "magnitude_count": int((envelope.get("magnitude") or {}).get("count", 1)),
         "cumulative_injected": cumulative,
@@ -100,42 +185,83 @@ def record(
     if traceparent:
         rec["traceparent"] = traceparent
 
-    line = json.dumps(rec, separators=(",", ":")) + "\n"
+    return _append_and_readback(
+        rec,
+        verify={
+            "session_id": rec["session_id"],
+            "decision": rec["decision"],
+            "rule": rec["rule"],
+            "decision_id": rec["decision_id"],
+        },
+    )
 
-    with _lock:
-        with open(log_path, "a", encoding="utf-8") as fh:
-            fh.write(line)
-            fh.flush()
-            os.fsync(fh.fileno())
 
-        # Read-back proof: verify the last line matches what we wrote.
-        with open(log_path, "rb") as fh:
-            # Seek to end, walk back past final newline to find the last record
-            fh.seek(0, 2)
-            size = fh.tell()
-            if size == 0:
-                raise OSError("audit file empty immediately after write")
-            # Walk backwards to find start of last line
-            pos = size - 1
-            while pos > 0:
-                fh.seek(pos)
-                ch = fh.read(1)
-                if ch == b"\n" and pos < size - 1:
-                    break
-                pos -= 1
-            fh.seek(max(pos, 0))
-            last_line = fh.read().decode("utf-8").strip()
+def record_hold_resolution(
+    hold_id: str,
+    resolution: str,
+    decided_by: str,
+    *,
+    decision_id: str = "",
+    resolved_ts: str = "",
+) -> dict:
+    """
+    Append ONE hold_resolution audit event to the SAME append-only JSONL
+    stream as decision records (same file, same lock, same fsync + read-back
+    discipline) — one ordered, tamper-evident stream a connector/SIEM can
+    consume without joining two logs.
 
-        written_rec = json.loads(last_line)
-        # Verify key fields match (tamper-evident readback)
-        if (
-            written_rec.get("session_id") != rec["session_id"]
-            or written_rec.get("decision") != rec["decision"]
-            or written_rec.get("rule") != rec["rule"]
-            or written_rec.get("decision_id") != rec["decision_id"]
-        ):
-            raise OSError(
-                f"audit read-back mismatch: wrote {rec!r}, read back {written_rec!r}"
-            )
+    This is the AI Act Art.14 human-oversight evidence trail: it is the
+    record that a hold (a require_approval verdict put on hold) was
+    RESOLVED, by whom, and — for the "approved" case — which decision that
+    resolution went on to allow.
 
-    return rec
+    Parameters
+    ----------
+    hold_id      the hold this event resolves.
+    resolution   "approved" | "rejected" | "expired".
+    decided_by   the principal who decided, "{type}:{id}" (e.g. "human:leo"),
+                 matching holds.py's `decided_by` format. For "expired" there
+                 is no deciding principal (a timeout, not a decision by any
+                 actor) — callers pass a documented best-effort sentinel
+                 (see holds.py._append_expired_event()).
+    decision_id  keyword-only, default "". Always "" for v0.1.13: all three
+                 resolutions are emitted at the DECISION moment (approve/reject
+                 in holds.resolve_hold(), expiry in _append_expired_event()),
+                 before any /v1/decide transit exists. For "approved", the
+                 eventual resubmission's decision record carries this hold_id,
+                 so the executed action correlates back to the approval without
+                 a decision_id on this event. (The field is kept in the shape
+                 for forward-compat / a future emission that has a transit.)
+    resolved_ts  keyword-only, default "" (falls back to "now" if empty).
+                 ISO8601 UTC — the timestamp of the ACTUAL resolution decision
+                 (holds.py's `decided_ts` for approve/reject; the expiry
+                 detection time for expired).
+
+    Discriminator field: "event": "hold_resolution" lets a connector/SIEM
+    distinguish this from a decision record (decision records have no
+    "event" key — see the module docstring) — additive and non-breaking for
+    any existing decision-record consumer, which never looked at "event".
+
+    Returns the record dict that was written. Raises OSError on write/
+    read-back failure (same fail-mode as record(): audit failure is reported
+    to the caller but must NOT be turned into a decision-path failure by a
+    caller that is not itself on the decision path — see call sites).
+    """
+    rec: dict = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "event": "hold_resolution",
+        "hold_id": hold_id,
+        "resolution": resolution,
+        "decided_by": decided_by,
+        "decision_id": decision_id,
+        "resolved_ts": resolved_ts or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+    return _append_and_readback(
+        rec,
+        verify={
+            "event": rec["event"],
+            "hold_id": rec["hold_id"],
+            "resolution": rec["resolution"],
+        },
+    )
