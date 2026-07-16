@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+## [0.1.13] - audit enrichment (Attest evidence fields)
+
+Core: audit trail enrichment for the compliance-evidence surface (Attest / AI Act Art.14 human-oversight trail). No decision verdict or decision-logic change; additive only.
+
+### Added
+- **`agent_id` + `action.target_system` on every decision audit record.** The JSONL audit record (`audit.record()`) now carries `agent_id` (`envelope.agent.id` — the same source `decide.py`'s actor-identity check already uses) and `action.target_system` (`envelope.target.system`, sitting alongside the pre-existing `action.environment` key) so an evidence consumer can attribute a decision to an acting identity and a target system without re-deriving them from the raw envelope. Both are non-load-bearing metadata: empty string on absence, fail-open, never affecting the decision.
+- **`hold_resolution` audit events — the AI Act Art.14 human-oversight evidence trail.** A new event shape (`"event": "hold_resolution"`) on the SAME append-only `decisions.jsonl` stream (same lock, same fsync, same read-back-after-write discipline) captures `hold_id`, `resolution` (`approved`\|`rejected`\|`expired`), `decided_by`, `decision_id`, and `resolved_ts` whenever a hold is resolved. All three fire at the RESOLUTION/DECISION moment, so every hold outcome is evidenced regardless of any later consumption: `approved` and `rejected` fire in `holds.resolve_hold()` immediately after the human's decision is durably written (symmetric — the audited fact is the Art.14 human-oversight *decision*, which stands even if an approved hold is never resubmitted/consumed); `expired` fires in `holds._append_expired_event()` when the lazy expiry transition is durably written (`decided_by="system:reeflex-core"`, a documented sentinel — an expiry has no deciding principal). `decision_id` is `""` on these events (no `/v1/decide` transit exists at the decision moment); for an approved hold, the eventual resubmission's decision record carries the same `hold_id`, correlating the executed action back to the approval. The discriminator field (`"event"` — absent on legacy decision records) lets a connector/SIEM distinguish the two record shapes on one ordered stream without breaking any existing decision-record consumer.
+- **`integrations/wazuh/reeflex-decoder.xml`** doc-comment updated (no decoder logic change — `JSON_Decoder` auto-decodes any additive field) to document the audit-log field vocabulary (`agent_id`, `action.target_system`, `hold_resolution` event fields) alongside the pre-existing live-SIEM-syslog field list.
+
 ## [0.1.12] - 2026-07-13
 
 Core: the freeze kill-switch now surfaces on the SIEM (#45). Gateway: `reeflex-mcp` 0.1.1 observe-mode traceability parity (GAP-1, #46). No decision verdict or decision-logic change; additive only.
