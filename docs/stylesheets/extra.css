@@ -194,17 +194,48 @@
 }
 
 /* =====================================================================
-   Title artifacts (T3) — pilcrow gone on H1, hover-only on the rest
-   ===================================================================== */
+   Title artifacts (T3) — pilcrow gone on H1, hover-only on the rest.
+   The visible glyph on h2-h6 is a small chain-link SVG (Stripe/Tailwind/
+   Linear convention), not the raw "¶" that Python-Markdown's toc extension
+   injects as the anchor's text content (mkdocs.yml permalink: true — left
+   untouched). We collapse that injected text node to zero size and paint
+   an icon instead via a CSS mask, so the anchor, href, and its
+   permalink_title aria-label are all unchanged — only the paint differs.
+   `background-color: currentColor` through `mask-image` means the icon
+   is not baked to one color: it inherits --md-default-fg-color--lightest
+   at rest and --rf-ember-link on hover/target/focus in BOTH palettes,
+   same as the pilcrow did. Fixed rem box (not em, since font-size:0 on
+   the host would collapse an em-sized box to 0) so the box never
+   resizes between rest and hover — only opacity/color toggle, so there
+   is no layout shift when it appears. */
 .md-typeset h1 .headerlink { display: none !important; }
 .md-typeset h2 .headerlink,
 .md-typeset h3 .headerlink,
 .md-typeset h4 .headerlink,
 .md-typeset h5 .headerlink,
 .md-typeset h6 .headerlink {
+  position: relative;
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  font-size: 0;             /* collapse the injected "¶" text node */
+  line-height: 0;
+  vertical-align: -0.125em; /* optical baseline alignment next to text */
   color: var(--md-default-fg-color--lightest);
   opacity: 0;
   transition: opacity 0.2s, color 0.2s;
+}
+.md-typeset h2 .headerlink::before,
+.md-typeset h3 .headerlink::before,
+.md-typeset h4 .headerlink::before,
+.md-typeset h5 .headerlink::before,
+.md-typeset h6 .headerlink::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2.5'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M15%207h3a5%205%200%200%201%205%205%205%205%200%200%201-5%205h-3M9%2017H6a5%205%200%200%201-5-5%205%205%200%200%201%205-5h3'/%3E%3Cline%20x1='8'%20y1='12'%20x2='16'%20y2='12'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2.5'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M15%207h3a5%205%200%200%201%205%205%205%205%200%200%201-5%205h-3M9%2017H6a5%205%200%200%201-5-5%205%205%200%200%201%205-5h3'/%3E%3Cline%20x1='8'%20y1='12'%20x2='16'%20y2='12'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 .md-typeset h2:hover .headerlink,
 .md-typeset h3:hover .headerlink,
