@@ -3,7 +3,7 @@
  * Plugin Name:  Reeflex Gate
  * Plugin URI:   https://github.com/Reeflex-io/reeflex
  * Description:  Deterministic governance for every WordPress agent action via reeflex-core (allow / deny / require-approval, fail-closed).
- * Version:      0.1.7
+ * Version:      0.1.8
  * Requires at least: 6.9
  * Requires PHP: 7.4
  * Author:       Reeflex
@@ -77,8 +77,9 @@
  *                        When set, locks the Verify TLS checkbox on the Settings page.
  *   REEFLEX_ENV        — 'production'|'staging'|'dev' (default: 'production').
  *   REEFLEX_AGENT_ID   — agent identity string (default: 'agent:wordpress').
- *   REEFLEX_AUDIT_LOG  — absolute path to JSONL audit log
- *                        (default: wp-content/reeflex-audit.jsonl, outside uploads/).
+ *   REEFLEX_AUDIT_LOG  — absolute path to JSONL audit log (default:
+ *                        uploads/reeflex-gate/reeflex-audit.jsonl, dir hardened
+ *                        with .htaccess + index.php).
  *   REEFLEX_TIMEOUT    — HTTP timeout in seconds for /v1/decide (default: 5).
  *
  * SETTINGS PAGE (normal-plugin install)

@@ -736,8 +736,9 @@ final class Reeflex_Normalizer {
 	 *      capped at 128 chars. Trust level: as strong as MCP transport auth
 	 *      (mcp-adapter enforces session validation; see mcp-adapter transport
 	 *      docs for session auth requirements).
-	 *   2. WordPress session token from wp_get_session_token() — stable for
-	 *      a logged-in browser/API session.
+	 *   2. WordPress session token from wp_get_session_token(), as a salted
+	 *      SHA-256 derivation — stable per logged-in browser/API session, but
+	 *      NEVER the raw token (auth material must not leave the site).
 	 *   3. Authenticated user: wp_hash('reeflex-sess:' . $user->ID) — uses
 	 *      WordPress's keyed hash (wp_hash uses AUTH_KEY + AUTH_SALT internally);
 	 *      stable per user, no cookie-value component (P2-10).
@@ -761,11 +762,17 @@ final class Reeflex_Normalizer {
 			}
 		}
 
-		// 2. WordPress auth session token (stable per login session).
+		// 2. WordPress auth session token, as a NON-REVERSIBLE derived id.
+		// SECURITY: wp_get_session_token() is auth-cookie-derived secret material —
+		// it must NEVER leave the site (it is transmitted to core and written to
+		// the audit log). We send only a salted SHA-256 derivation: sessions still
+		// correlate (same token -> same id, so the R5 cumulative-session ledger
+		// binds), but the token cannot be recovered from the id, and wp_salt()
+		// makes it un-precomputable.
 		if ( function_exists( 'wp_get_session_token' ) ) {
 			$token = wp_get_session_token();
 			if ( $token ) {
-				return 'wpsess:' . $token;
+				return 'wpsess:' . hash( 'sha256', $token . wp_salt( 'auth' ) );
 			}
 		}
 

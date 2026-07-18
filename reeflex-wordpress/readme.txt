@@ -4,7 +4,7 @@ Tags: security, ai-agents, governance, woocommerce, abilities-api
 Requires at least: 6.9
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.1.7
+Stable tag: 0.1.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -186,7 +186,7 @@ are held or denied on impact like any other action.
 = What does uninstalling remove? =
 
 Uninstall deletes the stored settings (including the token) from `wp_options`. It
-does not delete the audit log file (`wp-content/reeflex-audit.jsonl`), because that
+does not delete the audit log file (`uploads/reeflex-gate/reeflex-audit.jsonl`), because that
 is an append-only governance record; remove it manually if you no longer need it.
 
 = What is observe mode? =
@@ -210,6 +210,11 @@ immediately — no other changes needed.
    force-deletes are held for a human, and a site-wide wipe is denied.
 
 == Changelog ==
+
+= 0.1.8 =
+* Security: the session identifier sent to the decision service and written to the audit log is now a salted SHA-256 derivation instead of the raw WordPress session token. No authentication material leaves the site. Same-session correlation (and the cumulative per-session budget) is preserved.
+* The audit log now defaults to `uploads/reeflex-gate/reeflex-audit.jsonl`, following the WordPress convention for plugin-written files. The directory is created with a deny-all `.htaccess` and an `index.php` so the log is not web-accessible on Apache. The `REEFLEX_AUDIT_LOG` constant still overrides the location (recommended on nginx, to a path outside the web root).
+* No change to allow / deny / approval enforcement.
 
 = 0.1.7 =
 * Fan-out fix: a single gated action now triggers exactly one core decision (and, for a held action, exactly one hold) instead of one per registered ability. A request-scoped memo collapses the permission-callback fan-out across all registered abilities; the guarantees (actor != approver, single-use holds, dedup) are unchanged.
@@ -255,6 +260,9 @@ immediately — no other changes needed.
 * Append-only JSONL audit log written before enforcement.
 
 == Upgrade Notice ==
+
+= 0.1.8 =
+Security update: the session id is now a salted hash, so no WordPress authentication material is ever transmitted or logged. The audit log moves to uploads/reeflex-gate/ (protected by .htaccess); set REEFLEX_AUDIT_LOG to keep a custom path. Recommended update. No change to allow/deny/approval behaviour.
 
 = 0.1.7 =
 Fixes a hold fan-out: one gated action now creates one hold, not one per registered ability (the source of duplicate 'Pending approvals' rows). Recommended update. No change to allow/deny/approval behaviour.

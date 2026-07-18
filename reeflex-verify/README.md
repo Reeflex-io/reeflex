@@ -111,7 +111,7 @@ To see it on your site:
 
 3. **Every** action — including the harmless read — should come back blocked.
    If anything is allowed while core is unreachable, that is a serious bug; the
-   audit log (`wp-content/reeflex-audit.jsonl`) will show what happened.
+   audit log (`uploads/reeflex-gate/reeflex-audit.jsonl`) will show what happened.
 
 Restore the real core URL when you're done.
 
