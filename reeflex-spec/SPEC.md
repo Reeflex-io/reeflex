@@ -130,6 +130,7 @@ A per-action policy is gameable. A rule like *"require approval when `count > 5`
 Reeflex defeats this by reasoning over **cumulative state per session**, not just the single action.
 
 - The adapter supplies a stable `agent.session_id` (**REQUIRED** for fragmentation resistance).
+  - `session_id` MUST be a stable, **non-secret** identifier. NEVER derive it from authentication material (session tokens, auth cookies, keys or salts): it is transmitted to core and written to the audit log, so an authentication-derived value would leak a credential and enable session forgery. Use a request/connection session id, or a non-reversible salted hash of the login session (`hash(token, server_salt)`) — stable per session so the cumulative ledger still binds, but from which the secret cannot be recovered.
 - `reeflex-core` keeps a per-session **action ledger** — it already records every decision in the observation plane. Before evaluating policy, core injects a `cumulative` object into the policy input, derived from that ledger over a configurable rolling window:
 
 ```jsonc

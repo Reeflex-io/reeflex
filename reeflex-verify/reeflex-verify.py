@@ -375,7 +375,7 @@ def cmd_wp(args):
     else:
         print(color(" Some verdicts did not match. Re-run with --verbose for detail,",
                     C.YELLOW))
-        print(color(" and check the audit log (wp-content/reeflex-audit.jsonl).",
+        print(color(" and check the audit log (uploads/reeflex-gate/reeflex-audit.jsonl).",
                     C.YELLOW))
     print(color("-" * 74, C.DIM))
     return 0 if allok else 1

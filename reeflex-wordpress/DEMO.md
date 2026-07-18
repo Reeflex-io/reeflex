@@ -219,7 +219,7 @@ The count is the same. No posts were deleted.
 ### Step 6 — Read the audit record
 
 ```bash
-tail -n 1 wp-content/reeflex-audit.jsonl | python3 -m json.tool
+tail -n 1 uploads/reeflex-gate/reeflex-audit.jsonl | python3 -m json.tool
 ```
 
 The last record should contain:
@@ -273,7 +273,7 @@ all actions, never silently allow.
 4. Check the audit log:
 
    ```bash
-   tail -n 1 wp-content/reeflex-audit.jsonl | python3 -m json.tool
+   tail -n 1 uploads/reeflex-gate/reeflex-audit.jsonl | python3 -m json.tool
    ```
 
    The record's `rule` field will be `reeflex.adapter/fail_closed` and

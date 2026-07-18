@@ -74,6 +74,14 @@ function reeflex_normalize( string $ability, array $input ): array {
 
 The agent asks to delete 50 posts permanently → envelope says `verb: delete, irreversible, broad, production`.
 
+> **`reeflex_session_id()` must never return authentication material.** The
+> `session_id` is transmitted to core and written to the audit log, so returning
+> a raw auth token (e.g. WordPress's `wp_get_session_token()`) would leak a
+> credential and enable session forgery. Return a request/connection session id,
+> or a non-reversible salted hash of the login session
+> (`hash('sha256', $token . $server_salt)`) — stable per session so the
+> cumulative ledger still binds, but from which the token cannot be recovered.
+
 ---
 
 ## B. PostgreSQL adapter (Python)

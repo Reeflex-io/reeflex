@@ -81,7 +81,7 @@ defined( 'ABSPATH' ) || exit;
  *   REEFLEX_ENV        — target environment label; default 'production'.
  *   REEFLEX_AGENT_ID   — agent identity string; default 'agent:wordpress'.
  *   REEFLEX_AUDIT_LOG  — absolute path to JSONL audit log.
- *                        Default: WP_CONTENT_DIR/reeflex-audit.jsonl.
+ *                        Default: uploads/reeflex-gate/reeflex-audit.jsonl.
  *   REEFLEX_TIMEOUT    — HTTP timeout in seconds for /v1/decide; default 5.
  *
  * Security note — no reeflex_core_url filter:
@@ -351,21 +351,28 @@ final class Reeflex_Config {
 	/**
 	 * Absolute path to the JSONL audit log file.
 	 *
-	 * Security (P2-8): defaults to WP_CONTENT_DIR/reeflex-audit.jsonl, which is
-	 * outside the uploads/ directory and therefore not directly web-accessible on
-	 * a standard WordPress install. If REEFLEX_AUDIT_LOG points inside an uploads/
-	 * directory, a warning is logged so the operator can act.
+	 * Default: uploads/reeflex-gate/reeflex-audit.jsonl — the WordPress
+	 * convention for plugin-written files (WP.org guideline). The directory is
+	 * created on first write with a Deny-all .htaccess + an index.php
+	 * (Reeflex_Audit), so on Apache the audit JSONL is not web-accessible or
+	 * listable. On nginx (which ignores .htaccess), point REEFLEX_AUDIT_LOG at a
+	 * path outside the web root.
 	 *
-	 * Path safety: paths containing '..' segments are rejected and fall back to
-	 * the safe default.
+	 * Escape hatch: the REEFLEX_AUDIT_LOG constant overrides the default with any
+	 * absolute path. Path safety: paths containing '..' are rejected and fall
+	 * back to the default.
 	 *
 	 * @return string  Absolute path to the audit log file.
 	 */
 	public static function audit_log_path(): string {
-		$safe_default = WP_CONTENT_DIR . '/reeflex-audit.jsonl';
+		$uploads = wp_upload_dir();
+		$base    = ( is_array( $uploads ) && empty( $uploads['error'] ) && ! empty( $uploads['basedir'] ) )
+			? (string) $uploads['basedir']
+			: WP_CONTENT_DIR . '/uploads';
+		$default = trailingslashit( $base ) . 'reeflex-gate/reeflex-audit.jsonl';
 
 		if ( ! defined( 'REEFLEX_AUDIT_LOG' ) || '' === (string) REEFLEX_AUDIT_LOG ) {
-			return $safe_default;
+			return $default;
 		}
 
 		$configured = (string) REEFLEX_AUDIT_LOG;
@@ -374,23 +381,9 @@ final class Reeflex_Config {
 		if ( false !== strpos( $configured, '..' ) ) {
 			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
-				error_log(
-					'[reeflex] WARN: REEFLEX_AUDIT_LOG contains ".." — rejected; using safe default.'
-				);
+				error_log( '[reeflex] WARN: REEFLEX_AUDIT_LOG contains ".." — rejected; using default.' );
 			}
-			return $safe_default;
-		}
-
-		// Warn if the path is inside an uploads/ directory (web-accessible risk).
-		$uploads_dir = trailingslashit( WP_CONTENT_DIR ) . 'uploads';
-		if ( 0 === strpos( $configured, $uploads_dir ) ) {
-			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
-				error_log(
-					'[reeflex] WARN: REEFLEX_AUDIT_LOG is inside the uploads/ directory and may be ' .
-					'web-accessible. Move it outside uploads/ or add a .htaccess deny rule.'
-				);
-			}
+			return $default;
 		}
 
 		return $configured;

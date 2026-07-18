@@ -58,11 +58,38 @@ final class Reeflex_Audit {
 
 			$path = Reeflex_Config::audit_log_path();
 
-			// Ensure the directory exists (graceful for first run).
 			$dir = dirname( $path );
 			if ( ! is_dir( $dir ) ) {
-				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir
-				mkdir( $dir, 0755, true );
+				wp_mkdir_p( $dir );
+			}
+
+			// Keep the directory hardened on EVERY write (self-healing), not just
+			// at first mkdir: the default lives under uploads/ (web-served), so a
+			// Deny-all .htaccess (Apache) plus an index.php sit next to the log so
+			// the audit JSONL is not web-accessible or listable. Re-checking each
+			// write means a migration/backup tool that dropped the dotfiles, or a
+			// pre-existing directory, gets re-protected instead of silently left
+			// open. On nginx (.htaccess is ignored) the log must instead live
+			// outside the web root via REEFLEX_AUDIT_LOG; see the readme.
+			if ( is_dir( $dir ) ) {
+				$htaccess = trailingslashit( $dir ) . '.htaccess';
+				if ( ! file_exists( $htaccess ) ) {
+					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+					$ok = file_put_contents( $htaccess, "<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n" );
+					if ( false === $ok && defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+						// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+						error_log( '[reeflex] WARN: could not write audit-dir .htaccess: ' . $htaccess );
+					}
+				}
+				$index = trailingslashit( $dir ) . 'index.php';
+				if ( ! file_exists( $index ) ) {
+					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+					$ok = file_put_contents( $index, "<?php\n// Silence is golden.\n" );
+					if ( false === $ok && defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+						// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+						error_log( '[reeflex] WARN: could not write audit-dir index.php: ' . $index );
+					}
+				}
 			}
 
 			// Append-only write with exclusive lock (P2-9).

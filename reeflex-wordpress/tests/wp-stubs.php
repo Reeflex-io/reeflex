@@ -65,6 +65,7 @@ function wp_get_current_user() { return new WP_User(); }
 // a read in a delete-heavy session is correctly held — a real engine behaviour.)
 function wp_get_session_token() { return 'harness-' . getmypid() . '-' . substr( md5( uniqid( '', true ) ), 0, 10 ); }
 function wp_hash( $data, $scheme = 'auth' ) { return hash_hmac( 'sha256', (string) $data, AUTH_SALT . '-' . $scheme ); }
+function wp_salt( $scheme = 'auth' ) { return AUTH_SALT . '-salt-' . $scheme; }
 function trailingslashit( $s )   { return rtrim( (string) $s, '/\\' ) . '/'; }
 function untrailingslashit( $s ) { return rtrim( (string) $s, '/\\' ); }
 

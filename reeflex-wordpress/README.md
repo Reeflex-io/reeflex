@@ -214,7 +214,7 @@ and only at your own risk.
 
 Trigger any registered ability (e.g. a REST call that exercises a delete
 ability) and confirm a destructive action is held or denied. Check
-`wp-content/reeflex-audit.jsonl` for the decision record — or run the
+`uploads/reeflex-gate/reeflex-audit.jsonl` for the decision record — or run the
 [`reeflex-verify`](../reeflex-verify/) CLI tool for a full scripted check.
 
 Full step-by-step install for both forms: [INSTALL.md](INSTALL.md).
@@ -257,7 +257,7 @@ No secrets are accepted inline — reference them via environment or Vault.
 | `REEFLEX_VERIFY_SSL` | No           | `true`                                     | Whether to verify the TLS certificate of the core endpoint. **Keep `true` in production.** Set `false` only for your own self-signed or internally-signed core endpoint with an untrusted certificate, at your own risk. Standard-plugin equivalent: the "Verify TLS certificate" checkbox in Settings. |
 | `REEFLEX_ENV`        | No           | `production`                               | Environment label written into every envelope's `target.environment`. Values: `production`, `staging`, `dev`. |
 | `REEFLEX_AGENT_ID`   | No           | `agent:wordpress`                          | Agent identity string for `agent.id` in the envelope. |
-| `REEFLEX_AUDIT_LOG`  | No           | `WP_CONTENT_DIR/reeflex-audit.jsonl`      | Absolute filesystem path for the append-only JSONL audit log. The default is outside `uploads/` so the file is not web-accessible. Paths containing `..` are rejected; a path inside `uploads/` generates a warning. |
+| `REEFLEX_AUDIT_LOG`  | No           | `uploads/reeflex-gate/reeflex-audit.jsonl` | Absolute filesystem path for the append-only JSONL audit log. The default directory is created with a deny-all `.htaccess` + `index.php`, so the log is not web-accessible on Apache. On nginx (which ignores `.htaccess`), set this to a path outside the web root. Paths containing `..` are rejected. |
 | `REEFLEX_TIMEOUT`    | No           | `5`                                        | HTTP timeout in seconds for `POST /v1/decide`. Short is correct — the fail-closed path fires on timeout; a long timeout only delays the deny. |
 | `REEFLEX_MODE`       | No           | `enforce`                                  | `enforce`\|`observe`. In observe mode the gate records every verdict to the audit log (annotated `mode=observe`) but never enforces — the action always proceeds — and a core outage **fails OPEN** (never blocks the site) (HIL-DESIGN §8). In enforce mode (default) core outages fail closed as usual. Standard-plugin equivalent: the "Enforcement mode" dropdown in Settings. |
 

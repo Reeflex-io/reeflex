@@ -109,11 +109,11 @@ wp-content/
 
 3. **Verify the audit log path.**
 
-   The default audit log is `WP_CONTENT_DIR/reeflex-audit.jsonl`. Confirm
-   that the web server process has write permission to that path and that the
-   file (or its parent directory) is not web-accessible. Do not place the log
-   inside `uploads/` without a `.htaccess` deny rule — the adapter will log
-   a warning if it detects that configuration.
+   The default audit log is `uploads/reeflex-gate/reeflex-audit.jsonl`; the
+   directory is created with a deny-all `.htaccess` + `index.php` (protected on
+   Apache). Confirm the web server process has write permission to that path. On
+   nginx (which ignores `.htaccess`), set `REEFLEX_AUDIT_LOG` to a path outside
+   the web root, since nginx will not honor the generated deny rule.
 
 4. **Load WordPress and confirm the plugin is active.**
 
@@ -161,7 +161,7 @@ expected output table and the in-WordPress walkthrough.
 Check the audit log after triggering any ability:
 
 ```bash
-tail -n 5 wp-content/reeflex-audit.jsonl | python3 -m json.tool
+tail -n 5 uploads/reeflex-gate/reeflex-audit.jsonl | python3 -m json.tool
 ```
 
 Each line is one JSON decision record. Fields include `ts`, `ability`,
@@ -289,8 +289,10 @@ define( 'REEFLEX_TIMEOUT',  5 );                                    // optional
   non-loopback host must define `REEFLEX_CORE_URL` as a wp-config.php constant
   (an explicit, operator-privileged act); they cannot use the Settings page for
   this.
-- The audit log must not be web-accessible. The safe default path is
-  `WP_CONTENT_DIR/reeflex-audit.jsonl`, outside `uploads/`.
+- The audit log must not be web-accessible. The default path is
+  `uploads/reeflex-gate/reeflex-audit.jsonl`, whose directory is created with a
+  deny-all `.htaccess` + `index.php` (Apache); on nginx, point
+  `REEFLEX_AUDIT_LOG` outside the web root.
 - Never set credentials (Application Passwords, Vault tokens) as PHP
   constants. Use environment variables or a secrets manager and reference
   them by name.
