@@ -2,8 +2,9 @@
 
 > **Variant A — full on-prem.** This guide runs the engine on your own machine. A hosted/subscription variant is on the roadmap and not yet available — see [docs/adr/0001-deployment-model.md](docs/adr/0001-deployment-model.md).
 
-This guide takes you from zero to watching Reeflex stop a bulk delete in
-production, with no prior knowledge of the codebase.
+Reeflex governs what AI agents may do to your systems — before it happens. This
+guide takes you from zero to watching it stop a bulk delete in production, with
+no prior knowledge of the codebase.
 
 ---
 

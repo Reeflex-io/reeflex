@@ -10,9 +10,11 @@ description: >-
 ## About Reeflex
 
 **What is Reeflex?**
-A deterministic gate that decides **allow / hold / deny** on an AI agent's
-action *before* it runs — on any backend, with **zero LLM in the decision
-path**. Same action in, same decision out, every time. See [Concepts](concepts/index.md).
+Reeflex governs what an AI agent may do to your systems — **before it happens**.
+It decides allow / hold / deny on the *impact* an action would actually have
+(reversibility, blast radius, externality) and on the session's cumulative
+activity — not just whether the caller is allowed. On any backend, and
+deterministically (zero LLM in the decision path). See [Concepts](concepts/index.md).
 
 **Is there an LLM in the decision path?**
 No. `/v1/decide` is OPA/Rego plus classical logic — no LLM, no network, no
@@ -25,6 +27,27 @@ Any, through an **adapter** that normalizes a backend's actions into the
 [Action Envelope](reference/action-envelope.md). Shipped today: Claude Code,
 WordPress, n8n, and the MCP gateway. Others (`reeflex-postgres`, `reeflex-s3`,
 …) are community-built against the public spec — see [Adapters](adapters/index.md).
+
+## How it compares
+
+**How is this different from Microsoft's Agent Governance Toolkit?**
+They cover different halves, and compose. Microsoft's toolkit governs the agents
+*you build and run* — an agent-side harness: identity, registration, and
+guardrails on the agent itself. Reeflex sits **resource-side**, at the backend
+an agent acts on, and decides each action on its **impact** — and on the
+*cumulative* impact across a session, so splitting one destructive action into
+many small steps (fragmentation) is caught rather than waved through. Use their
+harness for agents you own; use Reeflex for the agents — yours *or* others' —
+that reach your systems. (The two are complementary, not competitors.)
+
+**How is this different from an identity or permissions layer (IAM, Cerbos, Permit.io)?**
+Those answer *"is this caller allowed to do this?"* — identity and role. Reeflex
+answers a different question: *"given the impact this action would actually
+have, and everything this session has already done, is it safe now?"* A
+permission check returns the same **yes** for deleting one record and for
+deleting fifty thousand; Reeflex decides on reversibility, blast radius,
+externality, and cumulative session state. They compose — keep your access layer
+for *who*, add Reeflex for *what the action does*.
 
 ## Running it
 
