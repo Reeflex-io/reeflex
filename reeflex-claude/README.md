@@ -1,6 +1,6 @@
 # reeflex-claude
 
-Reference adapter: Claude Code PreToolUse hook for [Reeflex](https://reeflex.io) governance.
+Reference adapter: the Claude Code PreToolUse hook — [Reeflex](https://reeflex.io) governance that **also protects you from your own agent**, gating every tool call on its impact before it runs.
 
 **What it is:** A Reeflex adapter that governs Claude Code tool calls by implementing the
 four contract responsibilities (SPEC §6): INTERCEPT → NORMALIZE → ENFORCE → AUDIT.

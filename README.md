@@ -2,11 +2,13 @@
 
 # Reeflex
 
-**A seatbelt for the AI acting on your systems.**
+**Govern agents you don't own.**
 
-Reeflex is a deterministic gate that decides — *before* an AI agent's action
-reaches your data — whether it is safe to run, needs a human, or must be
-blocked. Across any backend, with no LLM in the decision path.
+Reeflex governs what an AI agent may do to your systems — *before it happens*.
+It decides allow, hold, or deny on the **impact** an action would actually have
+(reversibility, blast radius, externality) and on the session's cumulative
+activity — not just whether the caller is allowed. On any backend, and
+deterministically (no LLM in the decision path).
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-v0.1%20preview-orange.svg)](CHANGELOG.md)

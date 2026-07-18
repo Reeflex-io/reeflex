@@ -3,10 +3,11 @@
 Three different questions get asked before an AI agent touches your systems.
 Most of the stack answers the first two. Reeflex exists for the third.
 
-1. **"Who is this agent, and what may it access?"** — identity and
-   authorization. Answered at the source by agent-identity platforms and
-   policy engines (Microsoft Entra Agent ID, AWS Bedrock Guardrails, Cerbos,
-   Permit.io, OPA-based authorization).
+1. **"Who is this agent, and what may it access?"** — identity, authorization,
+   and agent-side governance. Answered at the source by agent-governance
+   harnesses and policy engines (Microsoft's Agent Governance Toolkit and Entra
+   Agent ID, AWS Bedrock Guardrails, Cerbos, Permit.io, OPA-based authorization)
+   — they govern the agents you build and run.
 2. **"Is this prompt or output harmful?"** — content safety. Answered by
    LLM guardrails, probabilistically, on text.
 3. **"Is this specific action safe to run, right now?"** — impact. A
@@ -33,6 +34,11 @@ agent.security, and similar: auth, rate limits, routing. Reeflex's own
 component at that same seam, `reeflex-mcp`, is not that category — it renders
 the impact judgment instead. See
 [below](#reeflex-mcp--governance-judgment-at-the-mcp-seam).)*
+
+*This page is the **reference** comparison — the honest, mechanism-level view.
+The marketing-level category positioning (the head-to-head with the agent-side
+governance toolkits) lives at [reeflex.io](https://reeflex.io/): one source of
+truth for each register.*
 
 ## What Reeflex deliberately does not do
 

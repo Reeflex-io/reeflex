@@ -8,12 +8,12 @@ Stable tag: 0.1.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Deterministic governance gate for AI-agent actions in WordPress: allow, hold for a human, or block, decided on real impact. Fail-closed.
+Governs what AI agents may do to your WordPress site — before it happens. Held or blocked on real impact, not just permissions. Fail-closed.
 
 == Description ==
 
-Reeflex Gate is a safety layer for the AI agents acting on your WordPress site.
-When an agent (over the REST API, the MCP Adapter, or a direct call) triggers a
+Reeflex Gate governs what AI agents may do to your WordPress site — before it
+happens. When an agent (over the REST API, the MCP Adapter, or a direct call) triggers a
 WordPress Abilities API action, Reeflex intercepts it *before* it runs, works out
 how much impact it would actually have, and returns one of three verdicts:
 
