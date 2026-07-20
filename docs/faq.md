@@ -17,12 +17,12 @@ activity — not just whether the caller is allowed. On any backend, and
 deterministically (zero LLM in the decision path). See [Concepts](concepts/index.md).
 
 **What is a decision firewall?**
-A decision firewall is a control point between an AI agent and your systems that
-judges each action by its real-world impact — how reversible it is, how wide its
-blast radius, whether it reaches outside your systems — and allows it, holds it
-for a human, or denies it before it runs. Reeflex is a decision firewall: the
-checkpoint idea of a network firewall, moved from packets to **agent actions**.
-See [Concepts](concepts/index.md).
+A decision firewall is a deterministic gate that judges what an AI agent's
+action would DO — its reversibility, blast radius, and cumulative session impact
+— and allows, holds, or denies it before it reaches your systems, independent of
+which agent is asking. Reeflex is a decision firewall: the checkpoint idea of a
+network firewall, moved from packets to **agent actions**. See
+[Concepts](concepts/index.md).
 
 **Is there an LLM in the decision path?**
 No. `/v1/decide` is OPA/Rego plus classical logic — no LLM, no network, no
