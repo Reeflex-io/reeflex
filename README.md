@@ -247,8 +247,8 @@ adapters ship in this repo — see below.
 | [`reeflex-mock`](reeflex-mock/) | in-memory reference | worked example + 5-scenario demo |
 | [`reeflex-claude`](reeflex-claude/) | Claude Code (source-side) | `pip install reeflex-claude` · conformance-tested · 196 tests |
 | [`reeflex-wordpress`](reeflex-wordpress/) | WordPress Abilities API (resource-side) | conformance-tested end-to-end |
-| [`reeflex-mcp`](reeflex-mcp/) | MCP gateway — any MCP upstream (network boundary) | conformance-tested · 290 tests · Apache-2.0 · not yet on PyPI (install from source) |
-| [`n8n-nodes-reeflex`](n8n-nodes-reeflex/) | n8n workflow node (agent-side) | MIT · not yet on npm (install from source) |
+| [`reeflex-mcp`](reeflex-mcp/) | MCP gateway — any MCP upstream (network boundary) | conformance-tested · 290 tests · Apache-2.0 · `pip install reeflex-mcp` |
+| [`n8n-nodes-reeflex`](n8n-nodes-reeflex/) | n8n workflow node (agent-side) | MIT · on npm (`n8n-nodes-reeflex`) — install via n8n community nodes |
 | `reeflex-postgres` | database wire-protocol | on the roadmap |
 | `reeflex-graphql` | GraphQL resolvers | on the roadmap |
 
@@ -273,7 +273,7 @@ Already running MCP servers (filesystem, GitHub, Postgres, your own)? Put
 - Three conformance-tested reference adapters (Claude Code, WordPress, MCP gateway)
 - **SIEM-ready**: every decision streams as syslog (RFC 5424, JSON or CEF) — Splunk, QRadar, Wazuh, Graylog, Loki and friends consume it with zero vendor connectors. The SOC sees the attempt, not just the aftermath. See [docs/siem.md](docs/siem.md).
 - **Human-in-the-loop, operational**: `require_approval` creates a persistent hold with a resolution API (`/v1/holds`); the operator's designated principal resolves it (human-only by default — [HITL/HOTL/AIL](docs/why-reeflex.md#ail)), with `actor ≠ approver` enforced and single-use, TTL-bound holds. Surfaces: the WordPress "Pending approvals" page and the `reeflex-holds` MCP server.
-- **MCP gateway (`reeflex-mcp`)**: a transparent proxy in front of any MCP upstream (stdio or streamable-HTTP) — namespaced dynamic tool discovery, `tools/call` normalized via declarative per-server mappings (filesystem/github/postgres starters) or a heuristic fallback, decided by the same `/v1/decide`, obligations honored per SPEC §5/§7. `setup`/`add`/`import`/`doctor` migrate and drift-check client MCP configs onto a single governed path. Not yet on PyPI — install from source. See [docs/mcp-gateway.md](docs/mcp-gateway.md).
+- **MCP gateway (`reeflex-mcp`)**: a transparent proxy in front of any MCP upstream (stdio or streamable-HTTP) — namespaced dynamic tool discovery, `tools/call` normalized via declarative per-server mappings (filesystem/github/postgres starters) or a heuristic fallback, decided by the same `/v1/decide`, obligations honored per SPEC §5/§7. `setup`/`add`/`import`/`doctor` migrate and drift-check client MCP configs onto a single governed path. On PyPI: `pip install reeflex-mcp`. See [docs/mcp-gateway.md](docs/mcp-gateway.md).
 
 **On the roadmap:** ed25519 envelope signing, Postgres-backed audit,
 database/GraphQL adapters, Slack/CLI approval surfaces + daily digest,
