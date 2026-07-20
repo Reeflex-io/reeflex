@@ -13,7 +13,13 @@ import unittest
 
 import mcp.types as types
 
-from reeflex_mcp.upstream import UpstreamBootError, UpstreamConnection, UpstreamRegistry, UpstreamUnavailableError
+from reeflex_mcp.upstream import (
+    UpstreamBootError,
+    UpstreamConnection,
+    UpstreamRegistry,
+    UpstreamUnavailableError,
+    _BaseUpstreamConnection,
+)
 from reeflex_mcp.registry import UpstreamSpec
 
 
@@ -331,6 +337,178 @@ class TestConnectOne(unittest.IsolatedAsyncioTestCase):
         # up_upstream_names() will retry it on the next call.
         self.assertEqual(reg.known_upstream_names(), frozenset({"fs", "bad"}))
         self.assertEqual(reg.up_upstream_names(), frozenset({"fs"}))
+
+
+# ---------------------------------------------------------------------------
+# BUG 1 regression (dogfood RCA, 2026-07): stdio upstream teardown crashes
+# the gateway. Root cause: stdio_client() (mcp SDK) has no
+# terminate_on_close-style knob to skip its baked-in teardown (stdin close +
+# anyio.fail_after-guarded process.wait() + SIGTERM/SIGKILL escalation);
+# _BaseUpstreamConnection.close() previously wrapped `await stack.aclose()`
+# with NO try/except, so a stdio upstream's teardown error (a cancel-scope
+# violation surfacing as the front stdio server unwinds on client disconnect)
+# could escape and crash the process / block a sibling's close().
+#
+# These drive _BaseUpstreamConnection directly (not through the real
+# StdioUpstreamConnection/stdio_client() -- see test_upstream.py's own module
+# docstring: those need a real subprocess, exercised by the manual E2E
+# instead). Level of repro: STUB -- a fake AsyncExitStack whose aclose()
+# raises a cancel-scope-style BaseException, which is exactly the failure
+# mode _BaseUpstreamConnection.close()/connect() must now swallow/clean up.
+# A genuine real-subprocess repro would require racing a real child
+# process's stdio teardown against an ALREADY-cancelling ancestor scope,
+# which is not practical to drive deterministically in a unit-test process.
+# ---------------------------------------------------------------------------
+
+
+class _RaisingStack:
+    """Stub AsyncExitStack whose aclose() raises a cancel-scope-style
+    BaseException -- mirrors what stdio_client()'s baked-in process-kill
+    teardown can do when it runs from inside close_all()'s loop while the
+    front stdio server's OWN task group is already unwinding/cancelling."""
+
+    def __init__(self) -> None:
+        self.aclose_called = False
+
+    async def aclose(self) -> None:
+        self.aclose_called = True
+        raise RuntimeError("Attempted to exit a cancel scope that isn't the current task's current cancel scope")
+
+
+class _MinimalBaseConnection(_BaseUpstreamConnection):
+    """A concrete _BaseUpstreamConnection for driving close()/connect() in
+    isolation. _open_transport() is never actually invoked by these tests
+    (they set self._stack directly, or supply a transport stub) -- it only
+    exists to satisfy the ABC."""
+
+    def __init__(self, *args, transport_cm=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._transport_cm = transport_cm
+
+    def _open_transport(self):
+        return self._transport_cm
+
+
+class TestBaseConnectionCloseSwallowsTeardownErrors(unittest.IsolatedAsyncioTestCase):
+    async def test_close_swallows_cancel_scope_style_teardown_error(self) -> None:
+        """(RED before the fix / GREEN after): before the fix, this raised
+        the RuntimeError out of close() -- this exact assertion (close()
+        completes without propagating) is what watched the crash and then
+        watched it disappear once the try/except + shield landed."""
+        conn = _MinimalBaseConnection("stdio-up", "system-x", "staging", on_list_changed=None)
+        raising_stack = _RaisingStack()
+        conn._stack = raising_stack  # type: ignore[assignment]
+        conn._session = object()  # non-None, as a connected upstream would have
+
+        await conn.close()  # must not raise -- this IS the fix under test.
+
+        self.assertTrue(raising_stack.aclose_called)
+        # idempotent / cleared state regardless of the teardown error.
+        self.assertIsNone(conn._stack)
+        self.assertIsNone(conn._session)
+
+    async def test_close_on_never_connected_upstream_is_a_pure_no_op(self) -> None:
+        """Guard: a connection whose connect() never succeeded (self._stack
+        is None) must not try to touch anyio.CancelScope/aclose() at all."""
+        conn = _MinimalBaseConnection("never-connected", "system-x", "staging", on_list_changed=None)
+        await conn.close()  # must not raise
+        self.assertIsNone(conn._stack)
+
+    async def test_close_all_survives_one_upstream_teardown_error_and_closes_sibling(self) -> None:
+        """(b)/(c) of the brief: a registry with a healthy sibling alongside
+        the failing stdio-style upstream -- close_all() must still close the
+        sibling and the BaseException must not escape (front-shutdown
+        scenario: client disconnects, close_all() runs from a `finally`)."""
+        reg = UpstreamRegistry([_spec("bad", required=False), _spec("good", required=False)])
+
+        bad = _MinimalBaseConnection("bad", "system-bad", "staging", on_list_changed=None)
+        bad._stack = _RaisingStack()  # type: ignore[assignment]
+        bad._session = object()
+
+        good = _FakeConnection("good", "system-good", "staging")
+        good.connected = True
+
+        reg._connections["bad"] = bad
+        reg._connections["good"] = good
+        reg._up["bad"] = True
+        reg._up["good"] = True
+
+        await reg.close_all()  # must complete without propagating "bad"'s BaseException.
+
+        self.assertTrue(good.closed)  # sibling still closed
+        self.assertIsNone(bad._stack)
+
+
+class _TrackedTransportCM:
+    """A transport-shaped async context manager that records whether its
+    __aexit__ (the real StdioUpstreamConnection's process-kill teardown, in
+    production) actually ran."""
+
+    def __init__(self, streams: tuple[object, object]) -> None:
+        self._streams = streams
+        self.exited = False
+
+    async def __aenter__(self):
+        return self._streams
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        self.exited = True
+        return False
+
+
+class _CancellingSession:
+    """Stands in for mcp.ClientSession: a normal async context manager whose
+    initialize() raises asyncio.CancelledError -- simulating a stdio
+    connect() TIMEOUT (asyncio.wait_for cancelling connect_all()'s call to
+    conn.connect() mid-handshake, section 21.2). CancelledError is a
+    BaseException, not an Exception, since Python 3.8."""
+
+    def __init__(self, read_stream, write_stream, message_handler=None) -> None:
+        del read_stream, write_stream, message_handler
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    async def initialize(self) -> None:
+        raise asyncio.CancelledError("simulated stdio connect timeout mid-handshake")
+
+
+class TestConnectFailureTeardownBroadenedToBaseException(unittest.IsolatedAsyncioTestCase):
+    """Adjacent leak (BUG 1, connect()-side): a stdio connect() TIMEOUT
+    raises asyncio.CancelledError (a BaseException, not an Exception) into
+    connect(). Before the fix, `except Exception` skipped stack.aclose()
+    entirely, discarding the partial stack (holding the spawned subprocess)
+    WITHOUT tearing it down -- an orphaned child process. After the fix, the
+    teardown runs (shielded) and the original exception still propagates
+    (the connect-failure return contract is unchanged)."""
+
+    async def test_cancelled_error_during_initialize_still_tears_down_transport(self) -> None:
+        transport_cm = _TrackedTransportCM((object(), object()))
+        conn = _MinimalBaseConnection(
+            "stdio-up", "system-x", "staging", on_list_changed=None, transport_cm=transport_cm
+        )
+
+        import reeflex_mcp.upstream as upstream_mod
+
+        original_session_cls = upstream_mod.ClientSession
+        upstream_mod.ClientSession = _CancellingSession
+        try:
+            with self.assertRaises(asyncio.CancelledError):
+                await conn.connect()
+        finally:
+            upstream_mod.ClientSession = original_session_cls
+
+        # the transport's own teardown (which, for a real
+        # StdioUpstreamConnection, is what kills the spawned child process)
+        # ran despite the BaseException -- this is exactly what "orphaned
+        # child process" means when it does NOT run.
+        self.assertTrue(transport_cm.exited)
+        # connect() never assigns self._stack/self._session on a failure path.
+        self.assertIsNone(conn._stack)
+        self.assertIsNone(conn._session)
 
 
 if __name__ == "__main__":

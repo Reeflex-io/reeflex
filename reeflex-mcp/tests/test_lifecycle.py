@@ -128,6 +128,55 @@ class TestImportProfileSetup(unittest.TestCase):
         backup_data = json.loads(Path(result.backup_path).read_text())
         self.assertEqual(set(backup_data["mcpServers"].keys()), {"filesystem", "github"})
 
+    def test_core_url_and_mode_forwarded_into_gateway_env(self) -> None:
+        """BUG 3(2): import_profile forwards core_url/mode through to
+        client_configs.gateway_entry() so the scaffolded entry carries the
+        env the launched gateway needs to reach reeflex-core."""
+        client_path = _tmp_client_config({
+            "mcpServers": {
+                "filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"]},
+            }
+        })
+        profile = client_configs.ClientProfile("test", "Test Client", client_path)
+        reeflex_yaml = _tmp_reeflex_yaml_path()
+
+        lifecycle.import_profile(
+            profile,
+            reeflex_config_path=reeflex_yaml,
+            default_environment="staging",
+            interactive=False,
+            core_url="https://core.example.internal",
+            mode="observe",
+        )
+
+        rewritten = client_configs.load_client_config(client_path)
+        entry = client_configs.get_mcp_servers(rewritten)[client_configs.OWNERSHIP_NAME]
+        self.assertEqual(
+            entry["env"],
+            {"REEFLEX_CORE_URL": "https://core.example.internal", "REEFLEX_MODE": "observe"},
+        )
+        # secrets by-reference: no token anywhere in the written entry.
+        self.assertNotIn("REEFLEX_CORE_TOKEN", json.dumps(entry))
+
+    def test_core_url_and_mode_default_to_none_no_env_written(self) -> None:
+        """A caller that does not pass core_url/mode (e.g. cmd_import today)
+        reproduces the prior no-env entry -- no behavior change for it."""
+        client_path = _tmp_client_config({
+            "mcpServers": {
+                "filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"]},
+            }
+        })
+        profile = client_configs.ClientProfile("test", "Test Client", client_path)
+        reeflex_yaml = _tmp_reeflex_yaml_path()
+
+        lifecycle.import_profile(
+            profile, reeflex_config_path=reeflex_yaml, default_environment="staging", interactive=False
+        )
+
+        rewritten = client_configs.load_client_config(client_path)
+        entry = client_configs.get_mcp_servers(rewritten)[client_configs.OWNERSHIP_NAME]
+        self.assertNotIn("env", entry)
+
     def test_already_configured_is_a_clean_no_op(self) -> None:
         client_path = _tmp_client_config({
             "mcpServers": {client_configs.OWNERSHIP_NAME: client_configs.gateway_entry(config_path="x.yaml")}
