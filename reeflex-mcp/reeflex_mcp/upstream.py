@@ -453,6 +453,27 @@ class UpstreamRegistry:
         if self._on_tools_changed is not None:
             await self._on_tools_changed()
 
+    def tool_annotations(self, upstream_name: str, tool_name: str) -> types.ToolAnnotations | None:
+        """BUG 2 fix, option B: return the MCP-declared `types.ToolAnnotations`
+        (readOnlyHint/destructiveHint/idempotentHint) for one REAL
+        (un-namespaced) `tool_name` on `upstream_name`, read from the
+        already-cached `_tool_cache` (populated at connect time / on
+        `tools/list_changed` -- see `_connect_and_register()` and
+        `_handle_upstream_tools_changed()`). Zero new network I/O.
+
+        Returns None if the upstream is unknown/down, the tool is not in its
+        cached list, or the tool itself simply declared no annotations (MCP
+        annotations are optional -- absence is NOT a safe signal; see
+        normalize.py's annotation tier, which treats None exactly like "no
+        actionable annotation" and falls through to the name-heuristic)."""
+        tools = self._tool_cache.get(upstream_name)
+        if tools is None:
+            return None
+        for tool in tools:
+            if tool.name == tool_name:
+                return tool.annotations
+        return None
+
     def aggregated_tools(self) -> list[types.Tool]:
         """The union of every UP upstream's tools, namespaced `<upstream>__<tool>`."""
         out: list[types.Tool] = []

@@ -104,12 +104,13 @@ The Gateway loads ONE `mappings.MappingRegistry` at construction (`self.mappings
 via `registry.effective_mappings_dir()` -- YAML `mappings_dir:` key, or
 `REEFLEX_MCP_MAPPINGS_DIR` env, or this package's own bundled filesystem/
 github/postgres starters) and passes it into every `normalize.build_envelope()`
-call, in BOTH modes. This is the only Track 4 change to the call path itself
--- the 3-tier resolution (declarative mapping -> name-heuristic -> conservative
-default) lives in normalize.py/mappings.py; the gateway just supplies the
-registry and logs which tier fired (stderr, `classification_source`) for the
-GIGO story / debugging (design doc section 8: "Log which tier classified
-each call").
+call, in BOTH modes. The 4-tier resolution (declarative mapping -> MCP
+annotations -> name-heuristic -> conservative default; BUG 2 fix added the
+annotations tier) lives in normalize.py/mappings.py/upstream.py; the gateway
+just supplies the mapping registry + (per-call) the resolved tool's
+`UpstreamRegistry.tool_annotations()` lookup, and logs which tier fired
+(stderr, `classification_source`) for the GIGO story / debugging (design doc
+section 8: "Log which tier classified each call").
 
 TRACK 5.1 -- obligations, read/honor-known/fail-closed-unknown (design doc
 ADDENDUM v1.5 section 25; SPEC section 5/7 minimum #5)
@@ -659,6 +660,12 @@ class Gateway:
         target_system, target_environment = self.upstreams.target_for(upstream_name)
         session_id, agent_id, on_behalf_of = self._derive_session_and_agent()
 
+        # BUG 2 fix (option B): the upstream's own MCP-declared annotations
+        # for this tool, read from the already-cached tools/list result (no
+        # new network call) -- see normalize.py's annotation tier, tried
+        # only when no declarative mapping matched this tool.
+        annotations = self.upstreams.tool_annotations(upstream_name, tool_name)
+
         try:
             envelope = normalize.build_envelope(
                 session_id=session_id,
@@ -670,6 +677,7 @@ class Gateway:
                 tool_name=tool_name,
                 arguments=arguments,
                 mapping_registry=self.mappings,
+                annotations=annotations,
             )
         except Exception as exc:  # noqa: BLE001 -- fail closed on a broken envelope, never dispatch blind
             return _error_result(f"reeflex-mcp: failed to normalize action: {exc}")

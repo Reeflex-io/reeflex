@@ -1,14 +1,19 @@
 """
 test_normalize.py -- unit tests for reeflex_mcp.normalize: the Track 2
-heuristic-only envelope builder, plus (Track 4) the 3-tier resolution
-(declarative mapping -> name-heuristic -> conservative default) via
-classify_call() / build_envelope(mapping_registry=...).
+heuristic-only envelope builder, plus the 4-tier resolution (declarative
+mapping -> MCP annotations -> name-heuristic -> conservative default) via
+classify_call() / build_envelope(mapping_registry=..., annotations=...).
+
+BUG 2 fix coverage: option A (widened `_READ_PREFIXES`) and option B (the
+MCP-annotations tier) -- see normalize.py's module docstring.
 """
 
 from __future__ import annotations
 
 import tempfile
 import unittest
+
+import mcp.types as types
 
 from reeflex_mcp import mappings, normalize
 
@@ -100,6 +105,68 @@ class TestClassifyHeuristic(unittest.TestCase):
         cls = normalize.classify("search_index", {})
         self.assertEqual(cls["verb"], "read")
 
+    # -- BUG 2 fix, option A: widened _READ_PREFIXES -----------------------
+
+    def test_count_prefix_is_read(self) -> None:
+        cls = normalize.classify("count_records", {})
+        self.assertEqual(cls["verb"], "read")
+        self.assertEqual(cls["reversibility"], "reversible")
+
+    def test_fetch_prefix_is_read(self) -> None:
+        cls = normalize.classify("fetch_user", {})
+        self.assertEqual(cls["verb"], "read")
+
+    def test_query_prefix_is_read(self) -> None:
+        cls = normalize.classify("query_database", {})
+        self.assertEqual(cls["verb"], "read")
+
+    def test_describe_prefix_is_read(self) -> None:
+        cls = normalize.classify("describe_table", {})
+        self.assertEqual(cls["verb"], "read")
+
+    def test_find_prefix_is_read(self) -> None:
+        cls = normalize.classify("find_records", {})
+        self.assertEqual(cls["verb"], "read")
+
+    def test_select_prefix_is_read(self) -> None:
+        cls = normalize.classify("select_rows", {})
+        self.assertEqual(cls["verb"], "read")
+
+    def test_bare_get_camelcase_is_read(self) -> None:
+        cls = normalize.classify("getUserProfile", {})
+        self.assertEqual(cls["verb"], "read")
+
+    def test_bare_list_camelcase_is_read(self) -> None:
+        cls = normalize.classify("listActiveUsers", {})
+        self.assertEqual(cls["verb"], "read")
+
+    def test_ambiguous_update_still_hits_conservative_floor(self) -> None:
+        # update_* is deliberately NOT in _READ_PREFIXES -- ambiguous/
+        # mutating-capable prefixes stay on the restrictive floor.
+        cls = normalize.classify("update_records", {})
+        self.assertEqual(cls["verb"], "execute")
+        self.assertEqual(cls["reversibility"], "irreversible")
+        self.assertEqual(cls["blast_radius"], "systemic")
+
+    def test_destructive_name_still_hits_delete_bucket(self) -> None:
+        cls = normalize.classify("delete_user", {})
+        self.assertEqual(cls["verb"], "delete")
+
+    def test_apply_migration_still_hits_conservative_floor(self) -> None:
+        cls = normalize.classify("apply_migration", {})
+        self.assertEqual(cls["verb"], "execute")
+        self.assertEqual(cls["reversibility"], "irreversible")
+        self.assertEqual(cls["blast_radius"], "systemic")
+
+    def test_asymmetry_guard_mutating_token_containing_get_not_downgraded(self) -> None:
+        # "get" appears after the leading token, not as a prefix -- the
+        # asymmetry (startswith, not substring) must hold: this destructive-
+        # looking name is NOT misread as safe by the widened read set.
+        cls = normalize.classify("update_get_x", {})
+        self.assertEqual(cls["verb"], "execute")
+        self.assertEqual(cls["reversibility"], "irreversible")
+        self.assertEqual(cls["blast_radius"], "systemic")
+
     def test_unmatched_conservative_default(self) -> None:
         cls = normalize.classify("frobnicate_widget", {})
         self.assertEqual(cls["verb"], "execute")
@@ -112,6 +179,66 @@ class TestClassifyHeuristic(unittest.TestCase):
         # of how many list-arg items are present.
         cls = normalize.classify("frobnicate_widget", {"items": [1, 2, 3, 4, 5]})
         self.assertEqual(cls["blast_radius"], "systemic")
+
+
+class TestClassifyFromAnnotations(unittest.TestCase):
+    """BUG 2 fix, option B: `_classify_from_annotations()` -- the tier
+    between the declarative mapping and the name-heuristic."""
+
+    def test_read_only_hint_true_classifies_read(self) -> None:
+        ann = types.ToolAnnotations(readOnlyHint=True)
+        result = normalize._classify_from_annotations(ann, count=1)
+        self.assertIsNotNone(result)
+        cls, tier = result
+        self.assertEqual(cls["verb"], "read")
+        self.assertEqual(cls["reversibility"], "reversible")
+        self.assertEqual(tier, "annotation:read")
+
+    def test_read_only_hint_true_even_with_floor_looking_name_via_classify_call(self) -> None:
+        # A tool NAMED like a genuine unknown (would hit the conservative
+        # floor by name alone) but server-annotated readOnlyHint=True must
+        # classify read -- the annotation is authoritative over the name.
+        ann = types.ToolAnnotations(readOnlyHint=True)
+        cls, _count, tier = normalize.classify_call(None, "sys1", "frobnicate_widget", {}, ann)
+        self.assertEqual(cls["verb"], "read")
+        self.assertEqual(tier, "annotation:read")
+
+    def test_destructive_hint_true_classifies_destructive(self) -> None:
+        ann = types.ToolAnnotations(destructiveHint=True)
+        result = normalize._classify_from_annotations(ann, count=1)
+        self.assertIsNotNone(result)
+        cls, tier = result
+        self.assertEqual(cls["verb"], "delete")
+        self.assertEqual(cls["reversibility"], "irreversible")
+        self.assertEqual(tier, "annotation:destructive")
+
+    def test_read_only_hint_wins_over_destructive_hint(self) -> None:
+        # Per MCP spec, destructiveHint is only meaningful when
+        # readOnlyHint == false -- readOnlyHint=True settles it regardless.
+        ann = types.ToolAnnotations(readOnlyHint=True, destructiveHint=True)
+        result = normalize._classify_from_annotations(ann, count=1)
+        cls, tier = result
+        self.assertEqual(cls["verb"], "read")
+        self.assertEqual(tier, "annotation:read")
+
+    def test_annotations_none_returns_none(self) -> None:
+        self.assertIsNone(normalize._classify_from_annotations(None, count=1))
+
+    def test_annotations_present_but_hints_unset_returns_none(self) -> None:
+        # MCP spec: readOnlyHint defaults False, destructiveHint defaults
+        # True WHEN ABSENT -- but absence (Python None here) must NOT be
+        # read as an actionable signal in either direction; fall through.
+        ann = types.ToolAnnotations()
+        self.assertIsNone(normalize._classify_from_annotations(ann, count=1))
+
+    def test_destructive_hint_explicitly_false_with_no_readonly_returns_none(self) -> None:
+        ann = types.ToolAnnotations(destructiveHint=False)
+        self.assertIsNone(normalize._classify_from_annotations(ann, count=1))
+
+    def test_blast_radius_derived_from_count_for_read_bucket(self) -> None:
+        ann = types.ToolAnnotations(readOnlyHint=True)
+        cls, _tier = normalize._classify_from_annotations(ann, count=5)
+        self.assertEqual(cls["blast_radius"], "scoped")
 
 
 class TestBuildEnvelope(unittest.TestCase):
@@ -214,6 +341,50 @@ class TestBuildEnvelope(unittest.TestCase):
         self.assertEqual(env["action"]["verb"], "delete")
         self.assertEqual(env["context"]["classification_source"], "heuristic:delete")
 
+    def test_annotations_classify_read_over_floor_looking_name(self) -> None:
+        ann = types.ToolAnnotations(readOnlyHint=True)
+        env = self._build(tool_name="frobnicate_widget", arguments={}, annotations=ann)
+        self.assertEqual(env["action"]["verb"], "read")
+        self.assertEqual(env["axes"]["reversibility"], "reversible")
+        self.assertEqual(env["context"]["classification_source"], "annotation:read")
+
+    def test_annotations_classify_destructive(self) -> None:
+        ann = types.ToolAnnotations(destructiveHint=True)
+        env = self._build(tool_name="frobnicate_widget", arguments={}, annotations=ann)
+        self.assertEqual(env["action"]["verb"], "delete")
+        self.assertEqual(env["context"]["classification_source"], "annotation:destructive")
+
+    def test_mapping_wins_over_conflicting_annotation(self) -> None:
+        # Declarative mapping is an operator override -- must win even
+        # against a server-declared annotation that would say otherwise.
+        reg = _mapping_registry(
+            "tools:\n  delete_thing: { verb: execute, axes: { reversibility: irreversible, "
+            "blast_radius: systemic, externality: internal } }\n",
+            system="filesystem",
+        )
+        ann = types.ToolAnnotations(readOnlyHint=True)  # would say "read" if consulted
+        env = self._build(
+            target_system="filesystem",
+            tool_name="delete_thing",
+            arguments={},
+            mapping_registry=reg,
+            annotations=ann,
+        )
+        self.assertEqual(env["action"]["verb"], "execute")  # mapping won, not the annotation
+        self.assertEqual(env["context"]["classification_source"], "mapping")
+
+    def test_annotations_absent_falls_to_widened_heuristic(self) -> None:
+        env = self._build(tool_name="fetch_widget", arguments={}, annotations=None)
+        self.assertEqual(env["action"]["verb"], "read")
+        self.assertEqual(env["context"]["classification_source"], "heuristic:read")
+
+    def test_annotations_absent_genuine_unknown_still_floors(self) -> None:
+        env = self._build(tool_name="frobnicate_widget", arguments={}, annotations=None)
+        self.assertEqual(env["action"]["verb"], "execute")
+        self.assertEqual(env["axes"]["reversibility"], "irreversible")
+        self.assertEqual(env["axes"]["blast_radius"], "systemic")
+        self.assertEqual(env["context"]["classification_source"], "heuristic:default")
+
 
 class TestClassifyCall(unittest.TestCase):
     def test_mapping_tier_wins_over_heuristic(self) -> None:
@@ -256,6 +427,35 @@ class TestClassifyCall(unittest.TestCase):
         cls, _count, tier = normalize.classify_call(reg, "notes", "delete_notes", {})
         self.assertEqual(tier, "heuristic:delete")  # mapping is for 'widgets', not 'notes' -- no match
         self.assertEqual(cls["verb"], "delete")
+
+    # -- BUG 2 fix, option B: annotation tier precedence ---------------------
+
+    def test_annotation_tier_wins_over_name_heuristic(self) -> None:
+        # "frobnicate_widget" alone would hit the conservative floor -- a
+        # server-declared readOnlyHint=True must win instead (tier 2 over 3).
+        ann = types.ToolAnnotations(readOnlyHint=True)
+        cls, _count, tier = normalize.classify_call(None, "notes", "frobnicate_widget", {}, ann)
+        self.assertEqual(tier, "annotation:read")
+        self.assertEqual(cls["verb"], "read")
+
+    def test_mapping_tier_wins_over_annotation_tier(self) -> None:
+        reg = _mapping_registry(
+            "tools:\n  delete_notes: { verb: execute }\n", system="notes"
+        )
+        ann = types.ToolAnnotations(readOnlyHint=True)  # would say "read" if consulted
+        cls, _count, tier = normalize.classify_call(reg, "notes", "delete_notes", {}, ann)
+        self.assertEqual(tier, "mapping")
+        self.assertEqual(cls["verb"], "execute")
+
+    def test_annotation_absent_falls_through_to_heuristic(self) -> None:
+        cls, _count, tier = normalize.classify_call(None, "notes", "delete_notes", {}, None)
+        self.assertEqual(tier, "heuristic:delete")
+        self.assertEqual(cls["verb"], "delete")
+
+    def test_annotation_absent_genuine_unknown_falls_to_floor(self) -> None:
+        cls, _count, tier = normalize.classify_call(None, "notes", "frobnicate_widget", {}, None)
+        self.assertEqual(tier, "heuristic:default")
+        self.assertEqual(cls["verb"], "execute")
 
 
 if __name__ == "__main__":

@@ -27,11 +27,15 @@ class _FakeConnection(UpstreamConnection):
     """A fake upstream: connects instantly (or fails, or hangs) per test setup."""
 
     def __init__(self, name, target_system, target_environment, *, fail: bool = False, hang: bool = False,
-                 tools: list[str] | None = None):
+                 tools: list[str] | None = None,
+                 annotations: dict[str, types.ToolAnnotations] | None = None):
         super().__init__(name, target_system, target_environment)
         self._fail = fail
         self._hang = hang
         self._tools = tools if tools is not None else ["read_thing", "delete_thing"]
+        # BUG 2 fix (option B): optional per-tool-name annotations this fake
+        # reports via list_tools() -- {} / None means "no tool declares any".
+        self._annotations = annotations or {}
         self.connected = False
         self.closed = False
         self.calls: list[tuple[str, dict]] = []
@@ -44,8 +48,15 @@ class _FakeConnection(UpstreamConnection):
         self.connected = True
 
     async def list_tools(self) -> list[types.Tool]:
-        return [types.Tool(name=t, description=f"{t} tool", inputSchema={"type": "object", "properties": {}})
-                for t in self._tools]
+        return [
+            types.Tool(
+                name=t,
+                description=f"{t} tool",
+                inputSchema={"type": "object", "properties": {}},
+                annotations=self._annotations.get(t),
+            )
+            for t in self._tools
+        ]
 
     async def call_tool(self, tool_name: str, arguments: dict) -> types.CallToolResult:
         self.calls.append((tool_name, arguments))
@@ -509,6 +520,66 @@ class TestConnectFailureTeardownBroadenedToBaseException(unittest.IsolatedAsynci
         # connect() never assigns self._stack/self._session on a failure path.
         self.assertIsNone(conn._stack)
         self.assertIsNone(conn._session)
+
+
+# ---------------------------------------------------------------------------
+# BUG 2 fix (option B): UpstreamRegistry.tool_annotations() -- reads the
+# already-cached tools/list result (_tool_cache), zero new network I/O.
+# ---------------------------------------------------------------------------
+
+
+class TestToolAnnotations(unittest.IsolatedAsyncioTestCase):
+    async def _connected_registry(self, *, annotations: dict[str, types.ToolAnnotations]):
+        reg = UpstreamRegistry([_spec("fs")])
+        fake = _FakeConnection(
+            "fs", "system-fs", "staging", tools=["read_thing", "delete_thing", "plain_thing"],
+            annotations=annotations,
+        )
+
+        import reeflex_mcp.upstream as upstream_mod
+
+        original_build = upstream_mod.build_connection
+        upstream_mod.build_connection = lambda spec, *, on_list_changed: fake
+        try:
+            await reg.connect_all(connect_timeout=1.0)
+        finally:
+            upstream_mod.build_connection = original_build
+        return reg
+
+    async def test_returns_cached_annotations_for_known_tool(self) -> None:
+        ann = types.ToolAnnotations(readOnlyHint=True)
+        reg = await self._connected_registry(annotations={"read_thing": ann})
+        result = reg.tool_annotations("fs", "read_thing")
+        self.assertIsNotNone(result)
+        self.assertTrue(result.readOnlyHint)
+
+    async def test_returns_none_for_tool_with_no_declared_annotations(self) -> None:
+        reg = await self._connected_registry(annotations={})
+        self.assertIsNone(reg.tool_annotations("fs", "plain_thing"))
+
+    async def test_returns_none_for_unknown_tool_name(self) -> None:
+        reg = await self._connected_registry(annotations={})
+        self.assertIsNone(reg.tool_annotations("fs", "does_not_exist"))
+
+    async def test_returns_none_for_unknown_upstream(self) -> None:
+        reg = await self._connected_registry(annotations={})
+        self.assertIsNone(reg.tool_annotations("no-such-upstream", "read_thing"))
+
+    async def test_returns_none_for_down_upstream(self) -> None:
+        # Down upstream is not in _tool_cache at all (never populated).
+        reg = UpstreamRegistry([_spec("bad", required=False)])
+        fake = _FakeConnection("bad", "system-bad", "staging", fail=True)
+
+        import reeflex_mcp.upstream as upstream_mod
+
+        original_build = upstream_mod.build_connection
+        upstream_mod.build_connection = lambda spec, *, on_list_changed: fake
+        try:
+            await reg.connect_all(connect_timeout=1.0)  # must not raise (non-required)
+        finally:
+            upstream_mod.build_connection = original_build
+
+        self.assertIsNone(reg.tool_annotations("bad", "read_thing"))
 
 
 if __name__ == "__main__":
