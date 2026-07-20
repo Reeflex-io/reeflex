@@ -12,7 +12,7 @@ deterministically (no LLM in the decision path).
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-v0.1%20preview-orange.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-207%20core%20%C2%B7%209%2F9%20policy-brightgreen.svg)](#status--v01-preview)
+[![Tests](https://img.shields.io/badge/tests-255%20core%20%C2%B7%209%2F9%20policy-brightgreen.svg)](#status--v01-preview)
 [![CI](https://github.com/Reeflex-io/reeflex/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Reeflex-io/reeflex/actions/workflows/ci.yml)
 [![WordPress](https://img.shields.io/badge/WordPress-6.9%2B-21759b.svg)](reeflex-wordpress/)
 [![Release](https://img.shields.io/github/v/release/Reeflex-io/reeflex?sort=semver&color=6a4c93)](https://github.com/Reeflex-io/reeflex/releases)
@@ -27,6 +27,13 @@ deterministically (no LLM in the decision path).
 ---
 
 ## What is Reeflex?
+
+Reeflex is a **decision firewall** for AI agents. A decision firewall is a
+deterministic gate that judges what an AI agent's action would DO — its
+reversibility, blast radius, and cumulative session impact — and allows, holds,
+or denies it before it reaches your systems, independent of which agent is
+asking. (Not an agent firewall that scans traffic — a decision firewall that
+judges impact.)
 
 AI agents can now write to your database, edit your store, send your emails.
 That capability is racing ahead — the safety layer underneath it has not kept
@@ -234,9 +241,9 @@ adapters ship in this repo — see below.
 | Adapter | Boundary | Status |
 |---|---|---|
 | [`reeflex-mock`](reeflex-mock/) | in-memory reference | worked example + 5-scenario demo |
-| [`reeflex-claude`](reeflex-claude/) | Claude Code (source-side) | `pip install reeflex-claude` · conformance-tested · 133 tests |
+| [`reeflex-claude`](reeflex-claude/) | Claude Code (source-side) | `pip install reeflex-claude` · conformance-tested · 196 tests |
 | [`reeflex-wordpress`](reeflex-wordpress/) | WordPress Abilities API (resource-side) | conformance-tested end-to-end |
-| [`reeflex-mcp`](reeflex-mcp/) | MCP gateway — any MCP upstream (network boundary) | conformance-tested · 287 tests · Apache-2.0 · not yet on PyPI (install from source) |
+| [`reeflex-mcp`](reeflex-mcp/) | MCP gateway — any MCP upstream (network boundary) | conformance-tested · 290 tests · Apache-2.0 · not yet on PyPI (install from source) |
 | [`n8n-nodes-reeflex`](n8n-nodes-reeflex/) | n8n workflow node (agent-side) | MIT · not yet on npm (install from source) |
 | `reeflex-postgres` | database wire-protocol | on the roadmap |
 | `reeflex-graphql` | GraphQL resolvers | on the roadmap |
@@ -255,7 +262,7 @@ Already running MCP servers (filesystem, GitHub, Postgres, your own)? Put
 
 **Shipping today:**
 
-- `reeflex-core` decision engine (`POST /v1/decide`) — Python + OPA/Rego, **207** unit tests (1 platform-specific skip), **9/9** policy tests
+- `reeflex-core` decision engine (`POST /v1/decide`) — Python + OPA/Rego, **255** unit tests (1 platform-specific skip), **9/9** policy tests
 - Base policy pack (R1–R5): read-only allow, irreversible-broad-prod approval, irreversible-systemic-prod deny, default allow, session delete-budget
 - Fail-closed on any OPA error or unreachable core — never a silent allow
 - Anti-fragmentation: a per-session cumulative ledger defeats split-batch evasion
