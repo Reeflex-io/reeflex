@@ -1,3 +1,11 @@
+---
+title: "Reeflex's five-rule AI agent governance policy, in one minute"
+description: >-
+  A plain-language walkthrough of Reeflex's AI agent governance policy: five
+  base rules, a session delete-budget guard, observe mode, and what the
+  rules miss.
+---
+
 # Your AI agent has the same database access you do. That's the problem.
 
 > Canonical version on dev.to: https://dev.to/leodavidsec/your-ai-agent-has-the-same-database-access-you-do-thats-the-problem-2go6

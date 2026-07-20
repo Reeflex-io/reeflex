@@ -1,3 +1,11 @@
+---
+title: "Reeflex SIEM integration: AI agent security audit streaming"
+description: >-
+  Stream every Reeflex decision and audit event to your SIEM (Splunk, QRadar,
+  Wazuh, and more) as structured syslog for real-time AI agent security
+  monitoring.
+---
+
 # Reeflex SIEM Integration
 
 <!-- doc-version: siem-v1.0 | source: reeflex-core/app/telemetry.py @ CORE_VERSION 0.1.8 -->

@@ -1,3 +1,11 @@
+---
+title: "Why Reeflex: a decision firewall vs. identity and guardrails"
+description: >-
+  Reeflex is a decision firewall for AI agents, judging an action's safety
+  rather than actor identity or prompt content, with HITL, HOTL, and AIL
+  resolution.
+---
+
 # Why Reeflex — and how it fits next to what you already run
 
 Three different questions get asked before an AI agent touches your systems.

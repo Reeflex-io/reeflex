@@ -1,9 +1,10 @@
 ---
-title: Reeflex documentation
+title: "Reeflex: the decision firewall for AI agents"
 description: >-
-  Reeflex governs what AI agents may do to your systems — before it happens. It
-  decides allow, hold, or deny on the impact an action would have, on any
-  backend, deterministically (zero LLM in the decision path).
+  Reeflex is a decision firewall for AI agents: it governs what an AI agent may
+  do to your systems, deciding allow, hold, or deny on each action's real-world
+  impact — on any backend, before it runs. Official documentation for stopping
+  AI agents from taking destructive actions, deterministically.
 hide:
   - navigation
   - toc
@@ -11,7 +12,7 @@ hide:
 
 <div class="reeflex-hero" markdown>
 
-<span class="tag">Action governance — decided on impact, not identity</span>
+<span class="tag">A decision firewall for AI-agent actions — decided on impact, not identity</span>
 
 # Govern agents you don't own — the documentation
 

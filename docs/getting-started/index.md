@@ -1,9 +1,9 @@
 ---
 title: Getting started
 description: >-
-  Install a Reeflex adapter and watch it hold a destructive action in minutes —
-  Claude Code, n8n, WordPress, or an existing MCP server. Observe-mode first,
-  so nothing breaks.
+  Install Reeflex — the decision firewall for AI-agent actions — and watch it
+  hold a destructive action in minutes: Claude Code, n8n, WordPress, or an
+  existing MCP server. Observe-mode first, so nothing breaks.
 ---
 
 # Getting started

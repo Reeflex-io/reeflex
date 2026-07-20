@@ -1,3 +1,11 @@
+---
+title: "ADR-0002: why reeflex-core keeps a zero LLM decision path"
+description: >-
+  The recorded decision to keep /v1/decide OPA/Rego-only with zero LLM calls
+  or free-text input: a deterministic, auditable proof point, not a headline
+  claim.
+---
+
 # ADR-0002 — No LLM in the Decision Path
 
 **Status:** Accepted — 2026-06-30

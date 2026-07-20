@@ -556,3 +556,20 @@
   max-width: 30rem;
   margin: 0 auto 1.6rem;
 }
+
+/* =====================================================================
+   Definition callout (.rf-definition) — the quotable "decision firewall"
+   block on Concepts. A calm, extractable definition: ember left-rule + a
+   faint tint, using Material's own tokens so contrast holds in both
+   palettes (no baked colors). Not an admonition — no title bar, so the
+   sentence itself is the first thing read and quoted.
+   ===================================================================== */
+.md-typeset .rf-definition {
+  border-left: 3px solid var(--rf-ember);
+  background: var(--md-code-bg-color);
+  padding: 0.8rem 1rem;
+  margin: 1.2em 0;
+  border-radius: 0.15rem;
+}
+.md-typeset .rf-definition > :first-child { margin-top: 0; }
+.md-typeset .rf-definition > :last-child { margin-bottom: 0; }

@@ -1,3 +1,11 @@
+---
+title: "Reeflex open-core boundary: open source AI agent governance"
+description: >-
+  What is Apache-2.0 and open in Reeflex (engine, adapters, policy, spec)
+  versus the commercial Attest/Fleet/Cloud tier, and where that boundary is
+  drawn.
+---
+
 # Reeflex — Open-Core Boundary
 
 This document defines which components of Reeflex are open-source and which are commercial

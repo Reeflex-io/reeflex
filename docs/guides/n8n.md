@@ -1,3 +1,11 @@
+---
+title: "Govern n8n agents with Reeflex: n8n AI governance, zero-code"
+description: >-
+  Add AI governance to an n8n agent node with built-in HTTP Request, Switch,
+  and Wait nodes, or the dedicated n8n-nodes-reeflex node — no custom code
+  required.
+---
+
 # Govern your n8n agents (zero-code)
 
 You do not need to install anything to put Reeflex in front of an n8n

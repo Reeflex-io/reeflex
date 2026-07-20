@@ -1,8 +1,8 @@
 # Reeflex Docs
 
-> Reeflex is a deterministic gate that decides allow / hold / deny on an AI agent's action before it runs — on any backend, with zero LLM in the decision path. Same action in, same decision out, every time.
+> Reeflex is a decision firewall for AI agents: a control point between an AI agent and your systems that judges each action by its real-world impact — reversibility, blast radius, externality — and allows, holds for a human, or denies it before it runs. On any backend, deterministically (zero LLM in the decision path).
 
-Documentation for the open-source `reeflex-core` engine and its reference adapters. The engine evaluates a universal Action Envelope with OPA/Rego and returns allow, deny, or require_approval (a hold). Open tier is Apache 2.0.
+Documentation for the open-source `reeflex-core` engine and its reference adapters. A decision firewall inspects the **action** (what it would do), not the **traffic** (prompts, tokens, requests) — so a fully authorized agent with a clean prompt is still stopped before a destructive action such as a bulk production delete. The engine evaluates a universal Action Envelope with OPA/Rego and returns allow, deny, or require_approval (a hold). Open tier is Apache 2.0.
 
 ## Docs
 - [Getting started](https://docs.reeflex.io/getting-started/): install an adapter, try a real decision in 30 seconds, and the observe → enforce playbook

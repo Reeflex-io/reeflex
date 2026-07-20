@@ -1,3 +1,11 @@
+---
+title: "Adapt Reeflex's OPA Rego policy to your agent action rules"
+description: >-
+  Customize the agent action rules reeflex-core evaluates: change a
+  threshold, add a rule, or swap the OPA/Rego policy file, each verified with
+  opa test.
+---
+
 # Adapt Reeflex to your use case
 
 The entire decision policy that `reeflex-core` evaluates is **one Rego file**:

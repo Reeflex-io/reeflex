@@ -16,6 +16,14 @@ It decides allow / hold / deny on the *impact* an action would actually have
 activity — not just whether the caller is allowed. On any backend, and
 deterministically (zero LLM in the decision path). See [Concepts](concepts/index.md).
 
+**What is a decision firewall?**
+A decision firewall is a control point between an AI agent and your systems that
+judges each action by its real-world impact — how reversible it is, how wide its
+blast radius, whether it reaches outside your systems — and allows it, holds it
+for a human, or denies it before it runs. Reeflex is a decision firewall: the
+checkpoint idea of a network firewall, moved from packets to **agent actions**.
+See [Concepts](concepts/index.md).
+
 **Is there an LLM in the decision path?**
 No. `/v1/decide` is OPA/Rego plus classical logic — no LLM, no network, no
 wall-clock. Free text, markdown, and OKF documents are never decision inputs.
@@ -29,6 +37,18 @@ WordPress, n8n, and the MCP gateway. Others (`reeflex-postgres`, `reeflex-s3`,
 …) are community-built against the public spec — see [Adapters](adapters/index.md).
 
 ## How it compares
+
+**How is this different from an AI firewall or an agent firewall?**
+It depends on what the firewall inspects. Most tools called an "AI firewall" or
+"agent firewall" inspect **traffic**: they scan prompts, tokens, and requests at
+the network or model edge for injection, data exfiltration, or policy strings —
+useful, and complementary. A **decision firewall** inspects the **action**: it
+prices what the action would actually do — reversibility, blast radius,
+externality, and the session's cumulative total — and rules allow / hold / deny
+before it runs. A prompt can be perfectly clean and the traffic perfectly
+authorized while the action itself deletes 500 products; that is the case a
+decision firewall is built for. Run both: the traffic scanner for what is said,
+the decision firewall for what gets *done*.
 
 **How is this different from Microsoft's Agent Governance Toolkit?**
 They cover different halves, and compose. Microsoft's toolkit governs the agents
@@ -50,6 +70,17 @@ externality, and cumulative session state. They compose — keep your access lay
 for *who*, add Reeflex for *what the action does*.
 
 ## Running it
+
+**How do I stop an AI agent from deleting production data?**
+Put a decision firewall in front of the action and run it in **enforce** mode.
+Reeflex prices each action on impact, so a bulk or irreversible delete against a
+production target is denied or held for a human before it executes — and because
+it also tracks the session's cumulative total, an agent can't slip the same
+destructive action through by splitting it into many small deletes
+(fragmentation). Point your adapter's `target.environment` at `production`, keep
+the base policy's bulk-delete and irreversible-action rules (R1–R5), and start in
+observe to calibrate, then switch to enforce. Walkthrough:
+[Getting started](getting-started/index.md) and the [policy guide](policy-guide.md).
 
 **How do I try it without installing anything?**
 One `curl` against the public evaluation endpoint — see

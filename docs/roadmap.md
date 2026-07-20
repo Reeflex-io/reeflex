@@ -51,7 +51,7 @@ cryptographically signed.
 **Policy packs** — pre-built Rego packs (content safety, data protection,
 financial safety) and cumulative session budgets for `transact` (spend) and
 `emit` (egress), extending the existing delete-budget ledger. Also an open
-decision on the [R5 delete-budget scope](getting-started/index.md#about-the-eval-endpoint)
+decision on the [R5 delete-budget scope](policy-guide.md)
 (all-verbs vs destructive-only).
 
 **OKF constitution bundle** — publishing the Rego policy pack as an Open
