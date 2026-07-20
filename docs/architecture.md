@@ -1,3 +1,11 @@
+---
+title: "Reeflex architecture: the AI agent governance decision flow"
+description: >-
+  Reeflex's agent-governance architecture: the Action Envelope, the
+  deterministic OPA/Rego decision round-trip, adapter seams, and on-prem vs.
+  hosted deployment.
+---
+
 # Reeflex — Architecture
 
 This document describes the decision flow and the two deployment variants. For the recorded decision on deployment sequencing and open-core boundary, see [`docs/adr/0001-deployment-model.md`](adr/0001-deployment-model.md).

@@ -7,6 +7,23 @@ description: >-
 
 # Concepts
 
+<div class="rf-definition" markdown>
+
+**A decision firewall** is a control point between an AI agent and your systems
+that judges each action by its real-world impact — how reversible it is, how
+wide its blast radius, whether it reaches outside your systems — and allows it,
+holds it for a human, or denies it before it runs.
+
+</div>
+
+Reeflex is a decision firewall. An **AI firewall** or **agent firewall** in the
+usual sense inspects *traffic* — prompts, tokens, requests at the network edge.
+A decision firewall inspects the *action*: it prices what the action would
+actually do and rules on that, so a fully authenticated agent with a clean
+prompt is still stopped before it deletes 500 records. Same idea as a network
+firewall — a checkpoint that allows or blocks — moved from packets to
+**agent actions**.
+
 Reeflex governs **actions**, not tools. Every backend action an agent attempts
 is normalized into one universal shape and priced on risk, so a single
 deterministic engine governs Postgres, S3, WordPress, and a coding agent

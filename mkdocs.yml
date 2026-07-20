@@ -2,8 +2,10 @@
 # Source of truth: docs/. Deployed by .github/workflows/docs.yml to GitHub Pages.
 site_name: Reeflex Docs
 site_description: >-
-  Deterministic governance for AI-agent actions. Reeflex decides allow / hold /
-  deny on any backend action before it runs, with zero LLM in the decision path.
+  Reeflex is a decision firewall for AI agents: it governs what an AI agent may
+  do to your systems, deciding allow / hold / deny on each action's real-world
+  impact — on any backend, before it runs. Stop AI agents from taking
+  destructive actions, deterministically, with zero LLM in the decision path.
 site_url: https://docs.reeflex.io/
 site_author: Reeflex
 copyright: >-

@@ -1,3 +1,11 @@
+---
+title: "reeflex-mcp: an MCP governance gateway for tools/call"
+description: >-
+  reeflex-mcp is a self-hosted MCP governance gateway: it intercepts
+  tools/call, normalizes each call, and enforces allow/hold/deny before it
+  runs.
+---
+
 # Reeflex MCP Gateway (`reeflex-mcp`)
 
 <!-- doc-version: mcp-gateway-v1.0 | source: design/MCP-GATEWAY-DESIGN.md (v1 + addenda v1.1-v1.5), reeflex-mcp/ (README.md, reeflex_mcp/*.py, reeflex-mcp.yaml.example), reeflex-spec/SPEC.md -->
