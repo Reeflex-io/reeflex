@@ -10,6 +10,10 @@ It decides allow, hold, or deny on the **impact** an action would actually have
 activity — not just whether the caller is allowed. On any backend, and
 deterministically (no LLM in the decision path).
 
+<img src="n8n-nodes-reeflex/examples/n8n/img/demo1-bulk-delete-guard.gif" alt="An AI agent sends two bulk-delete requests to Postgres; the Reeflex Gate routes the irreversible one to 'Held for approval' with the triggering rule shown, before any rows are deleted." width="820">
+
+*A bulk delete, held before it runs — the gate routes the irreversible one to approval, not execution. Shown via the [n8n adapter](n8n-nodes-reeflex/); the same gate fronts any backend. [More demos →](n8n-nodes-reeflex/examples/n8n/)*
+
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-v0.1%20preview-orange.svg)](CHANGELOG.md)
 [![Tests](https://img.shields.io/badge/tests-255%20core%20%C2%B7%209%2F9%20policy-brightgreen.svg)](#status--v01-preview)
