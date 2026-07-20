@@ -140,6 +140,41 @@ class TestGatewayEntry(unittest.TestCase):
         entry = client_configs.gateway_entry(config_path="/x/reeflex-mcp.yaml")
         self.assertTrue(client_configs.is_ours("reeflex-mcp", entry))
 
+    def test_no_env_block_when_core_url_and_mode_not_given(self) -> None:
+        """Backward compatible: existing callers (e.g. cmd_import, not yet
+        wired to pass core_url/mode) get the prior no-env shape."""
+        entry = client_configs.gateway_entry(config_path="/x/reeflex-mcp.yaml")
+        self.assertNotIn("env", entry)
+
+    def test_env_block_carries_core_url_and_mode_when_given(self) -> None:
+        """BUG 3(2): gateway_entry() emits an 'env' block when core_url/mode
+        are given, so the scaffolded client entry can reach reeflex-core
+        without a hand-edit."""
+        entry = client_configs.gateway_entry(
+            config_path="/x/reeflex-mcp.yaml",
+            core_url="https://core.example.internal",
+            mode="observe",
+        )
+        self.assertEqual(
+            entry["env"],
+            {"REEFLEX_CORE_URL": "https://core.example.internal", "REEFLEX_MODE": "observe"},
+        )
+
+    def test_env_block_omits_a_key_whose_value_is_not_given(self) -> None:
+        entry = client_configs.gateway_entry(config_path="/x/reeflex-mcp.yaml", mode="observe")
+        self.assertEqual(entry["env"], {"REEFLEX_MODE": "observe"})
+        self.assertNotIn("REEFLEX_CORE_URL", entry["env"])
+
+    def test_gateway_entry_has_no_token_parameter_at_all(self) -> None:
+        """Secrets by-reference: gateway_entry() offers no way to write
+        REEFLEX_CORE_TOKEN into the file -- confirmed at the signature level,
+        not just by omission from a given call."""
+        import inspect
+
+        params = inspect.signature(client_configs.gateway_entry).parameters
+        self.assertNotIn("core_token", params)
+        self.assertNotIn("token", params)
+
 
 class TestStandardProfiles(unittest.TestCase):
     def test_three_profiles(self) -> None:

@@ -55,6 +55,7 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import List, Tuple
 
 from . import client_configs, config, lifecycle
@@ -128,6 +129,9 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="target environment for every imported upstream (default: prompt, else 'production')")
     p_setup.add_argument("--non-interactive", action="store_true",
                           help="never prompt; always use --environment or the conservative default")
+    p_setup.add_argument("--core-url", default=None,
+                          help="reeflex-core base URL to write into the scaffolded gateway entry's env "
+                               "(default: $REEFLEX_CORE_URL or http://127.0.0.1:8080)")
 
     p_restore = sub.add_parser(
         "restore",
@@ -448,6 +452,13 @@ def _try_hot_reload(gateway_url: str | None) -> Tuple[bool, str]:
 
 def cmd_setup(args: argparse.Namespace) -> int:
     reeflex_config_path = args.config if args.config is not None else config.config_path()
+    # BUG 3(1): resolve to an ABSOLUTE path before it is written into any
+    # client config's `--config` arg. config.config_path()'s default
+    # ("./reeflex-mcp.yaml") is relative to whatever directory `setup` itself
+    # happened to run in; the gateway the client later LAUNCHES runs with a
+    # different cwd, so the relative path does not resolve there and the
+    # gateway exits ("Server disconnected"). Absolute is cwd-independent.
+    reeflex_config_path = str(Path(reeflex_config_path).resolve())
     profiles = _resolve_target_profiles(args)
 
     if not profiles:
@@ -465,6 +476,22 @@ def cmd_setup(args: argparse.Namespace) -> int:
     default_environment = args.environment or "production"
     interactive = not args.non_interactive and args.environment is None
 
+    # BUG 3(2): the scaffolded client entry must carry the env the gateway
+    # needs to reach reeflex-core, or the user has to hand-edit it in before
+    # the gateway works at all. REEFLEX_MODE is ALWAYS "observe" here --
+    # never default to "enforce" (config.py's never-silently-enforce
+    # philosophy: enforce is an explicit operator opt-in, not a setup
+    # default). REEFLEX_CORE_TOKEN is deliberately NEVER auto-populated from
+    # this process's environment into the written file (secrets by-reference,
+    # not by-copy) -- printed as a one-line manual step instead.
+    core_url_value = args.core_url or config.core_url()
+    mode_value = "observe"
+    print(
+        f"[reeflex-mcp] scaffolding gateway entry with env REEFLEX_CORE_URL={core_url_value!r}, "
+        f"REEFLEX_MODE={mode_value!r}. If reeflex-core requires auth, add REEFLEX_CORE_TOKEN to the "
+        "client config's env block BY HAND -- it is never auto-populated from your environment."
+    )
+
     overall_ok = True
     for profile in profiles:
         try:
@@ -473,6 +500,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 reeflex_config_path=reeflex_config_path,
                 default_environment=default_environment,
                 interactive=interactive,
+                core_url=core_url_value,
+                mode=mode_value,
             )
         except client_configs.ClientConfigError as exc:
             print(f"[reeflex-mcp] ERROR: {exc}", file=sys.stderr)

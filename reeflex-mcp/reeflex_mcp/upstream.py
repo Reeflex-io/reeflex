@@ -51,6 +51,7 @@ import sys
 from contextlib import AsyncExitStack
 from typing import Awaitable, Callable
 
+import anyio
 import mcp.types as types
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -181,8 +182,21 @@ class _BaseUpstreamConnection(UpstreamConnection):
                 ClientSession(read_stream, write_stream, message_handler=self._message_handler)
             )
             await session.initialize()
-        except Exception:
-            await stack.aclose()
+        except BaseException:
+            # Broadened from `except Exception` (adjacent leak, BUG 1): a
+            # stdio connect() TIMEOUT surfaces as asyncio.CancelledError
+            # (thrown into this coroutine by connect_all()'s
+            # asyncio.wait_for) -- a BaseException, not an Exception. The
+            # narrower handler skipped this aclose() entirely, discarding the
+            # partial stack WITHOUT tearing it down and orphaning the
+            # spawned child process. Shield the teardown itself for the same
+            # reason as close() below (an ancestor's in-flight cancellation
+            # racing anyio's cancel-scope bookkeeping mid-teardown), then
+            # re-raise the original failure -- the connect-failure return
+            # contract (_connect_and_register() still sees the failure) is
+            # unchanged.
+            with anyio.CancelScope(shield=True):
+                await stack.aclose()
             raise
         self._stack = stack
         self._session = session
@@ -201,8 +215,15 @@ class _BaseUpstreamConnection(UpstreamConnection):
     async def close(self) -> None:
         stack, self._stack = self._stack, None
         self._session = None
-        if stack is not None:
-            await stack.aclose()
+        if stack is None:
+            return
+        try:
+            with anyio.CancelScope(shield=True):
+                await stack.aclose()
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as exc:  # noqa: BLE001 -- teardown must never crash the process or take a sibling's close() down. stdio_client() has no terminate_on_close knob to skip its process-kill teardown; shielding stops an ancestor's in-flight cancellation from racing anyio's cancel-scope bookkeeping mid-teardown. Time-bounded already (PROCESS_TERMINATION_TIMEOUT).
+            print(f"[reeflex-mcp] WARN: closing upstream {self.name!r} failed: {exc}", file=sys.stderr)
 
 
 class StdioUpstreamConnection(_BaseUpstreamConnection):
@@ -431,6 +452,27 @@ class UpstreamRegistry:
             return
         if self._on_tools_changed is not None:
             await self._on_tools_changed()
+
+    def tool_annotations(self, upstream_name: str, tool_name: str) -> types.ToolAnnotations | None:
+        """BUG 2 fix, option B: return the MCP-declared `types.ToolAnnotations`
+        (readOnlyHint/destructiveHint/idempotentHint) for one REAL
+        (un-namespaced) `tool_name` on `upstream_name`, read from the
+        already-cached `_tool_cache` (populated at connect time / on
+        `tools/list_changed` -- see `_connect_and_register()` and
+        `_handle_upstream_tools_changed()`). Zero new network I/O.
+
+        Returns None if the upstream is unknown/down, the tool is not in its
+        cached list, or the tool itself simply declared no annotations (MCP
+        annotations are optional -- absence is NOT a safe signal; see
+        normalize.py's annotation tier, which treats None exactly like "no
+        actionable annotation" and falls through to the name-heuristic)."""
+        tools = self._tool_cache.get(upstream_name)
+        if tools is None:
+            return None
+        for tool in tools:
+            if tool.name == tool_name:
+                return tool.annotations
+        return None
 
     def aggregated_tools(self) -> list[types.Tool]:
         """The union of every UP upstream's tools, namespaced `<upstream>__<tool>`."""

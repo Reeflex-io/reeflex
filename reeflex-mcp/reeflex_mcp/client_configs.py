@@ -220,7 +220,13 @@ def is_ours(name: str, entry: Any) -> bool:
     return False
 
 
-def gateway_entry(*, config_path: str | None = None, transport: str = "stdio") -> dict[str, Any]:
+def gateway_entry(
+    *,
+    config_path: str | None = None,
+    transport: str = "stdio",
+    core_url: str | None = None,
+    mode: str | None = None,
+) -> dict[str, Any]:
     """The single mcpServers entry a client config is rewritten to.
 
     Prefers the real PATH-resolved `reeflex-mcp` console script (same
@@ -228,6 +234,13 @@ def gateway_entry(*, config_path: str | None = None, transport: str = "stdio") -
     via PATH is itself part of what later verifies the install). Falls back
     to `python -m reeflex_mcp` for a source checkout that has not been
     pip-installed.
+
+    `core_url`/`mode` (BUG 3(2)): when given, emitted as an "env" block
+    (REEFLEX_CORE_URL, REEFLEX_MODE) on the entry, so the launched gateway
+    can reach reeflex-core without the operator hand-adding them after
+    `setup`. Deliberately NOT a place for REEFLEX_CORE_TOKEN -- secrets are
+    by-reference only, never auto-copied from this process's environment
+    into a written file; callers must add that one by hand.
     """
     exe = shutil.which("reeflex-mcp")
     if exe:
@@ -236,4 +249,12 @@ def gateway_entry(*, config_path: str | None = None, transport: str = "stdio") -
         command, args = sys.executable, ["-m", "reeflex_mcp", "--transport", transport]
     if config_path:
         args = [*args, "--config", config_path]
-    return {"command": command, "args": args}
+    entry: dict[str, Any] = {"command": command, "args": args}
+    env: dict[str, str] = {}
+    if core_url:
+        env["REEFLEX_CORE_URL"] = core_url
+    if mode:
+        env["REEFLEX_MODE"] = mode
+    if env:
+        entry["env"] = env
+    return entry

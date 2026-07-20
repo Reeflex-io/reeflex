@@ -24,10 +24,13 @@ classifiers = [
 # on both the front -- FastMCP -- and back -- ClientSession -- sides); `pyyaml`
 # reads the operator-owned reeflex-mcp.yaml registry (SPEC section 7 in the
 # design doc). Both are the minimum needed; reeflex-core-facing HTTP stays
-# stdlib-only (see core_client.py).
+# stdlib-only (see core_client.py). `anyio` was already a transitive `mcp`
+# dependency (>=4.5); pinned explicitly now that upstream.py imports it
+# directly (CancelScope(shield=True) around upstream teardown -- BUG 1 fix).
 dependencies = [
     "mcp>=1.2.0",
     "pyyaml",
+    "anyio>=4.5",
 ]
 
 [project.urls]

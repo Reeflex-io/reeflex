@@ -167,6 +167,8 @@ def import_profile(
     environment_for: dict[str, str] | None = None,
     default_environment: str = _DEFAULT_ENVIRONMENT,
     interactive: bool = True,
+    core_url: str | None = None,
+    mode: str | None = None,
 ) -> ImportResult:
     """Import foreign mcpServers entries from ONE client profile into
     reeflex-mcp.yaml, then rewrite that client config.
@@ -186,6 +188,12 @@ def import_profile(
     interactive: if False, never prompts -- always uses default_environment
       (or the environment_for override) directly. Used by tests, CI, and
       any caller that passed an explicit --environment.
+    core_url/mode: forwarded verbatim to client_configs.gateway_entry() (BUG
+      3(2)) -- when given, the scaffolded gateway entry carries an "env"
+      block (REEFLEX_CORE_URL/REEFLEX_MODE) so the launched gateway can
+      reach reeflex-core without a hand-edit. None (the default) reproduces
+      the prior no-env entry, e.g. for callers (cmd_import) not yet wired to
+      pass them.
 
     Raises client_configs.ClientConfigError on invalid JSON (refuses to
     write anything). Raises LifecycleError if `only_name` is given but not
@@ -247,13 +255,19 @@ def import_profile(
         # untouched, and ensure our gateway entry is present.
         new_servers = dict(servers)
         new_servers.pop(only_name, None)
-        new_servers[client_configs.OWNERSHIP_NAME] = client_configs.gateway_entry(config_path=reeflex_config_path)
+        new_servers[client_configs.OWNERSHIP_NAME] = client_configs.gateway_entry(
+            config_path=reeflex_config_path, core_url=core_url, mode=mode
+        )
         new_data = dict(data)
         new_data["mcpServers"] = new_servers
     else:
         # Bulk setup: the client now launches ONLY the gateway.
         new_data = dict(data)
-        new_data["mcpServers"] = {client_configs.OWNERSHIP_NAME: client_configs.gateway_entry(config_path=reeflex_config_path)}
+        new_data["mcpServers"] = {
+            client_configs.OWNERSHIP_NAME: client_configs.gateway_entry(
+                config_path=reeflex_config_path, core_url=core_url, mode=mode
+            )
+        }
 
     client_configs.write_client_config(profile.path, new_data)
 
