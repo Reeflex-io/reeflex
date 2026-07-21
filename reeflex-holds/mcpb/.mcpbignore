@@ -1,0 +1,31 @@
+# mcpb pack ignore list for reeflex-holds.
+#
+# The SHIPPED bundle should be exactly: manifest.json + server/main.py +
+# server/lib/<installed deps>. Everything below is either build cruft, the
+# build tooling itself (source, not runtime), or the .mcpb output.
+
+# --- build tooling & docs: source of the bundle, never shipped inside it ---
+build.ps1
+build.sh
+README.md
+.mcpbignore
+.gitignore
+
+# --- pip install --target / interpreter cruft ---
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# NOTE: *.dist-info is deliberately NOT excluded. It is small next to the
+# compiled wheels, and some deps read their own version via
+# importlib.metadata.version() at import time -- stripping dist-info would
+# raise PackageNotFoundError at runtime, which our structural (no-server-run)
+# verification cannot catch. Keep it.
+
+# Deps' own test suites (not needed at runtime; safe to drop).
+**/tests/
+**/test/
+
+# Never bundle a previously built bundle.
+*.mcpb
