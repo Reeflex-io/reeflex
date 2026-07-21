@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+## [0.1.14] - reeflex-mcp 0.1.2 (dogfooding fixes)
+
+reeflex-mcp gateway: three first-run / reliability fixes found by dogfooding (installing the gateway in Claude Desktop). No decision-path change; deterministic behavior unchanged.
+
+### Fixed
+- **A failed or closing stdio upstream no longer crashes the whole gateway** (an anyio cancel-scope teardown error). `required: false` now degrades gracefully — the dead upstream is skipped and the healthy ones boot. Also fixes an orphaned-subprocess leak when a stdio upstream connect times out.
+- **Enforce mode no longer denies harmless reads on an unmapped server.** The read-name heuristic is widened (`count_`/`fetch_`/`query_`/`describe_`/`find_`/`select_`, camelCase `get*`/`list*`) and the upstream's own MCP tool annotations (`readOnlyHint`/`destructiveHint`) are honored as an authoritative tier ahead of the heuristic. Genuine unknowns still fail closed.
+- **`reeflex-mcp setup` writes an absolute `--config` path** (fixes "Server disconnected" when the launched gateway's cwd differs from the setup dir) and scaffolds `REEFLEX_CORE_URL` + `REEFLEX_MODE=observe` into the client entry's env — never `enforce` by default; `REEFLEX_CORE_TOKEN` is never auto-written.
+
+
 ## [0.1.13] - audit enrichment (Attest evidence fields)
 
 Core: audit trail enrichment for the compliance-evidence surface (Attest / AI Act Art.14 human-oversight trail). No decision verdict or decision-logic change; additive only.
