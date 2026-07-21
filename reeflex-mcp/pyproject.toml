@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reeflex-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "Reeflex MCP gateway -- a transparent MCP proxy that governs any MCP upstream: intercepts tools/call, normalizes it into a Reeflex Action Envelope, asks reeflex-core /v1/decide, and enforces the verdict. Zero LLM in the decision path."
 readme = "README.md"
 requires-python = ">=3.10"
