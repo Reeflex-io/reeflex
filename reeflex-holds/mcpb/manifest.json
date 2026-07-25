@@ -1,0 +1,88 @@
+{
+  "manifest_version": "0.3",
+  "name": "reeflex-holds",
+  "version": "0.1.1",
+  "description": "MCP server exposing reeflex-core's Human-in-the-Loop (HIL) holds API -- list, inspect, and resolve Reeflex governance holds from any MCP client.",
+  "author": {
+    "name": "Reeflex"
+  },
+  "homepage": "https://reeflex.io",
+  "documentation": "https://docs.reeflex.io",
+  "license": "Apache-2.0",
+  "server": {
+    "type": "python",
+    "entry_point": "server/main.py",
+    "mcp_config": {
+      "command": "python",
+      "args": [
+        "${__dirname}/server/main.py"
+      ],
+      "env": {
+        "PYTHONPATH": "${__dirname}/server/lib",
+        "REEFLEX_CORE_URL": "${user_config.core_url}",
+        "REEFLEX_TOKEN": "${user_config.token}",
+        "REEFLEX_VERIFY_SSL": "${user_config.verify_ssl}",
+        "REEFLEX_PRINCIPAL": "${user_config.principal}"
+      },
+      "platform_overrides": {
+        "win32": {
+          "env": {
+            "PYTHONPATH": "${__dirname}\\server\\lib"
+          }
+        }
+      }
+    }
+  },
+  "user_config": {
+    "core_url": {
+      "type": "string",
+      "title": "Reeflex core URL",
+      "description": "Base URL of the reeflex-core /v1/holds API (e.g. https://api.example.com). Default matches reeflex-holds' own default of http://127.0.0.1:8080.",
+      "default": "http://127.0.0.1:8080",
+      "required": true
+    },
+    "token": {
+      "type": "string",
+      "title": "Gate token (REEFLEX_TOKEN)",
+      "description": "Bearer token for reeflex-core's holds API, sent as 'Authorization: Bearer <token>'. NOTE: this package's env var is REEFLEX_TOKEN, not REEFLEX_CORE_TOKEN used by the other Reeflex adapters -- a known cross-package naming outlier. Never logged.",
+      "sensitive": true,
+      "required": true
+    },
+    "principal": {
+      "title": "Approver principal (type:id)",
+      "description": "Identity that resolves holds via resolve_hold, format 'type:id' (e.g. human:leo or agent:triage-bot). Only required to approve/reject a hold; list_holds, get_hold and get_freeze_status work without it.",
+      "type": "string",
+      "required": false
+    },
+    "verify_ssl": {
+      "type": "boolean",
+      "title": "Verify TLS certificates",
+      "description": "When disabled, skips TLS certificate verification against reeflex-core. Default enabled (secure default); disable only for dev/self-signed endpoints, at the operator's own risk.",
+      "default": true,
+      "required": false
+    }
+  },
+  "tools": [
+    {
+      "name": "list_holds",
+      "description": "List Reeflex holds from reeflex-core, optionally filtered by status (pending, approved, rejected, expired, consumed)."
+    },
+    {
+      "name": "get_hold",
+      "description": "Get the full detail of one Reeflex hold, including its Action Envelope."
+    },
+    {
+      "name": "resolve_hold",
+      "description": "Approve or reject a pending Reeflex hold, as the principal configured on this server (never taken from tool arguments)."
+    },
+    {
+      "name": "get_freeze_status",
+      "description": "Best-effort probe of whether reeflex-core is reachable (freeze_state is always 'unknown' -- core has no dedicated freeze-status endpoint)."
+    }
+  ],
+  "compatibility": {
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  }
+}
