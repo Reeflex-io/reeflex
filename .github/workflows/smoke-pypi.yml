@@ -1,0 +1,52 @@
+# smoke-pypi.yml — fresh-install smoke test of the PUBLISHED PyPI artifacts.
+# Deliberately NOT paths:-filtered and scheduled daily: an upstream dependency
+# release (e.g. mcp 2.0.0 on 2026-07-28) must be able to turn CI red without
+# anyone touching this repo. Installs from PyPI — never from the working tree —
+# and INVOKES each entry point; "the file exists" is not proof (WoW §18.5).
+# `workflow_call` so the future uniform preflight gate (TICKET P1) can invoke
+# this job instead of reimplementing it.
+
+name: smoke-pypi
+
+on:
+  schedule:
+    - cron: "17 5 * * *" # daily, 05:17 UTC
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-pypi:
+    name: pip install ${{ matrix.package }} (PyPI) + invoke
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [reeflex-mcp, reeflex-holds]
+    steps:
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # No checkout: the whole point is testing what a user gets from
+      # `pip install <package>` today, independent of the repo state.
+      - name: Fresh venv + install from PyPI
+        run: |
+          python -m venv smoke-venv
+          smoke-venv/bin/pip install --no-cache-dir "${{ matrix.package }}"
+
+      - name: Show resolved versions (diagnosability)
+        # `pip show mcp` so a future red run is diagnosable from the log alone
+        # (the 2026-07-28 breakage was an unbounded `mcp` resolving to 2.0.0).
+        run: |
+          smoke-venv/bin/pip show "${{ matrix.package }}"
+          smoke-venv/bin/pip show mcp
+          smoke-venv/bin/pip freeze
+
+      - name: Invoke the published entry point
+        run: |
+          smoke-venv/bin/${{ matrix.package }} --help
+          echo "OK: ${{ matrix.package }} --help exited 0"
