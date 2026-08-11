@@ -55,7 +55,10 @@ mkdir -p "$LIB_DIR"
 # ---- 3. pip install reeflex-holds + its deps into server/lib/ ----
 # This is a BUILD step, not running the server -- reeflex-holds' console
 # script / __main__ entry point is never invoked here.
-python3 -m pip install --target "$LIB_DIR" "reeflex-holds==$VERSION" --no-compile
+# constraints.txt caps `mcp<2`: already-published reeflex-holds releases
+# declare mcp>=1.2.0 unbounded, and mcp 2.0.0 removed mcp.server.fastmcp,
+# so an unconstrained build from PyPI ships a server dead at import.
+python3 -m pip install --target "$LIB_DIR" --constraint "$SCRIPT_DIR/constraints.txt" "reeflex-holds==$VERSION" --no-compile
 
 # Drop __pycache__ pip may have left behind (belt-and-suspenders alongside
 # .mcpbignore, in case the packer used below doesn't honor it, e.g. the

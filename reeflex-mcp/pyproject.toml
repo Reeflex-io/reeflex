@@ -28,7 +28,7 @@ classifiers = [
 # dependency (>=4.5); pinned explicitly now that upstream.py imports it
 # directly (CancelScope(shield=True) around upstream teardown -- BUG 1 fix).
 dependencies = [
-    "mcp>=1.2.0",
+    "mcp>=1.2,<2",
     "pyyaml",
     "anyio>=4.5",
 ]

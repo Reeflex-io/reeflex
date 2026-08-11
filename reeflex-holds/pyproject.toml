@@ -24,7 +24,7 @@ classifiers = [
 # way to speak the protocol, so it is the ONE dependency here -- see
 # reeflex-holds/README.md "Why the mcp SDK" for the rationale.
 dependencies = [
-    "mcp>=1.2.0",
+    "mcp>=1.2,<2",
 ]
 
 [project.urls]
