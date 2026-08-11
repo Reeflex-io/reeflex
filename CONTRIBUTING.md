@@ -72,6 +72,25 @@ $env:REEFLEX_POLICY_DIR = "reeflex-core\policy"
 
 ## 3. Running the tests
 
+### The preflight gate (run everything)
+
+The single command that runs the COMPLETE suite — every rego and Python
+suite, the n8n node tests, a build-and-invoke of every published entry
+point, and a fresh-install-from-PyPI smoke — is the repo-root gate:
+
+```bash
+python gate.py
+```
+
+It checks your environment first and STOPS if it is unfit (never a lying
+green), prints every suite it ran with an anchored per-suite verdict, and
+prints `SKIPPED (<reason>)` for anything that cannot run in your context.
+`GATE: GREEN` (exit 0) means everything ran and passed. Run it before any
+release and before opening a PR. `python gate.py --help` lists the flags
+(CI runs it with `--pypi delegated --allow-skips wp-conformance`).
+
+The sections below run individual suites for fast, targeted feedback.
+
 ### Python unit tests
 
 Run from the `reeflex-core/` directory:
@@ -268,10 +287,9 @@ An adapter claiming Reeflex compliance must pass the conformance suite
 3. Make your changes. Add or update tests as needed.
 4. Run the full test suite locally before opening a PR:
    ```bash
-   cd reeflex-core && python -m unittest tests.test_decide -v
-   opa test reeflex-core/policy/ -v
+   python gate.py
    ```
-   Paste the raw output in the PR description.
+   Paste the raw `GATE SUMMARY` + `GATE:` verdict in the PR description.
 5. Open a pull request using the PR template. Fill in every section,
    including the determinism check (no LLM added to the decision path).
 6. A maintainer will review. Reviews focus on correctness, the

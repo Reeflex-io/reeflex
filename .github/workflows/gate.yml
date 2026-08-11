@@ -1,0 +1,71 @@
+# gate.yml — the uniform preflight gate in CI (TICKET P1+P2, WoW §18.5 / §14.6).
+#
+# Deliberately NOT paths:-filtered: a green gate means the WHOLE tree, not the
+# touched slice. The per-package workflows (ci.yml, ci-reeflex-mcp.yml) keep
+# their scope/paths for fast targeted feedback; this workflow is the honest
+# full gate on every PR and every push to main.
+#
+# DoD(4): the fresh-install-from-PyPI smoke is NOT reimplemented here — the
+# smoke-pypi job below INVOKES .github/workflows/smoke-pypi.yml (workflow_call,
+# shipped exactly for this purpose). The gate job runs with --pypi delegated,
+# which prints the delegation instead of keeping a second copy of the smoke.
+# NOTE: the smoke tests the PUBLISHED artifacts — it stays RED until the fixed
+# versions ship to PyPI, independent of the tree under review. Red there means
+# "the published packages are broken", not "this PR is broken".
+#
+# The WordPress conformance harness needs a LIVE reeflex-core and is an
+# ALLOWED, PRINTED skip here (--allow-skips wp-conformance) — see
+# reeflex-wordpress/tests/README.md. Everything else runs.
+
+name: gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    # NO paths: filter — see the header comment.
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  preflight-gate:
+    name: preflight gate (env + full suite + built entry points)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node 22 (n8n-nodes-reeflex needs >=20.15)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install OPA (same version ci.yml pins)
+        run: |
+          curl -sL -o opa https://github.com/open-policy-agent/opa/releases/download/v1.18.0/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+          opa version
+
+      - name: Gate selftest — prove the anchored, case-sensitive parsing (DoD 5)
+        run: python gate.py --selftest
+
+      - name: Run the gate
+        run: python gate.py --pypi delegated --allow-skips wp-conformance
+
+  smoke-pypi:
+    name: fresh-install-from-PyPI smoke
+    # DoD(4) by INVOCATION, not reimplementation (§22.6 collision guard).
+    uses: ./.github/workflows/smoke-pypi.yml
