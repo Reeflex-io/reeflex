@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+## [0.1.15] - reeflex-mcp 0.1.3 + reeflex-holds 0.1.2 (mcp<2 dependency pin)
+
+Both PyPI packages have been broken on FRESH install since 2026-07-28: `mcp` 2.0.0 (released that day) removed the `mcp.server.fastmcp` module, which both `reeflex-mcp` and `reeflex-holds` import at startup, and both packages declared `mcp>=1.2.0` with no upper bound — so a fresh `pip install` resolved `mcp` 2.0.0 and the installed tool died immediately with `ModuleNotFoundError: No module named 'mcp.server.fastmcp'`. Existing environments that already had `mcp` 1.x installed were unaffected.
+
+### Fixed
+- **`reeflex-mcp` 0.1.3 — fresh installs from PyPI work again.** The `mcp` dependency is now capped at `mcp>=1.2,<2`, so pip resolves a 1.x SDK that still ships `mcp.server.fastmcp`. No code change over 0.1.2; if your install already works, this changes nothing. The pin landed on `main` in #71; this version exists to carry it to PyPI, because PyPI versions are immutable and 0.1.2 is already published without the pin.
+- **`reeflex-holds` 0.1.2 — same fix, same cause.** `mcp` capped at `mcp>=1.2,<2`; no code change over 0.1.1, which is already published without the pin and fails on fresh install for the same reason.
+
 ## [0.1.14] - reeflex-mcp 0.1.2 (dogfooding fixes)
 
 reeflex-mcp gateway: three first-run / reliability fixes found by dogfooding (installing the gateway in Claude Desktop). No decision-path change; deterministic behavior unchanged.
