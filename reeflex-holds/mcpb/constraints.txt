@@ -1,0 +1,8 @@
+# pip constraints for the .mcpb bundle build (build.sh / build.ps1, via -c).
+# mcp 2.0.0 (PyPI 2026-07-28) removed mcp.server.fastmcp, which the currently
+# published reeflex-holds releases import at startup. Already-published
+# versions declare `mcp>=1.2.0` with no upper bound, so without this
+# constraint a bundle built from PyPI resolves mcp 2.x and ships a server
+# that dies at import. Remove this file when the FastMCP -> MCPServer
+# migration lands (separate, scheduled work; 12-month offramp).
+mcp<2

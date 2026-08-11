@@ -60,7 +60,10 @@ New-Item -ItemType Directory -Path $LibDir -Force | Out-Null
 # ---- 3. pip install reeflex-holds + its deps into server/lib/ ----
 # This is a BUILD step, not running the server -- reeflex-holds' console
 # script / __main__ entry point is never invoked here.
-& python -m pip install --target $LibDir "reeflex-holds==$Version" --no-compile
+# constraints.txt caps `mcp<2`: already-published reeflex-holds releases
+# declare mcp>=1.2.0 unbounded, and mcp 2.0.0 removed mcp.server.fastmcp,
+# so an unconstrained build from PyPI ships a server dead at import.
+& python -m pip install --target $LibDir --constraint (Join-Path $ScriptDir "constraints.txt") "reeflex-holds==$Version" --no-compile
 if ($LASTEXITCODE -ne 0) {
     throw "pip install failed (exit $LASTEXITCODE) -- see output above."
 }
