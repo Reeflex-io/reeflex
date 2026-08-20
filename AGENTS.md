@@ -38,6 +38,9 @@ passes through the gate. Details: [`reeflex-claude/README.md`](reeflex-claude/RE
 
 ### MCP gateway (`reeflex-mcp`)
 
+Requires **Python 3.10+** (check with `python3 --version` — pip fails with
+"No matching distribution found" on 3.8/3.9, use `python3.10`+ instead).
+
 ```bash
 pip install reeflex-mcp
 reeflex-mcp setup    # migrates client MCP configs (Claude Desktop, Claude Code, etc.) onto the governed path; backs up the originals
@@ -47,6 +50,20 @@ reeflex-mcp check    # fail-closed self-probe: a real tools/call is denied when 
 `reeflex-mcp` is a transparent proxy in front of any MCP upstream (stdio or
 streamable-HTTP). Details: [`reeflex-mcp/README.md`](reeflex-mcp/README.md),
 [`docs/mcp-gateway.md`](docs/mcp-gateway.md).
+
+### Resolve holds (`reeflex-holds`)
+
+Requires **Python 3.10+**, same caveat as above.
+
+```bash
+pip install reeflex-holds
+```
+
+An MCP server exposing `reeflex-core`'s Human-in-the-Loop holds queue
+(list / get / resolve) as MCP tools for any MCP client (Claude Desktop, a
+coding agent). It is not a normalizing adapter — it does not intercept or
+enforce anything; it resolves holds an adapter (WordPress, Claude Code, MCP
+gateway) already raised. Details: [`reeflex-holds/README.md`](reeflex-holds/README.md).
 
 ### n8n (`n8n-nodes-reeflex`)
 
@@ -139,6 +156,6 @@ calibration, not enforcement — the tradeoff is documented per adapter.
 - [`reeflex-spec/SPEC.md`](reeflex-spec/SPEC.md) — the Action Envelope and Adapter Contract (the four responsibilities: intercept, normalize, enforce, audit)
 - [`reeflex-spec/IMPACT-MODEL.md`](reeflex-spec/IMPACT-MODEL.md) — how impact is computed, including [what the base policy does not catch](reeflex-spec/IMPACT-MODEL.md#what-the-base-policy-does-not-catch) (honest limits, not a claim to catch every harm)
 - [https://docs.reeflex.io](https://docs.reeflex.io) — full documentation site (getting started, concepts, architecture, reference)
-- Per-adapter READMEs: [`reeflex-claude/README.md`](reeflex-claude/README.md) · [`reeflex-wordpress/README.md`](reeflex-wordpress/README.md) · [`reeflex-mcp/README.md`](reeflex-mcp/README.md) · [`n8n-nodes-reeflex/`](n8n-nodes-reeflex/)
+- Per-adapter READMEs: [`reeflex-claude/README.md`](reeflex-claude/README.md) · [`reeflex-wordpress/README.md`](reeflex-wordpress/README.md) · [`reeflex-mcp/README.md`](reeflex-mcp/README.md) · [`reeflex-holds/README.md`](reeflex-holds/README.md) · [`n8n-nodes-reeflex/`](n8n-nodes-reeflex/)
 - [`reeflex-mock/`](reeflex-mock/) — a worked in-memory reference adapter, for writing your own against the spec
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to build a new adapter or extend the base policy

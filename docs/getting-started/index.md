@@ -73,8 +73,8 @@ Reeflex returns `require_approval` — the delete is held for a human, not run:
     # Requires Python 3.8+ (upgrade pip on an old box:
     #   python3 -m pip install --upgrade pip)
     pip install reeflex-claude
-    reeflex-claude setup    # writes the PreToolUse hook, fail-closed by default
-    reeflex-claude check    # verifies the deny path
+    reeflex-claude setup   # writes the fail-closed PreToolUse hook into .claude/settings.json
+    reeflex-claude check   # verifies the deny path: fails closed if core is unreachable
     ```
 
     Full guide: [`reeflex-claude/`](https://github.com/Reeflex-io/reeflex/tree/main/reeflex-claude).
@@ -109,10 +109,11 @@ Reeflex returns `require_approval` — the delete is held for a human, not run:
     filesystem, GitHub, Postgres, or your own — with no client rewrite.
     `observe` mode by default; `setup` migrates a client's MCP config for you.
 
-    ```bash title="MCP gateway — run from source"
-    # Not yet published to PyPI — install from source (repo root):
-    cd reeflex-mcp && pip install -e .
-    cp reeflex-mcp.yaml.example reeflex-mcp.yaml   # edit: point upstreams: at a real MCP server
+    ```bash title="MCP gateway — install & run"
+    # Requires Python 3.10+
+    pip install reeflex-mcp
+    curl -o reeflex-mcp.yaml https://raw.githubusercontent.com/Reeflex-io/reeflex/main/reeflex-mcp/reeflex-mcp.yaml.example
+    # edit reeflex-mcp.yaml: point upstreams: at a real MCP server
     reeflex-mcp --config reeflex-mcp.yaml --transport stdio
     ```
 

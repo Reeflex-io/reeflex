@@ -50,8 +50,8 @@ or point at an existing deployment.
 **3. Wire the hook and verify it, in two commands:**
 
 ```bash
-reeflex-claude setup   # writes/merges the PreToolUse hook entry, fail-CLOSED by default
-reeflex-claude check   # verifies: deny scenario -> hook exits correctly
+reeflex-claude setup   # writes the fail-closed PreToolUse hook into .claude/settings.json
+reeflex-claude check   # verifies the deny path: fails closed if core is unreachable
 ```
 
 `setup` targets the current project's `./.claude/settings.json` by default

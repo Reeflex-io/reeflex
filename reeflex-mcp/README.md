@@ -66,8 +66,8 @@ Track 6 (docs, per the design doc) is done: see
 [`docs/mcp-gateway.md`](../docs/mcp-gateway.md) for the full operator guide
 (architecture, deployment modes, config, mappings, obligations, lifecycle,
 and the honest limits) and [`docs/why-reeflex.md`](../docs/why-reeflex.md#reeflex-mcp--governance-judgment-at-the-mcp-seam)
-for the competitive positioning. Not yet built: PyPI publication (Track 7 —
-gated on a human GO).
+for the competitive positioning. Track 7 (PyPI publication) is done:
+`pip install reeflex-mcp`.
 
 ## Declarative mappings (Track 4, design doc section 8)
 
@@ -322,7 +322,16 @@ reeflex-mcp doctor --client claude-desktop
 
 Exits 0 (clean) or 1 (findings) -- scriptable.
 
-## Install (development)
+## Install
+
+```bash
+pip install reeflex-mcp
+```
+
+Requires **Python 3.10+**. There is no packaged `reeflex-mcp.yaml.example`
+inside the wheel — copy it from the repo (raw URL below) or from a clone.
+
+### Install (development, to track `main`)
 
 ```bash
 cd reeflex-mcp
@@ -335,7 +344,12 @@ python -m venv .venv
 
 Copy `reeflex-mcp.yaml.example` to `reeflex-mcp.yaml` and edit the
 `upstreams:` list. See `reeflex_mcp/registry.py`'s module docstring for the
-full field reference.
+full field reference. If you installed from PyPI (no local clone), fetch the
+example file first:
+
+```bash
+curl -o reeflex-mcp.yaml.example https://raw.githubusercontent.com/Reeflex-io/reeflex/main/reeflex-mcp/reeflex-mcp.yaml.example
+```
 
 ## Run
 

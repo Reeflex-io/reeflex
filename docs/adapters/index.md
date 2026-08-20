@@ -22,7 +22,7 @@ resource-side and network-boundary adapters for that reason.
 
 | Adapter | Seam it intercepts | Placement | Status |
 |---|---|---|---|
-| **MCP gateway** | JSON-RPC `tools/call`, in front of any MCP upstream | Network boundary — governs every caller through it | Reference, conformance-tested — source-install (`reeflex-mcp/`); not yet on PyPI |
+| **MCP gateway** | JSON-RPC `tools/call`, in front of any MCP upstream | Network boundary — governs every caller through it | Reference, conformance-tested — on PyPI (`pip install reeflex-mcp`) |
 | **WordPress / WooCommerce** | `WP_Ability::execute()` (Abilities API) | Resource-side (in WordPress) — governs every caller of the site | Reference, release ZIP + WP.org queue |
 | **n8n** | A gate node before a risky step | Source-side (in the workflow) | Published (`n8n-nodes-reeflex`) |
 | **Claude Code** | PreToolUse hook (every tool call) | Source-side (in the agent) — protects you from your *own* agent | Reference, on PyPI |
@@ -46,7 +46,8 @@ resource-side and network-boundary adapters for that reason.
   (filesystem/github/postgres starters) or a heuristic fallback, and enforces
   the verdict. Governs every caller that flows through it. Both stdio and
   streamable-HTTP transports; `setup`/`add`/`import`/`doctor` migrate and
-  drift-check client MCP configs. Not yet on PyPI — install from source.
+  drift-check client MCP configs. On PyPI: `pip install reeflex-mcp`
+  (requires Python 3.10+).
   [Repo](https://github.com/Reeflex-io/reeflex/tree/main/reeflex-mcp) ·
   [Full guide](../mcp-gateway.md)
 - **WordPress / WooCommerce** — wraps the Abilities API seam; governs core,
