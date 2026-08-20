@@ -249,6 +249,22 @@ def _get_agent_identity(envelope: dict) -> str:
     return (envelope.get("agent") or {}).get("id", "")
 
 
+def resolve_session_identity(envelope: dict) -> str:
+    """Resolve the identity that keys the ledger AND that budgets.rego reads
+    as `input.agent.session_id` for per-principal cumulative budgets (RFX-11).
+
+    THE SEAM: this is the ONE place in core that decides "what identifies a
+    session/principal for cumulative accounting". Today that is verbatim
+    `agent.session_id` (SPEC §4.1 F3, already required by envelope.py).
+    RFX-9 is still open on WHERE that identity should come from once adapters
+    speak the post-MCP-spec session model (e.g. an MCP session token vs an
+    adapter-minted id) — when that lands, only this function changes; ledger
+    keying and the Rego budget lookups are untouched because both already
+    consume this function's return value, not the raw envelope field.
+    """
+    return (envelope.get("agent") or {}).get("session_id") or ""
+
+
 def _validate_approval(envelope: dict) -> tuple[int, dict | None, dict | None]:
     """Validate the hold approval attached to the envelope.
 
@@ -397,8 +413,12 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
             _tp = _context.get("traceparent", "")
             traceparent = _tp if isinstance(_tp, str) else ""
 
-        # Step 2: Extract session_id — guaranteed non-empty by validate_and_fill_defaults
-        session_id: str = (envelope.get("agent") or {}).get("session_id")
+        # Step 2: Resolve session identity — guaranteed non-empty by
+        # validate_and_fill_defaults. Goes through resolve_session_identity()
+        # (the RFX-9 seam) rather than reading envelope.agent.session_id
+        # inline, so ledger keying and the budgets.rego principal lookup stay
+        # correct if the identity source changes later.
+        session_id: str = resolve_session_identity(envelope)
 
         # Step 3: FREEZE check (T2a) — re-read env per request
         try:

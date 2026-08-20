@@ -72,15 +72,21 @@ The following components are built, tested, and available:
   `deny`, never `allow`.
 - Append-only JSONL audit of every decision.
 - Per-session cumulative action ledger for fragmentation resistance (SPEC §4.1).
-- 55/55 Python unit tests passing; 9/9 OPA policy tests passing.
+- 14/14 OPA policy tests passing (`reeflex-core/policy`).
 
 **Base policy pack (R1–R5)**
 - R1 — allow read-only internal actions.
 - R2 — require approval: irreversible + broad + production.
 - R3 — deny: irreversible + systemic + production (even with prior approval).
 - R4 — default allow when no high-risk rule fires.
-- R5 — session delete budget: cumulative deletes exceeding 20 items per session
-  require approval (fragmentation guard, SPEC §4.1).
+- R5 — configurable cumulative budgets (`reeflex-core/policy/budgets.rego`):
+  the session delete budget (20 items, fragmentation guard, SPEC §4.1),
+  generalized to three more dimensions — `money`, `external_sends`,
+  `objects_touched` — aggregable across heterogeneous verbs/abilities and
+  definable per session/principal as policy DATA, not a hardcoded constant.
+  `objects_touched` gives every action non-zero weight, so a long tail of
+  individually-harmless small actions of different types still accumulates
+  toward a hold.
 
 **`reeflex-claude` — Claude Code adapter (reference, conformance-tested)**
 - A PreToolUse hook that governs Claude Code tool calls (Bash, Write, Edit, …)

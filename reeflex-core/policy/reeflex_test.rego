@@ -138,3 +138,115 @@ test_r5_absent_cumulative_does_not_crash if {
 	got := policy.decision with input as envelope
 	got.decision == "allow"
 }
+
+# ---- R5, other dimensions: generalized cumulative budgets (budgets.rego, RFX-11) ----
+# Same mechanism as R5, but over the OTHER configurable dimensions, and
+# aggregating across HETEROGENEOUS action types (different verbs/abilities
+# all counted toward the same dimension) rather than one hardcoded verb.
+
+# MONEY dimension: two different verbs ("transact", "refund") both carry
+# params.amount in the same currency; neither alone crosses the default
+# 5000 budget, but their sum (4800 prior + 400 current = 5200) does.
+test_r6_money_dimension_aggregates_across_verbs if {
+	envelope := {
+		"action": {"verb": "refund"},
+		"target": {"environment": "staging"},
+		"axes": {"reversibility": "recoverable", "blast_radius": "scoped", "externality": "internal"},
+		"magnitude": {"count": 1},
+		"params": {"amount": 400, "currency": "EUR"},
+		"cumulative": {"amount_by_currency": {"EUR": 4800}},
+		"approval": {"present": false},
+	}
+	got := policy.decision with input as envelope
+	got.decision == "require_approval"
+	got.rule == "reeflex.policy/cumulative_budget"
+	got.reason == "cumulative money budget exceeded (fragmentation guard)"
+}
+
+# EXTERNAL_SENDS dimension: outbound axis, not tied to any one verb — an
+# "email" verb and a "webhook" verb both count. Prior outbound = 48, current
+# batch of 5 -> 53 > default budget 50.
+test_r6_external_sends_dimension_holds if {
+	envelope := {
+		"action": {"verb": "notify_webhook"},
+		"target": {"environment": "staging"},
+		"axes": {"reversibility": "reversible", "blast_radius": "single", "externality": "outbound"},
+		"magnitude": {"count": 5},
+		"cumulative": {"count_by_externality": {"outbound": 48}},
+		"approval": {"present": false},
+	}
+	got := policy.decision with input as envelope
+	got.decision == "require_approval"
+	got.rule == "reeflex.policy/cumulative_budget"
+	got.reason == "cumulative external_sends budget exceeded (fragmentation guard)"
+}
+
+# OBJECTS_TOUCHED (the smurfing-gap fix): a batch of individually-harmless
+# actions of DIFFERENT verbs (read/update/comment — none delete, none
+# outbound, none carrying money) still accumulates, because objects_touched
+# counts every action unconditionally. Permit0's session amplifier assigns
+# weight 0 to this small tier, so it never trips; this dimension trips at
+# 201 (prior 199 + current 2).
+test_r6_objects_touched_smurfing_gap_holds if {
+	envelope := {
+		"action": {"verb": "comment"},
+		"target": {"environment": "staging"},
+		"axes": {"reversibility": "reversible", "blast_radius": "single", "externality": "internal"},
+		"magnitude": {"count": 2},
+		"cumulative": {"total_count": 199},
+		"approval": {"present": false},
+	}
+	got := policy.decision with input as envelope
+	got.decision == "require_approval"
+	got.rule == "reeflex.policy/cumulative_budget"
+	got.reason == "cumulative objects_touched budget exceeded (fragmentation guard)"
+}
+
+# UNDER BUDGET on every dimension -> allow, proving the budget guard does not fire on
+# unremarkable traffic.
+test_r6_all_dimensions_under_budget_allows if {
+	envelope := {
+		"action": {"verb": "update"},
+		"target": {"environment": "staging"},
+		"axes": {"reversibility": "reversible", "blast_radius": "single", "externality": "outbound"},
+		"magnitude": {"count": 1},
+		"params": {"amount": 10, "currency": "EUR"},
+		"cumulative": {
+			"total_count": 5,
+			"count_by_externality": {"outbound": 3},
+			"amount_by_currency": {"EUR": 20},
+		},
+		"approval": {"present": false},
+	}
+	got := policy.decision with input as envelope
+	got.decision == "allow"
+}
+
+# PER-PRINCIPAL OVERRIDE: budgets are DATA a policy author writes, not a
+# hardcoded Rego constant — proven by overriding budget_limit() itself via
+# `with`, the same technique the rest of this suite uses to swap `input`.
+# A principal-specific 10-object budget holds where the 200-default would
+# still allow the exact same cumulative state.
+test_r6_per_principal_override_is_policy_not_code if {
+	envelope := {
+		"action": {"verb": "read"},
+		"target": {"environment": "staging"},
+		"axes": {"reversibility": "reversible", "blast_radius": "single", "externality": "internal"},
+		"agent": {"session_id": "agent:tight-principal"},
+		"magnitude": {"count": 2},
+		"cumulative": {"total_count": 9},
+		"approval": {"present": false},
+	}
+
+	# Default budget (200) does not fire.
+	default_got := policy.decision with input as envelope
+	default_got.decision == "allow"
+
+	# The SAME cumulative state, with a per-principal override tightening
+	# objects_touched to 10, DOES fire — proving the limit is read from
+	# policy data, keyed by principal, not a fixed number in the engine.
+	tight_got := policy.decision with input as envelope
+		with data.reeflex.policy.principal_budgets as {"agent:tight-principal": {"objects_touched": {"limit": 10}}}
+	tight_got.decision == "require_approval"
+	tight_got.rule == "reeflex.policy/cumulative_budget"
+}

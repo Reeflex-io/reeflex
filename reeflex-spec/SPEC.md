@@ -136,13 +136,16 @@ Reeflex defeats this by reasoning over **cumulative state per session**, not jus
 ```jsonc
 "cumulative": {
   "window_seconds": 3600,
-  "count_by_verb":      { "delete": 47, "transact": 2 },
-  "count_by_ability":   { "wordpress/delete-post": 47 },
-  "amount_by_currency": { "EUR": 480.00 }
+  "count_by_verb":        { "delete": 47, "transact": 2 },
+  "count_by_ability":     { "wordpress/delete-post": 47 },
+  "count_by_externality": { "outbound": 12 },
+  "amount_by_currency":   { "EUR": 480.00 },
+  "total_count": 61
 }
 ```
 
 - `cumulative` is computed by core, not the adapter — core is the only component that sees every action in a session. The adapter's sole new obligation is to supply a stable `session_id`.
+- `count_by_externality` and `total_count` (added for the CONFIGURABLE budgets below) are **cross-cutting**: they aggregate regardless of which verb or ability produced the action. `total_count` in particular sums every action in the window, so a long tail of small actions of *different* types still contributes — no verb/ability is silently exempt from accumulating.
 - Real policy packs SHOULD gate on cumulative totals, not only `magnitude.count`:
 
 ```rego
@@ -155,6 +158,53 @@ decision := {"decision": "require_approval",
 ```
 
 This is the discrete-decision equivalent of the cumulative-cost idea at the project's origin: **fragmentation buys nothing**, because the budget is tracked across the whole session rather than reset per call. `trajectory_ref` (optional in v0.1) is the hook for richer sequence/drift analysis later.
+
+### 4.1.1 Configurable cumulative budgets over heterogeneous action types (R5, generalized)
+
+A single hardcoded threshold (like the R5 example above) only protects the
+one dimension it names, and typically only for one verb. `reeflex-core`'s
+base policy pack (`reeflex-core/policy/budgets.rego`) generalizes this into
+**budgets a policy author writes as Rego data**, over four DIMENSIONS that
+each aggregate across heterogeneous verbs/abilities:
+
+| Dimension | Aggregates | Contributes |
+|---|---|---|
+| `money` | `cumulative.amount_by_currency`, any verb that carries `params.amount` | that action's `params.amount` |
+| `deletions` | `cumulative.count_by_verb.delete` | `magnitude.count` when `action.verb == "delete"` |
+| `external_sends` | `cumulative.count_by_externality.outbound` | `magnitude.count` when `axes.externality == "outbound"` |
+| `objects_touched` | `cumulative.total_count` | `magnitude.count`, **unconditionally, for every action** |
+
+`objects_touched` is the deliberate fix for a gap seen in rival products:
+a session-level cumulative amplifier that assigns weight **0** to small-tier
+actions never accumulates for a long tail of individually-harmless calls
+(the classic "smurfing"/structuring pattern — split one large action into
+many small ones of possibly different types). Because `objects_touched`
+weighs every action, that tail still crosses a budget.
+
+Budgets are data, not code:
+
+```rego
+default_budgets := {
+    "money":           {"limit": 5000},
+    "deletions":       {"limit": 20},
+    "external_sends":  {"limit": 50},
+    "objects_touched": {"limit": 200},
+}
+
+# Per-principal override — keyed by the CURRENT session identity
+# (input.agent.session_id); tightens or loosens one dimension for one
+# principal without touching any other principal's budget or the engine.
+principal_budgets := {
+    "agent:some-session-id": {"objects_touched": {"limit": 10}},
+}
+```
+
+A policy author edits `default_budgets`/`principal_budgets` directly (or
+supplies an overlay data document at deploy time) — `reeflex-core` never
+bakes a dimension limit into Python. See `reeflex-core/policy/budgets.rego`
+for the full mechanism and `reeflex-core/tests/test_budgets_rfx11.py` for an
+end-to-end demo, including one that edits `budgets.rego` alone (zero Python
+changes) to prove the tolerance is genuinely policy-controlled.
 
 ---
 
