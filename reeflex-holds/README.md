@@ -99,8 +99,10 @@ change to `reeflex-core`'s or the other adapters' dependency posture.
 pip install reeflex-holds
 ```
 
-`reeflex-holds` is published on PyPI (`reeflex-holds==0.1.0`). To work from a
-local checkout instead (for development, or to track `main`):
+`reeflex-holds` is published on PyPI (requires **Python 3.10+**) — check
+[the release history](https://pypi.org/project/reeflex-holds/#history) for
+the current version. To work from a local checkout instead (for development,
+or to track `main`):
 
 ```bash
 git clone https://github.com/Reeflex-io/reeflex.git

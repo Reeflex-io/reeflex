@@ -27,7 +27,7 @@ What remains is the **live deployment milestone**:
   actual posts (before/after on real data), not just the stubbed conformance harness.
 - WooCommerce-specific coverage (orders, refunds, bulk product edits).
 
-### MCP gateway adapter — SHIPPED (`reeflex-mcp` v0.1.0)
+### MCP gateway adapter — SHIPPED (`reeflex-mcp`, on PyPI)
 
 `reeflex-mcp` is **built and conformance-tested**: a transparent MCP proxy
 that governs any MCP upstream (stdio or streamable-HTTP) — dynamic tool
@@ -38,8 +38,8 @@ subcommands (`setup`/`add`/`import`/`doctor`) that migrate a client's MCP
 config onto a single governed path and detect drift. 113 unit tests passing.
 See [`reeflex-mcp/`](reeflex-mcp/) and [docs/mcp-gateway.md](docs/mcp-gateway.md).
 
-What remains: **PyPI publication** — gated on a human GO, same as every other
-Reeflex package; install from source until then.
+PyPI publication has shipped: `pip install reeflex-mcp` (requires Python
+3.10+).
 
 ### Community adapters (planned — not built)
 

@@ -25,7 +25,7 @@ any public repository, in any form — no code, no configuration, no schema, no 
 | `reeflex-spec` (Action Envelope + Adapter Contract + conformance suite + JSON schemas) | Open | Apache 2.0 | Available |
 | `reeflex-claude` reference adapter (Claude Code) | Open | Apache 2.0 | Available |
 | `reeflex-wordpress` reference adapter | Open | Apache 2.0 | Available |
-| `reeflex-mcp` reference adapter (MCP gateway — any MCP upstream) | Open | Apache 2.0 | Available (source; not yet on PyPI) |
+| `reeflex-mcp` reference adapter (MCP gateway — any MCP upstream) | Open | Apache 2.0 | Available (`pip install reeflex-mcp`) |
 | Community adapters (`reeflex-postgres`, `reeflex-s3`, etc.) | Open | Apache 2.0 | Community-built against the spec |
 | Base policy packs (Rego rules for the Action Envelope) | Open | Apache 2.0 | Available |
 | Mock adapter + demo | Open | Apache 2.0 | Available |

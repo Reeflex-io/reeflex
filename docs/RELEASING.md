@@ -79,13 +79,12 @@ publisher*):
 | Workflow name | `release.yml` |
 | Environment | *(leave blank, unless you enable the `pypi` environment — see below)* |
 
-- `reeflex-claude` already exists on PyPI, so add the publisher on the existing
-  project.
-- `reeflex-holds` is **not yet on PyPI** (the name is not reserved). Use PyPI's
-  **"pending publisher"** flow: create the trusted publisher for the
-  not-yet-existing project name `reeflex-holds`; the first successful OIDC publish
-  creates the project. Reserving the name (`reeflex`, `reeflex-core`,
-  `reeflex-claude` are reserved; `reeflex-holds` is not yet) is a GATE.
+- `reeflex-claude` and `reeflex-holds` both already exist on PyPI (as of the
+  v0.1.15 release), so add the publisher on the existing project for each.
+- (Historical note, for the next NEW package name: before a project exists on
+  PyPI, use PyPI's **"pending publisher"** flow instead — create the trusted
+  publisher for the not-yet-existing project name; the first successful OIDC
+  publish creates the project. Reserving a new name is a GATE.)
 
 Optional hardening: create a GitHub **Environment** named `pypi`, uncomment
 `environment: pypi` in the `pypi` job, and set the *Environment* field on both

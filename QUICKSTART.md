@@ -333,19 +333,20 @@ this behaviour — it is structural.
 If your agents already talk to MCP servers (filesystem, GitHub, Postgres, or
 your own), `reeflex-mcp` puts the same `reeflex-core` decision in front of
 all of them — without opening core to the internet or rewriting a client's
-logic. It is **not yet published to PyPI**; install from source, from the
-repo root:
+logic. It's on PyPI (requires **Python 3.10+** — check with `python3
+--version`; a 3.8/3.9 interpreter will fail to resolve the package):
 
 ```bash
-cd reeflex-mcp
-python -m venv .venv
-.venv/Scripts/pip install -e .          # Windows; .venv/bin/pip on Linux/macOS
+pip install reeflex-mcp
 
-cp reeflex-mcp.yaml.example reeflex-mcp.yaml
+curl -o reeflex-mcp.yaml https://raw.githubusercontent.com/Reeflex-io/reeflex/main/reeflex-mcp/reeflex-mcp.yaml.example
 # edit reeflex-mcp.yaml: point upstreams: at your real MCP server(s)
 
 reeflex-mcp --config reeflex-mcp.yaml --transport stdio
 ```
+
+(To track `main` from a repo clone instead: `cd reeflex-mcp && python -m venv
+.venv && .venv/bin/pip install -e .` — `.venv/Scripts/pip` on Windows.)
 
 Point your MCP client (Claude Desktop, Claude Code's `.mcp.json`, …) at
 `reeflex-mcp` instead of the upstream directly — `reeflex-mcp setup` can do

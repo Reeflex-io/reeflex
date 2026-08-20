@@ -28,9 +28,8 @@ documents are never inputs to that decision, here or anywhere else in
 Reeflex.
 
 **Status:** built, conformance-tested against [SPEC §7](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-spec/SPEC.md#7-conformance)
-(all minimums, including obligations). **Not yet published to PyPI** —
-install from source (§9 below); publishing is a gate (human GO), same as
-every other Reeflex package.
+(all minimums, including obligations). **On PyPI:** `pip install reeflex-mcp`
+(see §9 below). Installing from source instead is only needed to track `main`.
 
 For the competitive framing against commodity "MCP gateway" products (identity
 / routing, not impact judgment), see
@@ -381,24 +380,36 @@ Everything below is UX around that limit, not a way around it.
 
 ---
 
-## 9. Install (source, pre-PyPI)
+## 9. Install
+
+```bash
+pip install reeflex-mcp
+```
+
+Requires **Python 3.10+** (`reeflex-mcp` has no documented ceiling; a 3.8/3.9
+interpreter will fail with "No matching distribution found for reeflex-mcp" —
+use `python3.10`/`python3.11`/`python3.12` if your default `python3` is
+older).
+
+```bash
+curl -o reeflex-mcp.yaml https://raw.githubusercontent.com/Reeflex-io/reeflex/main/reeflex-mcp/reeflex-mcp.yaml.example
+# edit reeflex-mcp.yaml: point upstreams: at your real MCP server(s)
+
+reeflex-mcp --config reeflex-mcp.yaml --transport stdio
+```
+
+`reeflex-mcp.yaml.example` is **not** included in the installed wheel — the
+`curl` above fetches it from the repo. If you already have a repo clone, `cp
+reeflex-mcp/reeflex-mcp.yaml.example reeflex-mcp.yaml` works just as well.
+
+### Install from source (to track `main`)
 
 ```bash
 cd reeflex-mcp
 python -m venv .venv
 .venv/Scripts/pip install -e .          # Windows
 # .venv/bin/pip install -e .            # Linux/macOS
-
-cp reeflex-mcp.yaml.example reeflex-mcp.yaml
-# edit reeflex-mcp.yaml: point upstreams: at your real MCP server(s)
-
-reeflex-mcp --config reeflex-mcp.yaml --transport stdio
 ```
-
-`reeflex-mcp` is **not yet published to PyPI** — `pip install reeflex-mcp`
-does not resolve yet. Publishing is a gate (human GO), same as every other
-Reeflex package; this page will be updated with the PyPI command once that
-gate clears.
 
 ---
 

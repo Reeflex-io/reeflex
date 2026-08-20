@@ -124,8 +124,8 @@ The following components are built, tested, and available:
   unknown obligation, observe mode records it.
 - Lifecycle subcommands (`setup`/`restore`/`add`/`import`/`doctor`) migrate a
   client's MCP config onto a single governed path and detect drift.
-- 113 unit tests passing; conformance-tested per SPEC §7. **Not yet published
-  to PyPI** — install from source. See
+- 113 unit tests passing; conformance-tested per SPEC §7. On PyPI:
+  `pip install reeflex-mcp` (requires Python 3.10+). See
   [docs/mcp-gateway.md](../docs/mcp-gateway.md).
 
 ---
