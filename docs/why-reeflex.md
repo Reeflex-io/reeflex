@@ -183,6 +183,12 @@ AIL earns its place for three concrete reasons:
    choice is what the EU AI Act's Article 14 asks you to prove. The gate
    stays deterministic. Who answers the flag is pluggable.
 
+   *(Article 14's high-risk obligations were postponed by the Digital
+   Omnibus, Regulation (EU) 2026/1744, from 2 August 2026 to 2 December
+   2027 — source: the European Commission's AI Act Service Desk. Building
+   this now is advance preparation, not a response to a deadline that has
+   already arrived.)*
+
 The whole posture, in one line: **the industry treats agent-delegated
 approval as a risk to warn about. We treat it as a mechanism to govern —
 named, bounded, and audited.**
