@@ -90,25 +90,31 @@ window (`reeflex-core/app/ledger.py`):
 ```jsonc
 "cumulative": {
   "window_seconds": 3600,
-  "count_by_verb":      { "delete": 47, "transact": 2 },
-  "count_by_ability":   { "wordpress/delete-post": 47 },
-  "amount_by_currency": { "EUR": 480.00 }
+  "count_by_verb":        { "delete": 47, "transact": 2 },
+  "count_by_ability":     { "wordpress/delete-post": 47 },
+  "count_by_externality": { "outbound": 12 },
+  "amount_by_currency":   { "EUR": 480.00 },
+  "total_count": 61
 }
 ```
 
 The core is the only component that sees every action in a session, so it — not
 the adapter — computes this. The adapter's only extra duty is to supply a stable
 `session_id`. This is how "delete 5, one hundred times" trips the same budget as
-"delete 500": fragmentation buys nothing.
+"delete 500": fragmentation buys nothing. `count_by_externality` and
+`total_count` aggregate regardless of verb/ability — the basis for R5's
+configurable, cross-cutting budgets below.
 
-> **Deliberate strictness:** once a session has exceeded its
-> delete budget, the base policy holds *every* subsequent action from that
+> **Deliberate strictness:** once a session has exceeded a cumulative
+> budget, the base policy holds *every* subsequent action from that
 > session — including reads — until it is approved or the rolling window
-> (default 3600 s) expires. The posture is "a session that tried to fragment
-> is a suspicious session." If you are testing repeatedly, use a fresh
-> `session_id` per run (the `reeflex-verify` tool does this for you).
-> Narrowing the post-budget hold to destructive verbs only is an open policy
-> decision; either way, you can tune or replace R5 in your own Rego pack.
+> (default 3600 s) expires (the excess alone already exceeds the limit,
+> whatever the next action contributes). The posture is "a session that
+> tried to fragment is a suspicious session." If you are testing
+> repeatedly, use a fresh `session_id` per run (the `reeflex-verify` tool
+> does this for you). Narrowing the post-budget hold to destructive verbs
+> only is an open policy decision; either way, you can tune or replace
+> R5 in your own Rego pack.
 
 ---
 
@@ -125,10 +131,10 @@ r3_deny if {
     input.target.environment == "production"
 }
 
-# Session delete budget → require approval (fragmentation guard).
-r5_require_approval_budget if {
-    prior := object.get(input, ["cumulative", "count_by_verb", "delete"], 0)
-    prior + input.magnitude.count > 20
+# Any configured cumulative dimension (money / deletions / external_sends /
+# objects_touched — budgets.rego) exceeded its budget → require approval.
+budget_require_approval if {
+    count(exceeded_dimensions) > 0
     not input.approval.present
 }
 ```
@@ -180,7 +186,7 @@ real impact can be computed rather than trusted.
 
 ## Where these rules come from
 
-No industry standard exists yet for governing agent *actions* — the category is too new. But none of these rules is invented from thin air: each applies a decades-old safety principle to a new domain. Here is the base pack **exactly as it ships** (R1–R5 in [`reeflex.rego`](../reeflex-core/policy/reeflex.rego)), and the discipline each rule descends from:
+No industry standard exists yet for governing agent *actions* — the category is too new. But none of these rules is invented from thin air: each applies a decades-old safety principle to a new domain. Here is the base pack **exactly as it ships** (R1–R5 in [`reeflex.rego`](../reeflex-core/policy/reeflex.rego) + [`budgets.rego`](../reeflex-core/policy/budgets.rego)), and the discipline each rule descends from:
 
 | Base rule (as it ships) | What it decides | Rooted in |
 |---|---|---|
@@ -188,7 +194,7 @@ No industry standard exists yet for governing agent *actions* — the category i
 | **R2** · irreversible + broad, in production → *require approval* | a high-risk change waits for a human | change management / ITIL — a change-advisory board at machine speed |
 | **R3** · irreversible + systemic, in production → *deny* | catastrophic actions are refused, not waved through | safety engineering (aviation, nuclear) — past a severity line you re-scope, you don't approve |
 | **R4** · default → *allow* | govern by exception, not by blanket block | least astonishment / default-permit |
-| **R5** · cumulative delete budget → *require approval* | split-up deletes are caught together — the way banks have watched structured transactions for 50 years | fraud-detection velocity checks (structuring / "smurfing") |
+| **R5** · configurable cumulative budgets (deletions / money / external\_sends / objects\_touched) → *require approval* | split-up actions are caught together, the way banks have watched structured transactions for 50 years — generalized from one hardcoded verb (deletions) to budgets a policy author writes as data, aggregated across *heterogeneous* verbs/abilities, with `objects_touched` weighing every action so no small-tier action is exempt from accumulating | fraud-detection velocity checks (structuring / "smurfing") — extended past a payments-only, zero-weighted-small-tier cumulative check |
 | **The three axes** · reversibility × blast radius × externality | severity × scope × reversibility, scored on every action | classic risk assessment — and the same axes make **egress control** (externality) and **transaction thresholds** (magnitude) expressible as ready extension packs |
 
 New rules for a new domain; old, proven principles underneath.
@@ -199,7 +205,7 @@ New rules for a new domain; old, proven principles underneath.
 
 Honesty over promises. The base policy governs structural, destructive impact — it is not a claim to catch every possible harm. Known limits:
 
-- **Exfiltration through reads.** 10,000 customer-record reads classify as read / reversible / internal → allowed. A mass-read guard is a natural data-protection pack candidate, not part of the base policy.
+- **Exfiltration through reads.** A read is read / reversible / internal, so R1 alone would allow any volume of it — but every read still counts toward `objects_touched` (R5), so a mass-read run now hits a session budget rather than passing unbounded; a *dedicated* mass-read guard tuned to the actual sensitivity of reads is still a natural data-protection pack candidate, not part of the base policy.
 - **Semantic damage.** One product set to the wrong price is single / reversible → allowed. Content *correctness* is not an impact axis.
 - **Slow-burn abuse across sessions.** The cumulative ledger is per-session over a rolling window; rotating sessions dilutes it.
 
