@@ -16,6 +16,14 @@
 # The WordPress conformance harness needs a LIVE reeflex-core and is an
 # ALLOWED, PRINTED skip here (--allow-skips wp-conformance) — see
 # reeflex-wordpress/tests/README.md. Everything else runs.
+#
+# migration-heads (RFX-49) is also an ALLOWED, PRINTED skip: it validates
+# the private reeflex-app repo's alembic graph IF that repo is checked out
+# next to this one, which it never is on this public repo's own runner.
+# The migration-heads-selftest component (proving the checker tool itself
+# is correct) is NOT skippable — it runs here unconditionally. reeflex-app's
+# own CI (Reeflex-io/reeflex-app, ci.yml) runs the enforcing copy of the
+# check directly against its own migrations on every PR.
 
 name: gate
 
@@ -63,7 +71,7 @@ jobs:
         run: python gate.py --selftest
 
       - name: Run the gate
-        run: python gate.py --pypi delegated --allow-skips wp-conformance
+        run: python gate.py --pypi delegated --allow-skips wp-conformance,migration-heads
 
   smoke-pypi:
     name: fresh-install-from-PyPI smoke
