@@ -24,7 +24,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [reeflex-mcp, reeflex-holds]
+        # All THREE packages a human can `pip install` from PyPI (RFX-18):
+        # reeflex-claude joins reeflex-mcp/reeflex-holds so a broken fresh
+        # install of any of the three turns CI red on its own.
+        package: [reeflex-mcp, reeflex-holds, reeflex-claude]
     steps:
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -41,9 +44,14 @@ jobs:
       - name: Show resolved versions (diagnosability)
         # `pip show mcp` so a future red run is diagnosable from the log alone
         # (the 2026-07-28 breakage was an unbounded `mcp` resolving to 2.0.0).
+        # reeflex-claude has no third-party runtime deps (stdlib only), so it
+        # has no `mcp` to show -- skip that line for it rather than fail on
+        # "Package(s) not found".
         run: |
           smoke-venv/bin/pip show "${{ matrix.package }}"
-          smoke-venv/bin/pip show mcp
+          if [ "${{ matrix.package }}" != "reeflex-claude" ]; then
+            smoke-venv/bin/pip show mcp
+          fi
           smoke-venv/bin/pip freeze
 
       - name: Invoke the published entry point
