@@ -12,4 +12,9 @@ policy logic of its own -- see client.py and server.py module docstrings for
 the full guarantee list. Entry point: `python -m reeflex_holds` (stdio).
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("reeflex-holds")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
