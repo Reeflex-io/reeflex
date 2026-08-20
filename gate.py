@@ -449,20 +449,45 @@ class Gate:
 
     # -- WordPress live-core harness -----------------------------------------
 
+    # RFX-27: the WordPress adapter has FOUR live-core PHP harnesses, not one —
+    # conformance-demo.php was the only one gate.py ever invoked; the other three
+    # (added for real fixed bugs, see their own docblocks + CHANGELOG) were run by
+    # nobody in any automation. One of them (fanout-regression-demo.php, and
+    # transitively hold-dedup-regression-demo.php) was silently BROKEN — a fatal
+    # "undefined function wp_upload_dir()" — since audit_log_path() started calling
+    # it; measured + fixed 2026-08-20 (see wp-stubs.php). All four share the same
+    # live-core prerequisite, so they run (or SKIP) together under one component.
+    WP_HARNESSES = [
+        "conformance-demo.php",
+        "admin-holds-demo.php",
+        "fanout-regression-demo.php",
+        "hold-dedup-regression-demo.php",
+    ]
+
     def run_wp(self):
         key = "wp-conformance"
         if not self.args.core_url:
             self.component(key, "SKIPPED",
-                           "needs a LIVE reeflex-core (pass --core-url); the harness POSTs real /v1/decide calls — see reeflex-wordpress/tests/README.md")
+                           "needs a LIVE reeflex-core (pass --core-url); the harnesses POST real /v1/decide calls — see reeflex-wordpress/tests/README.md")
             return
         if not self.php:
             self.component(key, "SKIPPED", "php CLI not found")
             return
-        code, out = self.run_cmd([self.php, "tests/conformance-demo.php", self.args.core_url],
-                                 cwd=os.path.join(REPO_ROOT, "reeflex-wordpress"))
-        self.show(out, full=code != 0, tail=12)
-        self.component(key, "PASS" if code == 0 else "FAIL",
-                       "harness exit %d against %s" % (code, self.args.core_url))
+        failures, details = [], []
+        for script in self.WP_HARNESSES:
+            code, out = self.run_cmd([self.php, "tests/%s" % script, self.args.core_url],
+                                     cwd=os.path.join(REPO_ROOT, "reeflex-wordpress"))
+            self.emit("  -- %s" % script)
+            self.show(out, full=code != 0, tail=12)
+            if code == 0:
+                details.append("%s: exit 0" % script)
+            else:
+                failures.append("%s: exit %d" % (script, code))
+        if failures:
+            self.component(key, "FAIL", "; ".join(failures))
+        else:
+            self.component(key, "PASS", "%d harnesses vs %s (%s)"
+                           % (len(self.WP_HARNESSES), self.args.core_url, "; ".join(details)))
 
     # -- drift check ----------------------------------------------------------
 

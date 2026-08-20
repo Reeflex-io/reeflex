@@ -69,6 +69,26 @@ function wp_salt( $scheme = 'auth' ) { return AUTH_SALT . '-salt-' . $scheme; }
 function trailingslashit( $s )   { return rtrim( (string) $s, '/\\' ) . '/'; }
 function untrailingslashit( $s ) { return rtrim( (string) $s, '/\\' ); }
 
+// wp_upload_dir() — RFX-27: class-reeflex-config.php::audit_log_path() calls this
+// to derive the WP.org-convention default audit path (uploads/reeflex-gate/...).
+// Without this stub every harness that touches audit_log_path() (fanout- and
+// hold-dedup-regression-demo.php) died with a fatal "undefined function" BEFORE
+// running a single scenario — found 2026-08-20 because nothing invoked those two
+// scripts in any automation (see RFX-27 report). Shape matches real WordPress:
+// only 'basedir'/'error' are read by the caller, but the full key set is mirrored
+// for anything else that might call this stub later.
+function wp_upload_dir() {
+	$base = rtrim( WP_CONTENT_DIR, '/\\' ) . '/uploads';
+	return array(
+		'path'    => $base,
+		'url'     => 'http://harness.invalid/wp-content/uploads',
+		'subdir'  => '',
+		'basedir' => $base,
+		'baseurl' => 'http://harness.invalid/wp-content/uploads',
+		'error'   => false,
+	);
+}
+
 // --- Misc helpers ----------------------------------------------------------
 function wp_generate_uuid4() {
 	$d = random_bytes( 16 );
