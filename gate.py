@@ -66,10 +66,11 @@ ROOT_MARKERS = [
 PUBLISHED = [
     # (pypi/dist name, entry point, has argparse usage banner)
     ("reeflex-mcp", "reeflex-mcp", True),
-    ("reeflex-holds", "reeflex-holds", False),  # server main(), no argparse:
-    # exit 0 proves the console script resolves and the package imports —
-    # exactly where the 2026-07-28 breakage died — NOT that a usage banner
-    # was shown.
+    # RFX-42: reeflex-holds now has real argparse subcommands (list/approve/
+    # reject) for any argv; `--help` prints a real anchored usage banner
+    # exactly like the other two. With NO argv it still starts the stdio MCP
+    # server unchanged (see server.main()) -- not exercised by this smoke.
+    ("reeflex-holds", "reeflex-holds", True),
     ("reeflex-claude", "reeflex-claude", True),
 ]
 

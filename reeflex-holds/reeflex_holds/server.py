@@ -16,11 +16,19 @@ accepts a resolving identity from a tool argument -- only from the server's
 own REEFLEX_PRINCIPAL configuration (config.py), so an MCP client cannot
 resolve a hold "as" an arbitrary identity by simply asking to.
 
-Run: `python -m reeflex_holds` (stdio transport -- the only transport this
-package implements; see README for the Claude Desktop wiring).
+Run with no arguments (`python -m reeflex_holds`, or the `reeflex-holds`
+console script): starts the stdio MCP transport, unchanged -- this is what
+Claude Desktop and the MCPB bundle launch. Run with a real subcommand
+(`reeflex-holds list|approve|reject ...`): runs the human-typable CLI
+(cli.py) instead and never touches stdio -- see RFX-42 / cli.py's docstring
+for why that split exists: this same entry point used to silently ignore any
+argv and fall into the stdio server, which exits 0 with zero output the
+moment stdin hits EOF outside a real MCP client.
 """
 
 from __future__ import annotations
+
+import sys
 
 from mcp.server.mcpserver import MCPServer
 
@@ -127,6 +135,10 @@ def get_freeze_status() -> dict:
 
 
 def main() -> None:
+    if len(sys.argv) > 1:
+        from . import cli
+
+        sys.exit(cli.main(sys.argv[1:]))
     mcp.run(transport="stdio")
 
 
