@@ -29,7 +29,7 @@ any public repository, in any form — no code, no configuration, no schema, no 
 | Community adapters (`reeflex-postgres`, `reeflex-s3`, etc.) | Open | Apache 2.0 | Community-built against the spec |
 | Base policy packs (Rego rules for the Action Envelope) | Open | Apache 2.0 | Available |
 | Mock adapter + demo | Open | Apache 2.0 | Available |
-| **Attest** — audit-ready control evidence (NIS2, DORA, EU AI Act, SOC 2) | Commercial / closed | Proprietary | Not in any public repo |
+| **Attest** — audit-ready control evidence (NIS2 · DORA · EU AI Act · SOC 2) | Commercial / closed | Proprietary | Not in any public repo |
 | **Fleet** — multi-site management | Commercial / closed | Proprietary | **[ROADMAP — not built, not available]** |
 | **Cloud** — hosted Reeflex (multi-tenancy, auth, billing) | Commercial / closed | Proprietary | **[ROADMAP — not built, not available]** |
 
@@ -40,8 +40,11 @@ any public repository, in any form — no code, no configuration, no schema, no 
 The gate, the decisions, the adapters, the base policy packs, and the full
 audit trail are open — permanently. The commercial tier does not add safety;
 it adds *attestation*: **Attest** maps Reeflex decisions to specific control
-frameworks (NIS2, DORA, EU AI Act, SOC 2) with auditor-ready reports and
-managed policy-pack updates as regulations change; **Fleet** manages policy and
+frameworks — **NIS2 Article 21(2)**, already in force and under active audit
+across the EU; **DORA**; the **EU AI Act** Articles 12/14, whose high-risk
+obligations phase in 2 December 2027 (Digital Omnibus, Regulation (EU)
+2026/1744); and **SOC 2** — with auditor-ready reports and managed
+policy-pack updates as regulations change. **Fleet** manages policy and
 approvals across many sites; **Cloud** is a hosted engine for teams that don't
 want to operate one. Evidence is free; packaging that evidence in the language
 a regulator expects is the product.
@@ -50,9 +53,14 @@ a regulator expects is the product.
 
 Every decision Reeflex makes — allowed, held, or denied — is written to an
 append-only JSONL audit log with the ability name, the computed impact axes,
-the rule that fired, the session, and the timestamp. That gives an auditor
-something rare in AI-agent deployments: **a pre-execution record of what an
-agent attempted, not just a post-hoc log of what happened.** You can answer
+the rule that fired, the session, and the timestamp. Because the decision path
+is deterministic (same envelope in, same verdict out, every time — see
+[ADR-0002](adr/0002-no-llm-in-decision-path.md)), that record is not just a
+log of what happened: an auditor can take the same envelope and **replay** it
+against the same policy to reproduce the verdict, rather than having to trust
+the log's word for it. That gives an auditor something rare in AI-agent
+deployments: **a pre-execution record of what an agent attempted, deterministic
+and replayable, not just a post-hoc log of what happened.** You can answer
 "what could this agent have done, and what stopped it?" from the open tier
 alone, today. (Cryptographic tamper-evidence for audit records is on the
 [roadmap](https://github.com/Reeflex-io/reeflex/blob/main/ROADMAP.md); current records are append-only but not signed.)
@@ -136,9 +144,12 @@ that is a bug — report it.
 ### Attest — audit-ready control evidence
 
 Structured mappings between the Reeflex decision vocabulary and the specific obligations of
-NIS2, DORA, the EU AI Act, and SOC 2. Pre-built reporting templates and evidence packages
-for teams that must prove control to an auditor. This is the commercial value-add; it is
-not part of the open-source governance engine.
+**NIS2 Article 21(2)** — the current lead: transposed across the EU and already the subject
+of active audits, where documentation gaps are a common finding a decision register
+directly addresses — plus DORA, SOC 2, and the EU AI Act (Articles 12/14, whose high-risk
+obligations do not apply until 2 December 2027, per the Digital Omnibus). Pre-built
+reporting templates and evidence packages for teams that must prove control to an auditor.
+This is the commercial value-add; it is not part of the open-source governance engine.
 
 ### Fleet — multi-site management
 
