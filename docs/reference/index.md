@@ -51,3 +51,6 @@ The precise, load-bearing records the rest of these docs point back to.
   an LLM may legitimately sit (advisory only, outside the decision).
 - [Releasing](../RELEASING.md) — the tagged-release flow that publishes to
   GitHub Releases, PyPI, npm, and GHCR from one commit.
+- [Gate policy](../gate.md) — which `gate.py` components block a merge versus
+  are report-only, and the dated, reasoned register behind every allowed
+  `--allow-skips` entry.

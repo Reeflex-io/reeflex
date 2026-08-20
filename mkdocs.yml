@@ -191,3 +191,4 @@ nav:
       - "ADR 0001: deployment model": adr/0001-deployment-model.md
       - "ADR 0002: no LLM in the decision path": adr/0002-no-llm-in-decision-path.md
       - Releasing: RELEASING.md
+      - "Gate policy: blocking vs report-only": gate.md

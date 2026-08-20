@@ -89,6 +89,12 @@ prints `SKIPPED (<reason>)` for anything that cannot run in your context.
 release and before opening a PR. `python gate.py --help` lists the flags
 (CI runs it with `--pypi delegated --allow-skips wp-conformance`).
 
+Not every component gates a merge the same way, and not every skip is free:
+see [docs/gate.md](docs/gate.md) for exactly which components are
+merge-blocking versus report-only, and the reason + date behind every entry
+currently in `--allow-skips`. A PR that adds or widens `--allow-skips` must
+add the matching entry there in the same PR.
+
 The sections below run individual suites for fast, targeted feedback.
 
 ### Python unit tests
@@ -289,11 +295,15 @@ An adapter claiming Reeflex compliance must pass the conformance suite
    ```bash
    python gate.py
    ```
-   Paste the raw `GATE SUMMARY` + `GATE:` verdict in the PR description.
+   Paste the raw `GATE SUMMARY` + `GATE:` verdict in the PR description. If
+   your change adds or widens an `--allow-skips` entry, add its reason + date
+   to the register in [docs/gate.md](docs/gate.md) in the same PR.
 5. Open a pull request using the PR template. Fill in every section,
    including the determinism check (no LLM added to the decision path).
 6. A maintainer will review. Reviews focus on correctness, the
    determinism invariant, fail-closed behavior, and the open-core boundary.
+   See [docs/gate.md](docs/gate.md) for which gate components are
+   merge-blocking versus report-only.
 
 ### Developer Certificate of Origin (DCO)
 
