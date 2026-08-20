@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ### Added
 - **R5, generalized — configurable cumulative budgets over heterogeneous action types (RFX-11).** `reeflex-core/policy/budgets.rego` generalizes R5's cumulative-delete guard into policy-authored budgets over four dimensions — `money`, `deletions`, `external_sends`, `objects_touched` — definable per session/principal as Rego data, not a hardcoded Python or Rego constant. `objects_touched` gives every action non-zero weight regardless of verb/ability, closing the gap where a session amplifier that assigns 0 to small-tier actions never accumulates a long tail of individually-harmless calls into a hold (the exact gap left open by the closest thesis rival's hardcoded, payments-only cumulative check). `ledger.py` gains `count_by_externality` + `total_count` (additive fields on the existing `cumulative` object, SPEC §4.1) so the new dimensions aggregate across whatever verb/ability produced each action. The original R5 rule id/reason/default (20) are unchanged for backward compatibility. `decide.py` gains `resolve_session_identity()` — a single seam for the identity that keys the ledger and that budgets.rego reads as `input.agent.session_id`, so RFX-9's still-open question of WHERE that identity comes from is a one-function change later, not a re-key. See `reeflex-core/tests/test_budgets_rfx11.py` for the end-to-end smurfing-scenario demo, including one that edits `budgets.rego` alone (zero Python changes) to prove the budget is genuinely policy-controlled.
+- **WP.org auto-deploy CI (RFX-22)** — `.github/workflows/wporg-deploy.yml` deploys `reeflex-gate`
+  (trunk + version tag + listing assets) to the WordPress.org plugin SVN via
+  `10up/action-wordpress-plugin-deploy` on every published GitHub Release. Inert until
+  `WPORG_SVN_USERNAME`/`WPORG_SVN_PASSWORD` GitHub Secrets exist (the plugin is still in the
+  wordpress.org review queue) — see `docs/RELEASING.md` §2.5.
+- **WooCommerce use-case docs page** (`docs/adapters/woocommerce.md`) — the marketing story over
+  coverage the WordPress adapter already has (`woocommerce/*` abilities pass through the same
+  `WP_Ability::execute()` seam); no new adapter code.
 
 ## [0.1.15] - reeflex-mcp 0.1.3 + reeflex-holds 0.1.2 (mcp<2 dependency pin)
 

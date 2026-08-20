@@ -1,0 +1,129 @@
+# wporg-deploy.yml — WordPress.org plugin directory deploy (reeflex-gate ONLY).
+#
+# Goal (RFX-22): once the wordpress.org review clears and an SVN slot exists,
+# publishing must be ONE gesture — a GitHub release — with no human doing SVN
+# by hand. This workflow is that gesture's other half.
+#
+# Trigger: a GitHub Release is published (covers both `gh release create` after
+# a `v*` tag push, and a Release made by hand via the web UI — release.yml's
+# tag-push trigger and this workflow's release-published trigger fire off the
+# same act, same as every other channel in docs/RELEASING.md).
+#
+# INERT UNTIL THE SLOT EXISTS. The `guard` job never fails; it only decides
+# whether `deploy` runs. When WPORG_SVN_USERNAME and/or WPORG_SVN_PASSWORD are
+# absent (true today — the plugin is still in the wordpress.org review queue,
+# RFX-22), `guard` emits a `::notice::` explaining exactly that and `deploy` is
+# SKIPPED — shows as a grey/skipped job, never red, never a half-run. This
+# workflow cannot fail a release and cannot half-publish before the secrets
+# exist. The moment both secrets are added to the repo, the NEXT published
+# release deploys automatically — no other change needed, nothing to re-run.
+#
+# Credentials: WPORG_SVN_USERNAME / WPORG_SVN_PASSWORD, GitHub Secrets on this
+# repo ONLY (never a literal here, in the repo, or in a log). See
+# docs/RELEASING.md §2.5 for the one-time human setup (SVN account + 2FA).
+#
+# What gets deployed, once the guard passes:
+#   trunk/       <- reeflex-wordpress/ as committed at the release tag. That
+#                   directory is ALREADY laid out as the plugin root
+#                   (reeflex-gate.php + reeflex-gate/ + readme.txt +
+#                   license.txt + uninstall.php) — no separate build step
+#                   needed for BUILD_DIR, unlike the nested layout
+#                   scripts/build-wp-zips.py produces for the upload zip.
+#                   Known shortcut: this also carries reeflex-wordpress/tests/,
+#                   phpcs.xml.dist, and DEMO.md into trunk. Harmless (no
+#                   secrets, nothing executable in that path on WP.org), just
+#                   uncurated. Upgrade path: a scripts/build-wp-trunk.py mirror
+#                   of build_standard()'s file list, without the reeflex-gate/
+#                   nesting, if a cleaner trunk is ever worth the extra script.
+#   tags/<ver>/  <- same content, versioned. <ver> is the PLUGIN's own version
+#                   (reeflex-gate.php `Version:` / readme.txt `Stable tag:` —
+#                   asserted equal below), NOT the git release tag: the two
+#                   are independent in this monorepo (docs/RELEASING.md §1 —
+#                   e.g. the monorepo has shipped v0.1.15 while reeflex-gate
+#                   sits at 0.1.8). Deploying under the git tag's number would
+#                   desync the SVN stable tag from readme.txt and break the
+#                   directory listing.
+#   assets/      <- reeflex-wordpress/.wordpress-org/ (icon-*.png, banner-*.png,
+#                   screenshot-*.png), IF that directory exists. It does not
+#                   exist in this repo yet (verified — see the RFX-22 PR/report:
+#                   no brand/ directory or listing assets exist anywhere in the
+#                   org's repos as of this workflow landing). The action's own
+#                   documented behaviour is to skip the asset copy gracefully
+#                   when ASSETS_DIR is absent — so this is a silent no-op until
+#                   someone drops the icon/banner/screenshot files there; no
+#                   workflow change will be needed when that happens.
+
+name: WP.org Plugin Deploy
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wporg-deploy
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Guard — SVN slot configured?
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: Check WPORG_SVN_USERNAME / WPORG_SVN_PASSWORD
+        id: check
+        env:
+          SVN_USERNAME: ${{ secrets.WPORG_SVN_USERNAME }}
+          SVN_PASSWORD: ${{ secrets.WPORG_SVN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SVN_USERNAME:-}" ] && [ -n "${SVN_PASSWORD:-}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "Both secrets are set — the deploy job will run."
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=WP.org deploy skipped::WPORG_SVN_USERNAME and/or WPORG_SVN_PASSWORD are not configured as GitHub Secrets on this repo. This is expected until the wordpress.org plugin slot is granted (RFX-22) -- the deploy job is SKIPPED, not failed, and nothing was pushed to SVN. Add both secrets once the slot exists (docs/RELEASING.md section 2.5) to arm this workflow; the next published release deploys automatically, no other change needed."
+          fi
+
+  deploy:
+    name: Deploy trunk + tag + assets to WP.org SVN
+    needs: guard
+    if: needs.guard.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout at the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Resolve + assert the plugin's own version
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION="$(grep -m1 -E '^\s*\*\s*Version:' reeflex-wordpress/reeflex-gate.php | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')"
+          STABLE="$(grep -m1 -E '^Stable tag:' reeflex-wordpress/readme.txt | sed -E 's/^Stable tag:[[:space:]]*//' | tr -d '[:space:]')"
+          if [ -z "$VERSION" ] || [ -z "$STABLE" ]; then
+            echo "::error::could not read a version from reeflex-gate.php and/or readme.txt Stable tag."
+            exit 1
+          fi
+          if [ "$VERSION" != "$STABLE" ]; then
+            echo "::error::reeflex-gate.php Version ($VERSION) != readme.txt Stable tag ($STABLE) -- refusing to deploy a mismatched version to WP.org."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Deploying reeflex-gate $VERSION to WP.org SVN (release tag: ${{ github.event.release.tag_name }})."
+
+      - name: WordPress Plugin Deploy
+        uses: 10up/action-wordpress-plugin-deploy@stable
+        with:
+          generate-zip: false
+        env:
+          SVN_USERNAME: ${{ secrets.WPORG_SVN_USERNAME }}
+          SVN_PASSWORD: ${{ secrets.WPORG_SVN_PASSWORD }}
+          SLUG: reeflex-gate
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_DIR: reeflex-wordpress
+          ASSETS_DIR: reeflex-wordpress/.wordpress-org
