@@ -81,7 +81,8 @@ expected -- check the originating adapter for its own resubmission /
 ## Why the `mcp` SDK
 
 This package's *only* dependency is the official
-[MCP Python SDK](https://pypi.org/project/mcp/) (`mcp.server.fastmcp.FastMCP`).
+[MCP Python SDK](https://pypi.org/project/mcp/) (`mcp.server.mcpserver.MCPServer`,
+mcp>=2 -- the post-2026-07-28-spec successor to the older `FastMCP`).
 `reeflex-core` itself stays dependency-free by contract (stdlib + OPA
 subprocess only), and the other two adapters (`reeflex-claude`,
 `reeflex-wordpress`) are also zero/near-zero-dependency by design -- but this
@@ -284,7 +285,7 @@ T7 conformance step, not in this package's unit test suite.
   package only; see the naming note in Config above. UPGRADE: accept
   `REEFLEX_CORE_TOKEN` with `REEFLEX_TOKEN` as a fallback in a future
   non-breaking release.
-- **stdio transport only.** FastMCP also supports `sse` and
+- **stdio transport only.** The MCP SDK also supports `sse` and
   `streamable-http`; this package only wires up `stdio` (matching the brief
   and the primary Claude Desktop use case). UPGRADE: expose `transport` as a
   CLI flag or env var if a hosted/remote MCP surface is ever needed.

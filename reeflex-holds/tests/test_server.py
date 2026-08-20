@@ -1,12 +1,12 @@
 """
-test_server.py -- unit tests for reeflex_holds.server (the FastMCP wiring).
+test_server.py -- unit tests for reeflex_holds.server (the MCPServer wiring).
 
 These tests do NOT hit the network: reeflex_holds.client's public functions
 are monkeypatched so we can assert exactly what server.py forwards to them,
 and how it relays client results/errors back through the MCP tool-call API.
 Network-level correctness of client.py itself is covered by test_client.py.
 
-Uses FastMCP's own `call_tool` / `list_tools` methods directly (async;
+Uses MCPServer's own `call_tool` / `list_tools` methods directly (async;
 driven here via asyncio.run) -- this exercises the exact tool registration
 and invocation path a real MCP client (Claude Desktop, etc.) goes through.
 """
@@ -24,7 +24,7 @@ _PARENT = os.path.dirname(_HERE)
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
 
-from mcp.server.fastmcp.exceptions import ToolError  # noqa: E402
+from mcp.server.mcpserver.exceptions import ToolError  # noqa: E402
 
 from reeflex_holds import client  # noqa: E402
 from reeflex_holds import server as holds_server  # noqa: E402
@@ -33,10 +33,15 @@ mcp = holds_server.mcp
 
 
 def _call(name: str, args: dict) -> dict:
-    """Call an MCP tool and parse its JSON text content into a dict."""
+    """Call an MCP tool and parse its JSON text content into a dict.
+
+    MCPServer's call_tool() (mcp>=2) returns a CallToolResult with a
+    `.content` list, not a bare tuple/list of content items (mcp<2's shape).
+    """
     result = asyncio.run(mcp.call_tool(name, args))
-    content = result[0] if isinstance(result, tuple) else result
-    text = content[0].text
+    content = result.content if hasattr(result, "content") else result
+    content = content[0] if isinstance(content, (list, tuple)) else content
+    text = content.text
     return json.loads(text)
 
 
@@ -69,11 +74,11 @@ class TestToolRegistration(unittest.TestCase):
 
     def test_get_hold_requires_id(self) -> None:
         tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
-        self.assertEqual(tools["get_hold"].inputSchema.get("required"), ["id"])
+        self.assertEqual(tools["get_hold"].input_schema.get("required"), ["id"])
 
     def test_resolve_hold_requires_id_and_decision_only(self) -> None:
         tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
-        schema = tools["resolve_hold"].inputSchema
+        schema = tools["resolve_hold"].input_schema
         self.assertEqual(set(schema.get("required", [])), {"id", "decision"})
         # Anti-impersonation guarantee: no "principal" argument is exposed --
         # the resolving identity can only come from REEFLEX_PRINCIPAL server-side.
@@ -81,7 +86,7 @@ class TestToolRegistration(unittest.TestCase):
 
     def test_list_holds_status_is_optional(self) -> None:
         tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
-        schema = tools["list_holds"].inputSchema
+        schema = tools["list_holds"].input_schema
         self.assertNotIn("status", schema.get("required", []))
 
 

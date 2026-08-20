@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reeflex-holds"
-version = "0.1.2"
+version = "0.2.0"
 description = "MCP server exposing reeflex-core's Human-in-the-Loop (HIL) holds API -- list, inspect, and resolve Reeflex governance holds from any MCP client."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,8 +23,16 @@ classifiers = [
 # dependency-free by contract). The official MCP Python SDK is the standard
 # way to speak the protocol, so it is the ONE dependency here -- see
 # reeflex-holds/README.md "Why the mcp SDK" for the rationale.
+#
+# mcp>=2 (RFX-26): this package ports to `mcp.server.mcpserver.MCPServer`,
+# the post-2026-07-28-spec replacement for `mcp.server.fastmcp.FastMCP`
+# (removed in mcp 2.0.0). The two APIs are not simultaneously importable
+# from one `mcp` install (RFX-9 spike, dev-1--003), so the floor moves
+# instead of widening -- this package no longer supports mcp<2. reeflex-mcp
+# (the OTHER package on the old mcp<2 pin) is UNCHANGED and unaffected: it
+# is pinned and tested independently (see gate.py's per-package venvs).
 dependencies = [
-    "mcp>=1.2,<2",
+    "mcp>=2",
 ]
 
 [project.urls]
