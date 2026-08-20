@@ -84,6 +84,16 @@ SUITE_ROOTS = [
     "reeflex-holds/tests",
     "n8n-nodes-reeflex/test",
     "reeflex-wordpress/tests",
+    "scripts/tests",
+]
+
+# RFX-49: candidate locations for a checked-out reeflex-app (private repo,
+# never vendored into this tree) whose migrations/versions this gate can
+# additionally validate. First existing match wins; none found -> SKIPPED
+# (this repo itself has no alembic migrations of its own).
+APP_MIGRATIONS_CANDIDATES = [
+    "/root/reeflex/reeflex-app/migrations/versions",  # canonical devbox clone (WoW R.5)
+    os.path.join(os.path.dirname(REPO_ROOT), "reeflex-app", "migrations", "versions"),  # sibling checkout
 ]
 
 TEST_FILE_PATTERNS = ["test_*.py", "*_test.py", "*_test.rego", "*.test.ts", "*.test.js"]
@@ -106,6 +116,7 @@ PYTEST_SKIP_RE = re.compile(r"^\d+ passed, (\d+) skipped\b", re.M)
 UNITTEST_RAN_RE = re.compile(r"^Ran (\d+) tests? in [0-9.]+s$", re.M)
 UNITTEST_OK_RE = re.compile(r"^OK(?: \((?P<detail>[^)]*)\))?$", re.M)
 N8N_PASS_RE = re.compile(r"^(\d+) passed, (\d+) failed, (\d+) total$", re.M)
+MIGRATION_HEADS_RE = re.compile(r"^MIGRATION-HEADS: (PASS|FAIL) \((.*)\)$", re.M)
 USAGE_RE_TMPL = r"^usage: %s\b"
 COMPONENT_RE = re.compile(r"^COMPONENT ([a-z0-9-]+): (PASS|FAIL|SKIPPED|DELEGATED)\b(?: \((.*)\))?$")
 
@@ -156,6 +167,20 @@ def parse_n8n(exit_code: int, text: str):
         return True, "%s tests" % m.group(1)
     if exit_code == 0:
         return False, "exit 0 but no anchored 'N passed, 0 failed, N total' summary — cannot confirm"
+    return False, "exit %d" % exit_code
+
+
+def parse_migration_heads(exit_code, text):
+    """PASS iff exit 0 AND the checker's own anchored 'MIGRATION-HEADS: PASS
+    (...)' line — mirrors the other parse_* functions (DoD 5): an exit 0
+    with no matching line, or a matching FAIL line, cannot flip this green."""
+    m = MIGRATION_HEADS_RE.search(text)
+    if exit_code == 0 and m and m.group(1) == "PASS":
+        return True, m.group(2)
+    if m and m.group(1) == "FAIL":
+        return False, m.group(2)
+    if exit_code == 0:
+        return False, "exit 0 but no anchored 'MIGRATION-HEADS: PASS' summary — cannot confirm"
     return False, "exit %d" % exit_code
 
 
@@ -522,6 +547,48 @@ class Gate:
             self.component(key, "PASS",
                            "no test files outside the %d enumerated suite roots" % len(SUITE_ROOTS))
 
+    # -- migration graph (RFX-49) --------------------------------------------
+
+    def run_migration_heads_selftest(self):
+        # Unconditional: proves the CHECKER TOOL itself is correct (single
+        # head passes, a shared-parent collision fails, re-parenting fixes
+        # it, merge migrations/dangling parents/duplicate ids are handled).
+        # This runs regardless of whether reeflex-app is checked out here.
+        key = "migration-heads-selftest"
+        code, out = self.run_cmd(
+            [sys.executable, "-m", "unittest", "discover", "-s", "scripts/tests", "-t", "scripts"],
+        )
+        ok, detail = parse_unittest(code, out)
+        self.show(out, full=not ok, tail=8)
+        self.component(key, "PASS" if ok else "FAIL", detail)
+
+    def run_migration_heads(self):
+        # Optional: this repo has no alembic migrations of its own (reeflex-core
+        # is OPA/Rego, not a DB-backed service) — the graph that actually broke
+        # in RFX-49 lives in the private reeflex-app repo, cloned separately
+        # (never vendored into this tree). When that checkout is present
+        # (canonical devbox layout, WoW R.5, or a REEFLEX_APP_MIGRATIONS_DIR
+        # override) this gate ALSO validates its migration graph, for free,
+        # in the same command a developer already runs on that machine.
+        key = "migration-heads"
+        app_dir = os.environ.get("REEFLEX_APP_MIGRATIONS_DIR")
+        if app_dir and not os.path.isdir(app_dir):
+            app_dir = None
+        if not app_dir:
+            app_dir = next((c for c in APP_MIGRATIONS_CANDIDATES if os.path.isdir(c)), None)
+        if not app_dir:
+            self.component(key, "SKIPPED",
+                           "no reeflex-app checkout found (set REEFLEX_APP_MIGRATIONS_DIR, "
+                           "or check out reeflex-app as a sibling of this repo) — this repo "
+                           "itself has no alembic migrations")
+            return
+        code, out = self.run_cmd(
+            [sys.executable, os.path.join(REPO_ROOT, "scripts", "check_migration_heads.py"), app_dir]
+        )
+        ok, detail = parse_migration_heads(code, out)
+        self.show(out, full=True)
+        self.component(key, "PASS" if ok else "FAIL", detail)
+
     # -- main -----------------------------------------------------------------
 
     def main(self):
@@ -541,6 +608,8 @@ class Gate:
             ("entrypoints     build wheels from tree + invoke every entry point", self.run_entrypoints),
             ("pypi-smoke      fresh install of the PUBLISHED packages", self.run_pypi_smoke),
             ("wp-conformance  WordPress live-core harness", self.run_wp),
+            ("migration-heads-selftest  scripts/tests: check_migration_heads correctness", self.run_migration_heads_selftest),
+            ("migration-heads  static alembic graph (reeflex-app, if checked out) — single head, no DB", self.run_migration_heads),
             ("drift           test files outside every enumerated suite", self.run_drift),
         ]:
             self.emit("--- %s" % header)
@@ -601,6 +670,17 @@ def selftest():
     check("unittest rejects OK-in-prose", not parse_unittest(0, "Ran 5 tests in 1.0s\neverything OK here\n")[0])
     check("unittest rejects FAILED", not parse_unittest(1, "Ran 5 tests in 1.0s\n\nFAILED (failures=2)\n")[0])
     check("unittest rejects missing Ran line", not parse_unittest(0, "\nOK\n")[0])
+
+    # migration-heads: only the checker's own anchored PASS/FAIL line counts
+    check("migration-heads accepts real PASS", parse_migration_heads(0, "MIGRATION-HEADS: PASS (1 head: 0011_x)\n")[0])
+    check("migration-heads rejects real FAIL even at exit 0",
+          not parse_migration_heads(0, "MIGRATION-HEADS: FAIL (2 heads)\n")[0])
+    check("migration-heads rejects nonzero exit despite PASS line",
+          not parse_migration_heads(1, "MIGRATION-HEADS: PASS (1 head: x)\n")[0])
+    check("migration-heads rejects prose mention",
+          not parse_migration_heads(0, "well, MIGRATION-HEADS: PASS (1 head: x) I guess\n")[0])
+    check("migration-heads rejects exit 0 with no anchored line",
+          not parse_migration_heads(0, "some other output\n")[0])
 
     # transcript re-parse: only exact COMPONENT lines count
     v, _ = derive_verdict(["COMPONENT a: PASS (x)", "COMPONENT b: PASS"], set())
