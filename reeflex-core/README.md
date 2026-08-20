@@ -379,7 +379,7 @@ Three principal types may resolve a hold, all via `POST /v1/holds/{id}/resolve`:
 - The resolution policy is the operator's, per rule. The shipped default is human-only for all rules.
 - Actor != approver is enforced on identity: the agent whose action raised the hold can never resolve it, on any surface, via any principal type.
 - `irreversible_systemic_prod` is resolvable by no principal — its deny is terminal.
-- `decided_by` records `type:identity` verbatim — for example `human:leo`, `agent:triage-bot`, `automation:camunda-proc-123`. This record is the EU AI Act Art. 14 oversight-allocation evidence (the Attest input). Zero AI is in the first decision path; principal choice is the operator's documented governance.
+- `decided_by` records `type:identity` verbatim — for example `human:leo`, `agent:triage-bot`, `automation:camunda-proc-123`. This record is the EU AI Act Art. 14 oversight-allocation evidence (the Attest input). Zero AI is in the first decision path; principal choice is the operator's documented governance. (Art.14's high-risk obligations were postponed by the Digital Omnibus, Reg. (EU) 2026/1744, from 2 August 2026 to 2 December 2027 — source: the European Commission's AI Act Service Desk; Art.50 transparency is unaffected and already in force.)
 
 ### Resolution policy configuration
 
