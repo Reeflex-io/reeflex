@@ -53,7 +53,8 @@ resource-side and network-boundary adapters for that reason.
 - **WordPress / WooCommerce** — wraps the Abilities API seam; governs core,
   WooCommerce, and any plugin that registers abilities — *every* agent that
   reaches the site — with no backend-specific code.
-  [Repo](https://github.com/Reeflex-io/reeflex/tree/main/reeflex-wordpress)
+  [Repo](https://github.com/Reeflex-io/reeflex/tree/main/reeflex-wordpress) ·
+  [WooCommerce use-case](woocommerce.md)
 - **n8n** — a community node (or a plain HTTP Request node) that calls
   `/v1/decide` and routes on the verdict.
   [Repo](https://github.com/Reeflex-io/reeflex/tree/main/n8n-nodes-reeflex)

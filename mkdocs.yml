@@ -176,6 +176,7 @@ nav:
       - adapters/index.md
       - n8n (zero-code): guides/n8n.md
       - MCP gateway: mcp-gateway.md
+      - WooCommerce: adapters/woocommerce.md
   - Operations:
       - operations/index.md
       - SIEM export: siem.md

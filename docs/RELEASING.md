@@ -26,12 +26,14 @@ Pushing a `v*` tag triggers `release.yml`, which fans out to:
 | PyPI | `reeflex-claude` **and** `reeflex-holds` | OIDC Trusted Publishing |
 | npm | `n8n-nodes-reeflex` (with provenance) | OIDC or `NPM_TOKEN` |
 | GHCR | `ghcr.io/reeflex-io/reeflex-core` **only if core changed** | `GITHUB_TOKEN` |
+| WP.org SVN | `reeflex-gate` (trunk + tag + assets) — **inert until the slot exists** (§2.5) | `WPORG_SVN_USERNAME` / `WPORG_SVN_PASSWORD` |
 | Job summary | a channel checklist (version + URL + ✅/⏭️/❌ per channel) | — |
 
 Publishing a **GitHub Release** through the web UI also works: the UI creates
-the tag, and the tag push is what triggers the workflow. Either gesture leads to
-the same run. (If a release object already exists for the tag, the workflow just
-attaches assets to it and leaves the body untouched.)
+the tag, and the tag push is what triggers `release.yml`. The same "release
+published" event also triggers `.github/workflows/wporg-deploy.yml` (§2.5) —
+one gesture, both workflows. (If a release object already exists for the tag,
+`release.yml` just attaches assets to it and leaves the body untouched.)
 
 **Manual re-run / re-release:** use the `workflow_dispatch` trigger (Actions →
 Release → Run workflow). It requires a `tag` input (an existing tag, e.g.
@@ -117,7 +119,43 @@ The image `ghcr.io/reeflex-io/reeflex-core` is already public. No PAT is needed
 for pushing from CI. (The Vault `/credentials/GHCR_TOKEN` is only for
 pushing from a workstation/VM by hand.)
 
-### 2.4 Secrets summary
+### 2.5 WP.org SVN — `reeflex-gate`, inert until the slot exists (RFX-22)
+
+`.github/workflows/wporg-deploy.yml` deploys `reeflex-wordpress/` (trunk +
+version tag + listing assets) to the WordPress.org plugin SVN via
+[10up/action-wordpress-plugin-deploy](https://github.com/10up/action-wordpress-plugin-deploy),
+on every published GitHub Release. The plugin (`reeflex-gate`) is, as of this
+writing, still in the wordpress.org directory review queue — there is no SVN
+slot yet, so this workflow has nothing to authenticate to.
+
+**One-time human setup, once the review clears and a slot is granted:**
+
+1. Create (or use) a wordpress.org account with commit access to the
+   `reeflex-gate` SVN repository, **2FA on**.
+2. Add two **GitHub Actions secrets** on `Reeflex-io/reeflex`:
+   `WPORG_SVN_USERNAME` and `WPORG_SVN_PASSWORD`. Never a literal in the repo,
+   a workflow file, or a log — by-reference only, same invariant as every
+   other credential in this project.
+3. That's it. The **next** published release deploys automatically; no
+   workflow re-run, no manual SVN step, nothing else to configure.
+
+**Until then**, the workflow's `guard` job detects the missing secrets and
+skips the `deploy` job with a `::notice::` explaining why — it cannot fail a
+release or half-publish. See the comment header of `wporg-deploy.yml` for the
+full behavior (including why the SVN version tag is read from
+`reeflex-gate.php` / `readme.txt`, not the git release tag — the two are
+independent, §1 above).
+
+**Listing assets** (icon, banner, screenshots) live at
+`reeflex-wordpress/.wordpress-org/` if present; that directory does not exist
+yet (verified against every repo on the org as of RFX-22 — no `brand/` or
+listing-asset directory exists anywhere). The deploy action skips the asset
+copy gracefully when the directory is absent, so this is a no-op today, not a
+blocker — dropping `icon-128x128.png` / `icon-256x256.png` /
+`banner-772x250.png` / `banner-1544x500.png` / `screenshot-*.png` there is all
+a future change needs.
+
+### 2.6 Secrets summary
 
 | Secret | Used by | Status |
 |---|---|---|
@@ -126,6 +164,7 @@ pushing from a workstation/VM by hand.)
 | npm OIDC (no secret) | npm publish | preferred |
 | `NPM_TOKEN` (repo secret) | npm publish | bootstrap/fallback |
 | `PYPI_API_TOKEN` (repo secret) | PyPI publish | **bootstrap only**, commented out |
+| `WPORG_SVN_USERNAME` / `WPORG_SVN_PASSWORD` (repo secrets) | WP.org SVN deploy | **not yet set — plugin still in review (RFX-22)** |
 
 The Vault tokens (`/credentials/pypi`, `/credentials/npm`) stay **bootstrap /
 fallback only**. The steady state is OIDC — no long-lived publish token in the
