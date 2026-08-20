@@ -16,6 +16,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
   coverage the WordPress adapter already has (`woocommerce/*` abilities pass through the same
   `WP_Ability::execute()` seam); no new adapter code.
 
+### Changed
+- **`reeflex-holds` 0.2.0 (not yet published) — ports from `mcp.server.fastmcp.FastMCP` to `mcp.server.mcpserver.MCPServer`, the post-2026-07-28-spec successor (RFX-26).** The `mcp` dependency floor moves to `mcp>=2`; this package no longer supports `mcp<2` (the two APIs are not simultaneously importable from one `mcp` install). Mechanical port validated by the RFX-9 spike (dev-1--003): tool registration, forwarding, and error propagation are unchanged — only the import path and the `Tool.inputSchema` -> `Tool.input_schema` attribute rename in tests. `reeflex-mcp` is unaffected and stays pinned at `mcp>=1.2,<2` on its own dependency contract; `gate.py`'s pytest/entrypoint suites now use one venv per package instead of one shared venv, since the two packages' `mcp` constraints can no longer resolve together.
+
 ## [0.1.15] - reeflex-mcp 0.1.3 + reeflex-holds 0.1.2 (mcp<2 dependency pin)
 
 Both PyPI packages have been broken on FRESH install since 2026-07-28: `mcp` 2.0.0 (released that day) removed the `mcp.server.fastmcp` module, which both `reeflex-mcp` and `reeflex-holds` import at startup, and both packages declared `mcp>=1.2.0` with no upper bound — so a fresh `pip install` resolved `mcp` 2.0.0 and the installed tool died immediately with `ModuleNotFoundError: No module named 'mcp.server.fastmcp'`. Existing environments that already had `mcp` 1.x installed were unaffected.

@@ -3,7 +3,8 @@ server.py -- the reeflex-holds MCP server: the AIL/HIL socket.
 
 Exposes reeflex-core's HIL holds API (list/get/resolve) plus a best-effort
 reachability probe as MCP tools over stdio, using the official MCP Python SDK
-(FastMCP) -- see reeflex-holds/README.md "Why the mcp SDK".
+(MCPServer, mcp>=2 -- the post-2026-07-28-spec successor to FastMCP) -- see
+reeflex-holds/README.md "Why the mcp SDK".
 
 THIN CONSUMER, by design (HIL Phase 2 T3 brief): this server enforces NOTHING
 itself. Every governance decision -- actor != approver, R3/systemic immunity,
@@ -21,11 +22,11 @@ package implements; see README for the Claude Desktop wiring).
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from . import client
 
-mcp = FastMCP(
+mcp = MCPServer(
     "reeflex-holds",
     instructions=(
         "Reeflex HIL (Human-in-the-Loop) holds console. Lists, inspects, and "

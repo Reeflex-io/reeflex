@@ -311,21 +311,23 @@ class Gate:
     def run_pytest_suites(self):
         keys = [("pytest-mcp", "reeflex-mcp"), ("pytest-holds", "reeflex-holds"),
                 ("pytest-claude", "reeflex-claude")]
-        venv_path, err = self.make_venv("venv-suites")
-        if venv_path:
-            py = self.venv_python(venv_path)
-            install = [py, "-m", "pip", "install", "-q", "pytest"]
-            for _, pkg in keys:
-                install += ["-e", os.path.join(REPO_ROOT, pkg)]
-            code, out = self.run_cmd(install)
-        else:
-            code, out = 1, err
-        if code != 0:
-            self.show(out, full=True)
-            for key, _ in keys:
-                self.component(key, "FAIL", "suite venv install failed")
-            return
+        # One venv PER package, not one shared venv (RFX-26): reeflex-mcp pins
+        # mcp>=1.2,<2 while reeflex-holds (ported to MCPServer) now requires
+        # mcp>=2 -- installing both editable into a single venv is an
+        # unsatisfiable pip resolve, not a real conflict in the tree (each
+        # package's own dependency contract is internally consistent).
         for key, pkg in keys:
+            venv_path, err = self.make_venv("venv-suite-%s" % pkg)
+            if not venv_path:
+                self.component(key, "FAIL", "suite venv creation failed: %s" % err)
+                continue
+            py = self.venv_python(venv_path)
+            code, out = self.run_cmd(
+                [py, "-m", "pip", "install", "-q", "pytest", "-e", os.path.join(REPO_ROOT, pkg)])
+            if code != 0:
+                self.show(out, full=True)
+                self.component(key, "FAIL", "suite venv install failed")
+                continue
             code, out = self.run_cmd([py, "-m", "pytest", "tests/", "-q"],
                                      cwd=os.path.join(REPO_ROOT, pkg))
             ok, detail = parse_pytest(code, out)
@@ -359,33 +361,39 @@ class Gate:
         os.makedirs(wheels, exist_ok=True)
         # Build real artifacts (wheels) from the tree — NOT `pip install -e .`,
         # which is exactly how CI stayed green over a dead published package.
+        wheel_for = {}
         for pkg, _, _ in PUBLISHED:
+            before = set(os.listdir(wheels))
             code, out = self.run_cmd([sys.executable, "-m", "pip", "wheel", "--no-deps",
                                       "-q", "-w", wheels, os.path.join(REPO_ROOT, pkg)])
             if code != 0:
                 self.show(out, full=True)
                 self.component(key, "FAIL", "wheel build failed for %s" % pkg)
                 return
-        venv_path, err = self.make_venv("venv-entry")
-        if not venv_path:
-            self.show(err, full=True)
-            self.component(key, "FAIL", "venv creation failed")
-            return
-        py = self.venv_python(venv_path)
-        wheel_files = sorted(os.path.join(wheels, f) for f in os.listdir(wheels))
-        # Install the wheels WITH dependency resolution from PyPI: this is the
-        # leg that catches a missing/wrong dependency pin (the 2026-07-28 class).
-        code, out = self.run_cmd([py, "-m", "pip", "install", "-q"] + wheel_files)
-        if code != 0:
-            self.show(out, full=True)
-            self.component(key, "FAIL", "installing built wheels failed")
-            return
-        code, out = self.run_cmd([py, "-m", "pip", "show", "mcp"])
-        ver = next((l for l in out.split("\n") if l.startswith("Version:")), "Version: ?")
-        self.emit("  | resolved mcp %s" % ver.split(":", 1)[1].strip())
+            wheel_for[pkg] = sorted(os.path.join(wheels, f) for f in set(os.listdir(wheels)) - before)
+        # One venv PER package, not one shared venv (RFX-26): reeflex-mcp pins
+        # mcp>=1.2,<2 while reeflex-holds (ported to MCPServer) now requires
+        # mcp>=2 -- resolving both wheels' dependencies from PyPI into a single
+        # venv is an unsatisfiable pip resolve, not a real conflict in the tree.
         failures = []
         details = []
+        resolved = []
         for pkg, entry, has_usage in PUBLISHED:
+            venv_path, err = self.make_venv("venv-entry-%s" % pkg)
+            if not venv_path:
+                failures.append("%s: venv creation failed" % pkg)
+                continue
+            py = self.venv_python(venv_path)
+            # Install the wheel WITH dependency resolution from PyPI: this is
+            # the leg that catches a missing/wrong dependency pin (2026-07-28 class).
+            code, out = self.run_cmd([py, "-m", "pip", "install", "-q"] + wheel_for[pkg])
+            if code != 0:
+                self.show(out, full=True)
+                failures.append("%s: installing built wheel failed" % pkg)
+                continue
+            code, ver_out = self.run_cmd([py, "-m", "pip", "show", "mcp"])
+            ver = next((l for l in ver_out.split("\n") if l.startswith("Version:")), "Version: ?")
+            resolved.append("%s: %s" % (pkg, ver.split(":", 1)[1].strip()))
             exe = self.venv_bin(venv_path, entry + (".exe" if os.name == "nt" else ""))
             code, out = self.run_cmd([exe, "--help"], stdin_devnull=True)
             self.emit("  | invoke: %s --help -> exit %d" % (entry, code))
@@ -400,6 +408,7 @@ class Gate:
                     failures.append("%s: exit 0 but no anchored 'usage: %s' banner" % (entry, entry))
             else:
                 details.append("%s: exit 0 (no argparse — proves the script resolves and imports, nothing more)" % entry)
+        self.emit("  | resolved mcp %s" % "; ".join(resolved))
         if failures:
             self.component(key, "FAIL", "; ".join(failures))
         else:
