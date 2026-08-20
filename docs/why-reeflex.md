@@ -34,7 +34,7 @@ Most of the stack answers the first two. Reeflex exists for the third.
 | Sees action scale? | no (delete 1 = delete 5,000) | no | rarely, per-call at best | **yes — count, reversibility, blast radius, externality** |
 | Split-batch evasion | not addressed | not addressed | not addressed | **cumulative per-session ledger — fragmentation buys nothing** |
 | Human approval | ticket systems, out of band | n/a | mostly absent | **built in: hold → your designated principal decides → action runs (shipped in core, v0.1.5)** |
-| Evidence | logs after the fact | flags after the fact | access logs | **pre-execution record of what the agent *attempted*** — streamed to your SIEM in real time |
+| Evidence | logs after the fact | flags after the fact | access logs | **pre-execution record of what the agent *attempted*, deterministic and replayable by an auditor** — streamed to your SIEM in real time |
 | If the engine is down | varies | fails open as a rule | varies | **fails closed — nothing goes through** |
 
 *("MCP gateways" above is the commodity, identity-first category — Permit.io,
@@ -187,7 +187,9 @@ AIL earns its place for three concrete reasons:
    Omnibus, Regulation (EU) 2026/1744, from 2 August 2026 to 2 December
    2027 — source: the European Commission's AI Act Service Desk. Building
    this now is advance preparation, not a response to a deadline that has
-   already arrived.)*
+   already arrived. NIS2 Article 21(2), by contrast, is already in force
+   and already being audited across the EU — the nearer-term reason the
+   same evidence trail matters today, not in 2027.)*
 
 The whole posture, in one line: **the industry treats agent-delegated
 approval as a risk to warn about. We treat it as a mechanism to govern —

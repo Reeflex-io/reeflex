@@ -69,10 +69,12 @@ you safe is free, forever** — a planned commercial tier adds compliance
 engine), never safety. Details in [docs/open-core.md](docs/open-core.md).
 
 The open tier is already useful as an evidence source: every decision lands in
-an append-only audit log —
-a pre-execution record of what an agent *attempted*, not just what happened.
-If you have ever had to answer an auditor's "what could this agent have done,
-and what stopped it?", that log is the answer.
+an append-only audit log — a pre-execution record of what an agent *attempted*,
+not just what happened. Because the decision path is deterministic, that
+record is also **replayable**: an auditor can take the same envelope and
+reproduce the same verdict, rather than take the log's word for it. If you
+have ever had to answer an auditor's "what could this agent have done, and
+what stopped it?", that log is the answer.
 
 ### Modular by design — and complementary, not a replacement
 

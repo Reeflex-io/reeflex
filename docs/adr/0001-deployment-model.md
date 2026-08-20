@@ -52,7 +52,7 @@ dependency surface"). The engine's implementation language (currently Python + O
 | Tier | Components | License |
 |---|---|---|
 | Open-source | `reeflex-core`, all adapters, base policy packs, `reeflex-spec` | Apache 2.0 |
-| Commercial / closed | Attest (audit-ready control evidence: NIS2, DORA, EU AI Act, SOC 2), Fleet (multi-site management), Cloud (hosted) | Proprietary — never in a public repo |
+| Commercial / closed | Attest (audit-ready control evidence: NIS2 Art.21(2) — in force, under active EU audit; DORA; EU AI Act Art.12/14 — high-risk obligations from Dec 2027; SOC 2), Fleet (multi-site management), Cloud (hosted) | Proprietary — never in a public repo |
 
 The closed tier never appears in any public repository. This is an absolute project limit;
 see [docs/open-core.md](../open-core.md) for the full boundary definition.
