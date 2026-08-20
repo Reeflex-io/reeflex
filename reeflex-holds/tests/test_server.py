@@ -212,6 +212,44 @@ class TestResolveHoldTool(_PatchClientFn):
 # get_freeze_status forwarding
 # ---------------------------------------------------------------------------
 
+class TestMainArgvDispatch(unittest.TestCase):
+    """RFX-42: server.main() must dispatch to the real CLI on any argv,
+    never fall silently into the stdio MCP server (the defect this ticket
+    fixes -- see cli.py's docstring)."""
+
+    def setUp(self) -> None:
+        self._orig_argv = sys.argv
+        self._orig_run = mcp.run
+
+    def tearDown(self) -> None:
+        sys.argv = self._orig_argv
+        mcp.run = self._orig_run
+
+    def test_no_argv_still_starts_stdio_server(self) -> None:
+        calls = []
+        mcp.run = lambda **kw: calls.append(kw)
+        sys.argv = ["reeflex-holds"]
+        holds_server.main()
+        self.assertEqual(calls, [{"transport": "stdio"}])
+
+    def test_list_argv_dispatches_to_cli_not_stdio(self) -> None:
+        mcp.run = lambda **kw: (_ for _ in ()).throw(AssertionError("stdio must not start"))
+        sys.argv = ["reeflex-holds", "list", "--json"]
+
+        def fake_list_holds(status=None):
+            return {"items": [], "count": 0}
+
+        self._patch_client_list_holds(fake_list_holds)
+        with self.assertRaises(SystemExit) as ctx:
+            holds_server.main()
+        self.assertEqual(ctx.exception.code, 0)
+
+    def _patch_client_list_holds(self, fn) -> None:
+        original = client.list_holds
+        client.list_holds = fn
+        self.addCleanup(lambda: setattr(client, "list_holds", original))
+
+
 class TestGetFreezeStatusTool(_PatchClientFn):
     def test_forwards_to_client_and_never_claims_a_known_state(self) -> None:
         def fake_get_freeze_status():

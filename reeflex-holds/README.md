@@ -1,14 +1,15 @@
 # reeflex-holds
 
-An MCP server that turns [Reeflex](https://reeflex.io)'s Human-in-the-Loop (HIL)
-holds queue into a socket any MCP client can talk to. Any MCP-capable client
-(Claude Desktop, a coding agent, a custom bot) can list pending governance
-holds, inspect one, and approve or reject it -- without a bespoke integration
-per client.
+Lists, approves, and rejects [Reeflex](https://reeflex.io)'s Human-in-the-Loop
+(HIL) governance holds two ways: as **real terminal subcommands**
+(`reeflex-holds list|approve|reject`, no wp-admin/dashboard/MCP client
+needed -- see "CLI" below), and as an **MCP server** that turns the same
+holds queue into a socket any MCP client can talk to (Claude Desktop, a
+coding agent, a custom bot) -- without a bespoke integration per client.
 
-**What it is:** a thin MCP wrapper around three `reeflex-core` HTTP endpoints
-(`GET /v1/holds`, `GET /v1/holds/{id}`, `POST /v1/holds/{id}/resolve`), plus a
-best-effort reachability probe.
+**What it is:** a thin wrapper -- CLI and MCP tools alike -- around three
+`reeflex-core` HTTP endpoints (`GET /v1/holds`, `GET /v1/holds/{id}`,
+`POST /v1/holds/{id}/resolve`), plus a best-effort reachability probe.
 
 **What it is NOT:** it does not decide, enforce, or execute anything. Every
 governance rule -- who may resolve which hold, whether the resolving identity
@@ -16,8 +17,8 @@ is allowed to act, whether a hold has expired -- is enforced by `reeflex-core`
 (OPA/Rego + classical logic), exactly as it is for every other adapter. This
 package forwards HTTP calls and relays `reeflex-core`'s response, success or
 error, verbatim. A rejection from core (409, 403, 404, ...) is never retried,
-softened, or overridden here -- it surfaces to the MCP client as a real tool
-error.
+softened, or overridden here -- it surfaces as a real MCP tool error, or on
+the CLI as a non-zero exit with the reason printed to stderr.
 
 ## Tools
 
@@ -111,7 +112,34 @@ cd reeflex/reeflex-holds
 pip install -e .
 ```
 
-## Running it directly
+## CLI: list, approve, reject -- from a terminal, no MCP client needed
+
+`reeflex-holds` (the same console script, called with a real subcommand) is
+a human-typable console for the holds queue -- no wp-admin, no dashboard, no
+hand-written HTTP call:
+
+```bash
+export REEFLEX_CORE_URL=http://127.0.0.1:8080
+export REEFLEX_TOKEN=              # only if your core requires a bearer token
+export REEFLEX_PRINCIPAL=human:leo # required for approve/reject, not for list
+
+reeflex-holds list --status pending
+reeflex-holds approve <hold-id> --reason "reviewed the envelope, looks fine"
+reeflex-holds reject  <hold-id> --reason "not today"
+```
+
+`list` prints a table (id, status, rule, ability, magnitude, timestamps);
+add `--json` on any subcommand for raw JSON instead. Exit codes: `0` on
+success, `1` if `reeflex-core` refused the request (e.g. `actor_is_approver`,
+`not_resolvable`, a 404), `2` on a local setup/connection problem (core
+unreachable, or `REEFLEX_PRINCIPAL` unset for `approve`/`reject`) -- never a
+silent `0` with no output. `approve`/`reject` never take a `--principal`
+flag: the resolving identity is always `REEFLEX_PRINCIPAL`, exactly like the
+`resolve_hold` MCP tool below, so a resolution made from this CLI is
+indistinguishable in `reeflex-core`'s evidence from one made through the
+dashboard or an MCP client. Run `reeflex-holds --help` for the full usage.
+
+## Running it as an MCP server
 
 ```bash
 export REEFLEX_CORE_URL=http://127.0.0.1:8080
@@ -119,9 +147,12 @@ export REEFLEX_PRINCIPAL=human:leo
 python -m reeflex_holds
 ```
 
-This starts the stdio MCP server and blocks, waiting for a client to speak
-the protocol on stdin/stdout. You normally do not run it manually -- an MCP
-client (below) launches it as a subprocess.
+Called with **no arguments**, `reeflex-holds` (or `python -m reeflex_holds`)
+starts the stdio MCP server and blocks, waiting for a client to speak the
+protocol on stdin/stdout -- unchanged from before the CLI above existed.
+You normally do not run it manually -- an MCP client (below) launches it as
+a subprocess. Called with any argument, it runs the CLI above instead and
+never touches stdio.
 
 ## Claude Desktop demo
 
