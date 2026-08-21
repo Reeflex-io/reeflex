@@ -35,6 +35,24 @@ A suite that cannot run in this context prints `COMPONENT <key>: SKIPPED (<reaso
 — never silently absent. The `drift` component fails the gate when it finds test
 files that no enumerated component covers, so a new suite cannot appear without
 either being wired in here or turning the gate red.
+
+SILENT SKIPS (RFX-87; sweep RFX-105..RFX-115). `drift` proved insufficient: it
+checks that a test file SITS in an enumerated root, never that it YIELDS TESTS. PR #89's
+regression guard for a live fail-open security hole sat in the right directory
+and collected ZERO tests for its entire life — green every run, never one
+assertion. Location is not execution. Three components now close that class:
+
+  test-census   scripts/check_test_census.py — every enumerated test file must
+                yield tests under the runner its root is ACTUALLY run with, no
+                test body may be empty, and no test may be skipped
+                unconditionally without a ticketed, printed waiver.
+  skip-ledger   prints every SKIPPED/DELEGATED component with its reason, and
+                REFUSES an `--allow-skips` key that carries no registered
+                justification (SKIP_REGISTRY) — you cannot silence a skip here
+                without writing down why.
+  pypi-smoke    `--pypi delegated` now VERIFIES that a sibling job actually
+                invokes smoke-pypi.yml. Delegation you cannot point at is not
+                delegation, it is an unrun component printing a reassuring word.
 """
 
 from __future__ import annotations
@@ -99,6 +117,33 @@ APP_MIGRATIONS_CANDIDATES = [
 
 TEST_FILE_PATTERNS = ["test_*.py", "*_test.py", "*_test.rego", "*.test.ts", "*.test.js"]
 
+# RFX-108: the ONLY component keys whose SKIP may be silenced via --allow-skips,
+# each with the reason it can be structurally unrunnable. An --allow-skips key
+# that is not registered here is REFUSED by the skip-ledger component: a skip
+# that nobody wrote a reason for is precisely the class this gate exists to
+# kill, and "--allow-skips <anything>" was a blank cheque.
+SKIP_REGISTRY = {
+    "wp-conformance":
+        "needs a live reeflex-core and a php CLI. NOTE (RFX-105): CI now STARTS a "
+        "core and passes --core-url, so this allowance is no longer used there — "
+        "it remains for local runs on a box with no php.",
+    "migration-heads":
+        "validates the PRIVATE reeflex-app repo's alembic graph, which is never "
+        "checked out on this public repo's runner. reeflex-app's own ci.yml runs "
+        "the ENFORCING copy of the same check against its own migrations on every "
+        "PR — this leg is the free bonus when both repos sit side by side.",
+    "pypi-smoke":
+        "--pypi skip is a deliberate tree-health-only run; the published-artifact "
+        "smoke is owned by smoke-pypi.yml, which also runs daily on a schedule.",
+    "unittest-core":
+        "the core suite silently drops its ~40 opa-dependent tests without the opa "
+        "binary, so without opa the whole component is a loud SKIP rather than a "
+        "partial green. Allowed only on a box that genuinely cannot install opa.",
+    "rego-core": "no opa binary available in this context.",
+    "rego-claude": "no opa binary available in this context.",
+    "npm-n8n": "no npm/node >=20.15 available in this context.",
+}
+
 DRIFT_EXCLUDE_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "dist-test",
     "build", "site", ".mypy_cache", ".pytest_cache", ".ruff_cache",
@@ -118,6 +163,7 @@ UNITTEST_RAN_RE = re.compile(r"^Ran (\d+) tests? in [0-9.]+s$", re.M)
 UNITTEST_OK_RE = re.compile(r"^OK(?: \((?P<detail>[^)]*)\))?$", re.M)
 N8N_PASS_RE = re.compile(r"^(\d+) passed, (\d+) failed, (\d+) total$", re.M)
 MIGRATION_HEADS_RE = re.compile(r"^MIGRATION-HEADS: (PASS|FAIL) \((.*)\)$", re.M)
+TEST_CENSUS_RE = re.compile(r"^TEST-CENSUS: (PASS|FAIL) \((.*)\)$", re.M)
 USAGE_RE_TMPL = r"^usage: %s\b"
 COMPONENT_RE = re.compile(r"^COMPONENT ([a-z0-9-]+): (PASS|FAIL|SKIPPED|DELEGATED)\b(?: \((.*)\))?$")
 
@@ -183,6 +229,54 @@ def parse_migration_heads(exit_code, text):
     if exit_code == 0:
         return False, "exit 0 but no anchored 'MIGRATION-HEADS: PASS' summary — cannot confirm"
     return False, "exit %d" % exit_code
+
+
+def parse_test_census(exit_code, text):
+    """PASS iff exit 0 AND the census's own anchored 'TEST-CENSUS: PASS (...)'
+    line — same shape as parse_migration_heads (DoD 5). A census that cannot
+    say PASS in its own words cannot flip this component green."""
+    m = TEST_CENSUS_RE.search(text)
+    if exit_code == 0 and m and m.group(1) == "PASS":
+        return True, m.group(2)
+    if m and m.group(1) == "FAIL":
+        return False, m.group(2)
+    if exit_code == 0:
+        return False, "exit 0 but no anchored 'TEST-CENSUS: PASS' summary — cannot confirm"
+    return False, "exit %d" % exit_code
+
+
+def audit_skips(statuses, allow_skips, registry=None):
+    """RFX-108: account for every skip in this run.
+
+    Returns (ok, lines). NOT green when an --allow-skips key carries no
+    registered justification — silencing a skip must cost you a written
+    reason. A STALE allowance (the key is allowed but the component actually
+    ran) is reported as a WARN rather than a failure: it is a cleanup, not a
+    lying green, and failing on it would break every local invocation the
+    moment a suite starts working again."""
+    registry = SKIP_REGISTRY if registry is None else registry
+    lines = []
+    skipped = sorted(k for k, s in statuses.items() if s == "SKIPPED")
+    delegated = sorted(k for k, s in statuses.items() if s == "DELEGATED")
+
+    for k in skipped:
+        allowed = k in allow_skips
+        lines.append("  SKIPPED    %s%s" % (k, "  [allowed]" if allowed else "  [NOT ALLOWED -> INCOMPLETE]"))
+        lines.append("             why: %s" % registry.get(k, "(no registered justification)"))
+    for k in delegated:
+        lines.append("  DELEGATED  %s  (ran elsewhere — verified, see the component)" % k)
+    if not skipped and not delegated:
+        lines.append("  nothing was skipped or delegated in this run")
+
+    unregistered = sorted(k for k in allow_skips if k not in registry)
+    stale = sorted(k for k in allow_skips if k in statuses and statuses[k] != "SKIPPED")
+    for k in stale:
+        lines.append("  WARN       --allow-skips %s is STALE: that component reported %s, not "
+                     "SKIPPED. Drop it from --allow-skips." % (k, statuses[k]))
+    for k in unregistered:
+        lines.append("  REFUSED    --allow-skips %s is not in SKIP_REGISTRY — a skip with no "
+                     "written justification cannot be silenced here." % k)
+    return not unregistered, lines
 
 
 def derive_verdict(lines, allow_skips):
@@ -442,14 +536,33 @@ class Gate:
 
     # -- fresh-install-from-PyPI smoke (DoD 4) -------------------------------
 
+    # RFX-107: "DELEGATED" is the one status that asserts a component ran
+    # SOMEWHERE ELSE. That was taken on trust: delete the smoke-pypi job from
+    # gate.yml and this gate would print DELEGATED and stay GREEN forever,
+    # while the fresh-install smoke — the leg that exists because five days of
+    # green CI hid two dead published packages on 2026-07-28 — ran nowhere.
+    # So the delegation is now VERIFIED against the workflow that must carry it.
+    DELEGATE_WORKFLOW = os.path.join(".github", "workflows", "gate.yml")
+    DELEGATE_RE = re.compile(r"^\s*uses:\s*\./\.github/workflows/smoke-pypi\.yml\s*$", re.M)
+
+    def verify_delegation(self):
+        """Returns (ok, detail): does a sibling job actually invoke the smoke?"""
+        path = os.path.join(REPO_ROOT, self.DELEGATE_WORKFLOW)
+        if not os.path.exists(path):
+            return False, "claims delegation but %s does not exist" % self.DELEGATE_WORKFLOW
+        with open(path, encoding="utf-8") as fh:
+            body = fh.read()
+        if not self.DELEGATE_RE.search(body):
+            return False, ("claims delegation but no job in %s invokes "
+                           "./.github/workflows/smoke-pypi.yml" % self.DELEGATE_WORKFLOW)
+        return True, "smoke-pypi.yml via workflow_call in the same workflow run (verified wired in %s)" \
+                     % self.DELEGATE_WORKFLOW
+
     def run_pypi_smoke(self):
         key = "pypi-smoke"
         if self.args.pypi == "delegated":
-            # In CI the sibling workflow_call job runs smoke-pypi.yml (one copy
-            # of the smoke, owned there). DELEGATED counts as ran-elsewhere and
-            # is only honest when that sibling actually runs — the gate.yml
-            # workflow wires both.
-            self.component(key, "DELEGATED", "smoke-pypi.yml via workflow_call in the same workflow run")
+            ok, detail = self.verify_delegation()
+            self.component(key, "DELEGATED" if ok else "FAIL", detail)
             return
         if self.args.pypi == "skip":
             self.component(key, "SKIPPED", "explicitly disabled via --pypi skip (tree-health run)")
@@ -548,6 +661,22 @@ class Gate:
             self.component(key, "PASS",
                            "no test files outside the %d enumerated suite roots" % len(SUITE_ROOTS))
 
+    # -- test census (RFX-87) -------------------------------------------------
+
+    def run_test_census(self):
+        # Unconditional and static (ast only, no imports, no deps): every
+        # enumerated test file must YIELD TESTS under the runner its root is
+        # actually run with. `drift` proves a test file is in a directory some
+        # component names; this proves the file is not inert. #89's guard
+        # satisfied drift and collected zero tests.
+        key = "test-census"
+        code, out = self.run_cmd(
+            [sys.executable, os.path.join(REPO_ROOT, "scripts", "check_test_census.py"), REPO_ROOT]
+        )
+        ok, detail = parse_test_census(code, out)
+        self.show(out, full=True)
+        self.component(key, "PASS" if ok else "FAIL", detail)
+
     # -- migration graph (RFX-49) --------------------------------------------
 
     def run_migration_heads_selftest(self):
@@ -611,12 +740,26 @@ class Gate:
             ("wp-conformance  WordPress live-core harness", self.run_wp),
             ("migration-heads-selftest  scripts/tests: check_migration_heads correctness", self.run_migration_heads_selftest),
             ("migration-heads  static alembic graph (reeflex-app, if checked out) — single head, no DB", self.run_migration_heads),
+            ("test-census     every enumerated test file must YIELD TESTS (RFX-87)", self.run_test_census),
             ("drift           test files outside every enumerated suite", self.run_drift),
         ]:
             self.emit("--- %s" % header)
             fn()
             self.emit("")
+
+        # skip-ledger runs LAST: it is the only component that reads the other
+        # components' statuses, so it cannot be ordered anywhere else.
         allow = set(filter(None, (self.args.allow_skips or "").split(",")))
+        _, statuses_so_far = derive_verdict(self.lines, allow)
+        self.emit("--- skip-ledger     what was skipped in THIS run, and why (RFX-108)")
+        ledger_ok, ledger_lines = audit_skips(statuses_so_far, allow)
+        for line in ledger_lines:
+            self.emit(line)
+        self.component("skip-ledger", "PASS" if ledger_ok else "FAIL",
+                       "every skip in this run is accounted for" if ledger_ok
+                       else "an --allow-skips key has no registered justification")
+        self.emit("")
+
         verdict, statuses = derive_verdict(self.lines, allow)
         self.emit("GATE SUMMARY")
         for k, s in statuses.items():
@@ -682,6 +825,41 @@ def selftest():
           not parse_migration_heads(0, "well, MIGRATION-HEADS: PASS (1 head: x) I guess\n")[0])
     check("migration-heads rejects exit 0 with no anchored line",
           not parse_migration_heads(0, "some other output\n")[0])
+
+    # test-census: only the census's own anchored PASS/FAIL line counts (RFX-108)
+    check("test-census accepts real PASS",
+          parse_test_census(0, "TEST-CENSUS: PASS (44 files, 943 tests collected, 2 waived)\n")[0])
+    check("test-census rejects real FAIL even at exit 0",
+          not parse_test_census(0, "TEST-CENSUS: FAIL (1 finding(s) [zero-collection])\n")[0])
+    check("test-census rejects nonzero exit despite PASS line",
+          not parse_test_census(1, "TEST-CENSUS: PASS (44 files)\n")[0])
+    check("test-census rejects prose mention",
+          not parse_test_census(0, "note: TEST-CENSUS: PASS (all good) probably\n")[0])
+    check("test-census rejects exit 0 with no anchored line",
+          not parse_test_census(0, "collected some tests\n")[0])
+
+    # skip-ledger: an allowance without a written justification is refused (RFX-108)
+    reg = {"known": "a registered reason"}
+    ok, lines = audit_skips({"a": "PASS", "known": "SKIPPED"}, {"known"}, reg)
+    check("skip-ledger passes a registered, used allowance", ok)
+    check("skip-ledger prints the reason for every skip",
+          any("why: a registered reason" in l for l in lines))
+    ok, lines = audit_skips({"a": "PASS", "mystery": "SKIPPED"}, {"mystery"}, reg)
+    check("skip-ledger REFUSES an unregistered --allow-skips key", not ok)
+    check("...and says so", any("not in SKIP_REGISTRY" in l for l in lines))
+    ok, lines = audit_skips({"known": "PASS"}, {"known"}, reg)
+    check("skip-ledger WARNs on a stale allowance without failing", ok)
+    check("...and names it", any("is STALE" in l for l in lines))
+    ok, lines = audit_skips({"a": "PASS"}, set(), reg)
+    check("skip-ledger says plainly when nothing was skipped",
+          ok and any("nothing was skipped" in l for l in lines))
+    ok, lines = audit_skips({"a": "SKIPPED"}, set(), reg)
+    check("skip-ledger flags a NOT-ALLOWED skip in the ledger text",
+          any("NOT ALLOWED" in l for l in lines))
+    check("...and reports the missing justification honestly",
+          any("no registered justification" in l for l in lines))
+    check("every key in the real SKIP_REGISTRY carries a non-empty reason",
+          all(isinstance(v, str) and len(v) > 20 for v in SKIP_REGISTRY.values()))
 
     # transcript re-parse: only exact COMPONENT lines count
     v, _ = derive_verdict(["COMPONENT a: PASS (x)", "COMPONENT b: PASS"], set())
