@@ -240,15 +240,6 @@ def _is_read_verb(verb: str) -> bool:
 # Hold-based approval helpers (T2b/T2c)
 # ---------------------------------------------------------------------------
 
-def _get_agent_identity(envelope: dict) -> str:
-    """Extract the agent identity string from the envelope.
-
-    Returns the agent.id field, e.g. "agent:wordpress".
-    Falls back to "" if not present.
-    """
-    return (envelope.get("agent") or {}).get("id", "")
-
-
 def resolve_session_identity(envelope: dict) -> str:
     """Resolve the identity that keys the ledger AND that budgets.rego reads
     as `input.agent.session_id` for per-principal cumulative budgets (RFX-11).
@@ -336,17 +327,30 @@ def _validate_approval(envelope: dict) -> tuple[int, dict | None, dict | None]:
             "reeflex_hold_envelope_mismatch", "reeflex.core/hold_validation"
         ), hold
 
-    # Check 6: actor != approver
-    # Actor = this request's agent identity
-    # Approver = the identity part of hold.decided_by ("human:leo" -> "leo")
-    actor_id = _get_agent_identity(envelope)
+    # Check 6: actor != approver.
+    # Actor    = this request's agent identity (agent.id / on_behalf_of /
+    #            session_id -- see principal.actor_identities()).
+    # Approver = hold.decided_by, "{type}:{identity}".
+    #
+    # RFX-CORE-2: this was a raw `==` between agent.id and the identity half of
+    # decided_by, so it missed the SAME identity written in a different case
+    # ("svc-bot" vs "SVC-BOT"), with an invisible character, or named via
+    # on_behalf_of -- and it was skipped entirely when agent.id was absent
+    # (SPEC §2 does not require agent.id; only session_id is required).  All
+    # four were confirmed live on api-dev. Now normalized and compared across
+    # the whole actor identity set, mirroring the resolve-time check in
+    # server.py so a resubmission cannot pass a guard the resolve already
+    # applied -- or vice versa.
+    from .principal import is_self_approval, normalize_identity  # type: ignore[import]
+
     decided_by = hold.get("decided_by") or ""
-    # decided_by format: "{type}:{identity}" — extract the identity part
     if ":" in decided_by:
-        approver_id = decided_by.split(":", 1)[1]
+        approver_type, approver_id = decided_by.split(":", 1)
     else:
-        approver_id = decided_by
-    if actor_id and approver_id and actor_id == approver_id:
+        approver_type, approver_id = "", decided_by
+    if normalize_identity(approver_id) and is_self_approval(
+        envelope, approver_type, approver_id
+    ):
         return 200, _deny_response(
             "reeflex_hold_actor_is_approver", "reeflex.core/hold_validation"
         ), hold

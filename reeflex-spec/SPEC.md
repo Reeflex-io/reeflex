@@ -97,6 +97,19 @@ Adapters map backend operations onto a small, fixed verb set. This keeps policy 
 
 The backend-specific operation is preserved in `action.ability` for fine-grained rules; `verb` exists so a policy can say "no `delete` in production over N items" regardless of backend.
 
+**This verb set is CLOSED, and `reeflex-core` enforces it** (RFX-CORE-3). Because policy rules compare `action.verb` by exact string — R5's cumulative delete budget (§4.1) keys on the literal `"delete"` on both sides — a verb that reaches the engine verbatim fails **open** on any near-miss. Core therefore canonicalizes `action.verb` before evaluation, exactly as it does `target.environment` and `axes.*`:
+
+- normalize (Unicode NFKC, drop control/format characters, trim, casefold), so `"Delete"`, `"DELETE"`, `"delete "`, a trailing newline and a zero-width character are all the same verb;
+- alias-map to the member above — this covers synonyms (`remove`, `destroy`, `purge`, `drop`, `truncate`, `rm`, …), compound spellings (`hard-delete`, `bulk_delete`) and CamelCase API operation names (`DeleteObject`, `GetObject`);
+- an **unrecognized** verb resolves conservatively: to `delete` when `axes.reversibility` is `irreversible`, otherwise to `update`. It is never resolved to `read`, which would grant the read-only allow rule.
+
+Adapters SHOULD still emit one of the seven canonical verbs — that is the normative requirement above, and canonicalization is a safety net, not a licence to send anything. Two consequences worth knowing:
+
+- The **normalized** verb is what appears in the cumulative ledger (`count_by_verb`), the hold record, and the audit line. The backend's own operation name is preserved in `action.ability`, which is where fine-grained detail belongs.
+- Because the verb is part of the action-defining projection, `envelope_hash` (§5.1) is computed over the *canonical* verb. Both submission and resubmission canonicalize identically, so the hold binding is unaffected.
+
+`action.verb` is **asserted by the adapter and not verifiable by core**. Canonicalization closes the near-miss and synonym surface; it cannot make a deliberately mislabelled action honest. As one cross-check, core treats a non-delete verb as a delete when `action.ability` names one (e.g. `verb: "read"` carrying `ability: "wordpress/delete-post"`). Full integrity here depends on envelope signing (§6, roadmap).
+
 ---
 
 ## 4. The three universal axes

@@ -36,15 +36,44 @@ HOLDS API VALIDATION (POST /v1/holds/{id}/resolve)
 Request body: {decision:"approve"|"reject", principal:{type,id}, reason?}
 
 Validation chain (first failure -> 4xx JSON with reason code):
-  1. hold exists + status==pending + not expired  else 404 "not_resolvable"
+  1. hold exists + status==pending + not expired  else 404/409 "not_resolvable"
   2. NON_RESOLVABLE_RULES guard                   else 403 "rule_not_resolvable"
   3. resolution policy (principal.type allowed)   else 403 "principal_type_not_allowed"
-  4. actor != approver                            else 403 "actor_is_approver"
+  4. approver is VERIFIABLE (RFX-CORE-2)          else 403 "principal_mismatch"
+                                                    or 403 "principal_not_verified"
+  5. actor != approver                            else 403 "actor_is_approver"
 
 Resolution policy: from env REEFLEX_RESOLUTION_POLICY (JSON string or path to
 JSON file), shape {"default":["human"],"<rule_short_name>":["human","agent"]}.
 Absent -> human-only everywhere.  Lookup key = rule short-name (part after the
 last "/" in rule_id), falling back to "default".
+
+WHO THE APPROVER IS (RFX-CORE-2) — see app/principal.py for the full write-up.
+Checks 3 and 5 only ever examined the principal the CALLER ASSERTED in the
+request body, and check 5 was a raw string inequality, so one bearer token
+could raise a hold as an agent and approve it as an arbitrary named human;
+`decided_by` was then persisted as though a real human had decided.  Check 4
+now establishes the approver BEFORE the policy and self-approval checks judge
+it:
+
+  REEFLEX_RESOLVER_TOKENS         JSON (or path to JSON) mapping a bearer token
+                                  to the principal that token IS:
+                                    {"tok": {"type":"human","id":"alice"}}
+                                  When set, the approver is taken from the
+                                  CREDENTIAL; a body principal that disagrees
+                                  -> 403 principal_mismatch, and a token with
+                                  no binding -> 403 principal_not_verified.
+  REEFLEX_REQUIRE_VERIFIED_APPROVER
+                                  true/1/yes -> an unverifiable approver is
+                                  refused outright (403 principal_not_verified).
+                                  A deployment that CLAIMS four-eyes must set
+                                  this (or the token map above).
+
+With neither set, resolution still works — but the hold record, the
+hold.resolved webhook and the Art.14 audit line now carry
+`decided_by_verified: false` / `principal_source: "asserted"`, so an
+unverified claim is no longer indistinguishable from a real human decision,
+and core warns on stderr.  The `decided_by` "{type}:{id}" shape is unchanged.
 
 NON_RESOLVABLE_RULES: {"irreversible_systemic_prod"}.  Defensive guard:
 systemic is a terminal deny and should never be a hold, but we guard anyway.
@@ -466,11 +495,70 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
             )
             return
 
-        # Check 4: actor != approver
-        # Actor = the envelope's agent identity
+        # Check 4: the approver must be VERIFIABLE (RFX-CORE-2).
+        # Establishes WHO the approver is before asking whether they may
+        # approve. Previously the principal came straight out of the request
+        # body and was recorded as fact, so one credential could raise a hold
+        # as an agent and approve it as an arbitrary named human -- four-eyes
+        # was not enforced at the core boundary at all. See app/principal.py.
+        from .principal import (  # type: ignore[import]
+            PrincipalRefused, is_self_approval, resolve_approver,
+        )
+
+        _auth_header = self.headers.get("Authorization", "")
+        _bearer = (
+            _auth_header[len("Bearer "):].strip()
+            if _auth_header.startswith("Bearer ") else ""
+        )
+        try:
+            approver = resolve_approver(_bearer, principal_type, principal_id)
+        except PrincipalRefused as refused:
+            self._respond(
+                403,
+                {
+                    "error": refused.error,
+                    "reason": refused.reason,
+                    "hold_id": hold_id,
+                },
+            )
+            return
+
+        # The verified principal is authoritative from here on -- the rest of
+        # the chain must judge the REAL approver, not the asserted one.
+        principal_type = approver["type"]
+        principal_id = approver["id"]
+
+        # Check 3 (again, on the AUTHORITATIVE type). Check 3 above ran against
+        # the type the caller ASSERTED, which is the only thing available that
+        # early. If the credential binds this caller to a DIFFERENT type than
+        # it claimed -- e.g. it is bound as `agent` but wrote `"type":"human"`
+        # to get past a human-only rule -- the asserted type must not be what
+        # the policy was evaluated on. Re-checking here is cheap and closes
+        # that gap; the error code is deliberately the same one, since it is
+        # the same refusal.
+        if principal_type not in allowed_types:
+            self._respond(
+                403,
+                {
+                    "error": "principal_type_not_allowed",
+                    "reason": (
+                        f"principal type '{principal_type}' (the type bound to this "
+                        f"credential) is not allowed for rule '{rule_id}'; "
+                        f"allowed: {allowed_types}"
+                    ),
+                    "hold_id": hold_id,
+                },
+            )
+            return
+
+        # Check 5: actor != approver.
+        # Compares NORMALIZED identities across every identity that names the
+        # raiser (agent.id, agent.on_behalf_of, agent.session_id), so the guard
+        # is no longer defeated by a case variant of the same id, an invisible
+        # character, an omitted agent.id, or approving as the human the agent
+        # declares it acts for. See principal.actor_identities().
         envelope = hold.get("envelope") or {}
-        agent_id = (envelope.get("agent") or {}).get("id", "")
-        if agent_id and agent_id == principal_id:
+        if is_self_approval(envelope, principal_type, principal_id):
             self._respond(
                 403,
                 {
@@ -489,6 +577,8 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
                 principal_type=principal_type,
                 principal_id=principal_id,
                 reason=reason if isinstance(reason, str) else None,
+                verified=approver["verified"],
+                principal_source=approver["source"],
             )
         except Exception as exc:  # noqa: BLE001
             print(f"[reeflex-core] WARN: resolve_hold failed: {exc}", file=sys.stderr)
@@ -509,6 +599,13 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
                 "rule_id": rule_id,
                 "status": updated.get("status", ""),
                 "decided_by": updated.get("decided_by", ""),
+                # Additive provenance (RFX-CORE-2): whether that decided_by was
+                # VERIFIED against the caller's credential or merely asserted
+                # by it. Subscribers that ignore these fields behave exactly as
+                # before; the frozen "{type}:{id}" shape of decided_by is
+                # unchanged.
+                "decided_by_verified": updated.get("decided_by_verified", False),
+                "principal_source": updated.get("principal_source", "asserted"),
             })
         except Exception:  # noqa: BLE001
             pass

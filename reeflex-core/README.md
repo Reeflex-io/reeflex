@@ -377,7 +377,7 @@ Three principal types may resolve a hold, all via `POST /v1/holds/{id}/resolve`:
 **Core-enforced guarantees (surfaces cannot bypass these):**
 
 - The resolution policy is the operator's, per rule. The shipped default is human-only for all rules.
-- Actor != approver is enforced on identity: the agent whose action raised the hold can never resolve it, on any surface, via any principal type.
+- Actor != approver is enforced on identity: the agent whose action raised the hold can never resolve it, on any surface, via any principal type. Enforced on *normalized* identities across `agent.id`, `agent.on_behalf_of` and `agent.session_id` — see [Approver verification](#approver-verification-rfx-core-2) for what this check does and does not establish on its own.
 - `irreversible_systemic_prod` is resolvable by no principal — its deny is terminal.
 - `decided_by` records `type:identity` verbatim — for example `human:leo`, `agent:triage-bot`, `automation:camunda-proc-123`. This record is the EU AI Act Art. 14 oversight-allocation evidence (the Attest input). Zero AI is in the first decision path; principal choice is the operator's documented governance. (Art.14's high-risk obligations were postponed by the Digital Omnibus, Reg. (EU) 2026/1744, from 2 August 2026 to 2 December 2027 — source: the European Commission's AI Act Service Desk; Art.50 transparency is unaffected and already in force.)
 
@@ -399,6 +399,33 @@ Set to either a JSON string or a path to a JSON file. Shape:
 - **Absent or malformed:** treated as `{"default": ["human"]}` — human-only everywhere.
 
 If `REEFLEX_RESOLUTION_POLICY` is unset, every hold requires a human principal to resolve it.
+
+### Approver verification (RFX-CORE-2)
+
+The resolution policy above checks the principal **type** the caller *asserts*. It does not establish **who the caller is** — and until RFX-CORE-2, nothing did.
+
+`POST /v1/holds/{id}/resolve` took `principal:{type,id}` from the request body and wrote it into the hold as `decided_by`. Core's auth is a single shared bearer token, which authenticates the *caller* but names no human. So one credential could raise a hold as `agent:x`, approve it as `human:<any name>`, and resubmit for `allow` — and the resulting `decided_by: "human:…"` was indistinguishable, in `holds.jsonl` and in every downstream Art. 14 report, from an approval a real human gave. (This is the upstream cause of RFX-74, where a fabricated `decided_by` was rendered as evidence in the Attest report.)
+
+Two environment variables close this:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `REEFLEX_RESOLVER_TOKENS` | _(unset)_ | JSON string or file path mapping a bearer token to the principal that token **is**: `{"tok_alice": {"type":"human","id":"alice@example.com"}}`. When set, the approver is taken from the **credential**. A body principal that disagrees → `403 principal_mismatch`; a token with no binding → `403 principal_not_verified`. Re-read per request, so the map rotates without a restart. |
+| `REEFLEX_REQUIRE_VERIFIED_APPROVER` | _(unset / false)_ | `true`/`1`/`yes` → an approver core cannot verify is refused outright (`403 principal_not_verified`). |
+
+**A deployment that claims four-eyes MUST set one of these.** With neither set, resolution still works — but the hold record, the `hold.resolved` webhook and the `hold_resolution` audit line carry:
+
+```jsonc
+"decided_by": "human:leo.david",     // unchanged wire shape
+"decided_by_verified": false,        // additive
+"principal_source": "asserted"       // "credential" | "asserted" | "system"
+```
+
+and core logs a warning on every such resolution. The default is permissive because defaulting to refusal would make every hold unresolvable on upgrade for every existing deployment — a feature outage, not a conservative decision on one action. What is *not* optional is honesty about provenance: an unverified claim is never recorded as if it were verified.
+
+`principal_source: "system"` is used for an expiry, whose "principal" is core itself observing a timeout — the one resolution needing no external verification.
+
+**Self-approval** (`actor_is_approver`) is now enforced on *normalized* identities across every field that names the raiser — `agent.id`, `agent.on_behalf_of`, and `agent.session_id` — at both the resolve endpoint and the resubmission check. Previously it was a raw `==` against `agent.id` alone, so it missed the same identity in different case (`svc-bot` approving as `SVC-BOT`), an identity carrying an invisible character, an approver equal to the human the agent declared it was acting *for*, and it was skipped entirely when the envelope omitted `agent.id` (which SPEC §2 does not require).
 
 ### The hash binding
 
@@ -487,5 +514,7 @@ Consumers (Camunda, Flowable, n8n, SOAR playbooks) are documented as integration
 | `REEFLEX_HOLD_TTL_SECONDS` | `14400` (4 hours) | Time-to-live for a pending hold. A hold past this TTL evaluates to `deny`. |
 | `REEFLEX_FREEZE` | _(unset / false)_ | Set to `true`, `1`, or `yes` to deny all non-read verbs immediately. Hot-reloadable without restart. |
 | `REEFLEX_RESOLUTION_POLICY` | _(unset)_ | JSON string or file path. Shape: `{"default":["human"],"<rule_short_name>":["human","agent"]}`. Absent = human-only everywhere. |
+| `REEFLEX_RESOLVER_TOKENS` | _(unset)_ | JSON string or file path binding a bearer token to the principal it **is**: `{"tok": {"type":"human","id":"alice"}}`. Absent = the asserted approver cannot be verified and is recorded `decided_by_verified: false`. See [Approver verification](#approver-verification-rfx-core-2). |
+| `REEFLEX_REQUIRE_VERIFIED_APPROVER` | _(unset / false)_ | `true`/`1`/`yes` = refuse to resolve a hold whose approver core cannot verify (`403 principal_not_verified`). |
 | `REEFLEX_WEBHOOK_URL` | _(unset)_ | Outbound webhook endpoint. Absent = no webhook, no background thread. |
 | `REEFLEX_WEBHOOK_QUEUE_SIZE` | `1000` | Max in-memory queue depth before events are dropped. |
