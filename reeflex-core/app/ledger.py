@@ -34,6 +34,30 @@ import threading
 import time
 from typing import Any
 
+from .envelope import canonicalize_currency, is_money_amount
+
+# THE ENVELOPE FIELDS THIS MODULE READS.
+#
+# The ledger is the SECOND reader of the envelope, after policy/*.rego, and it
+# is the one that made RFX-133 invisible: `params.currency` appears nowhere in
+# any .rego file, yet omitting it disabled the money budget entirely, because
+# this module decides what lands in `cumulative.amount_by_currency`.  Any
+# enumeration of "fields the policy reads" that scans only the Rego therefore
+# MISSES a whole class of caller-supplied inputs.
+#
+# So the paths are declared here, next to the code that reads them, and
+# app/field_treatments.py requires each to carry a declared treatment.
+# tests/test_field_treatments.py AST-scans append_entry() and fails if it
+# reads an envelope path that is not in this tuple.
+LEDGER_ENVELOPE_PATHS: tuple[str, ...] = (
+    "action.verb",
+    "action.ability",
+    "axes.externality",
+    "magnitude.count",
+    "params.amount",
+    "params.currency",
+)
+
 _lock = threading.Lock()
 
 # { session_id -> [ {ts, verb, ability, count}, ... ] }
@@ -108,12 +132,30 @@ def append_entry(session_id: str, envelope: dict) -> None:
     # Extract financial amounts from params if present (transact verb support).
     # Defensive: envelope.py normalizes params to dict, but guard here too so
     # ledger never crashes even if called with a raw (un-normalized) envelope.
+    #
+    # RFX-133 — THE CONDITION USED TO BE `if currency and isinstance(...)`, so
+    # an amount with NO currency was silently DROPPED and never accumulated.
+    # That single `and` was the whole evasion: N calls of (limit - 1) with
+    # `params.currency` omitted each re-compared one amount against the money
+    # budget and the session's spend was never summed at all.  An amount is now
+    # ALWAYS recorded; a missing/unusable currency lands in the "XXX" bucket
+    # (ISO 4217 "no currency involved"), which is a real accumulating bucket
+    # with its own limit, not a discard.
+    #
+    # abs(): the amount is an EXPOSURE, not a signed balance.  A negative
+    # amount (a refund, a reversal, or just a caller writing "-5000") would
+    # otherwise SUBTRACT from cumulative spend, letting a session alternate
+    # +N/-N forever and never accumulate.  Money moved is money moved.
+    #
+    # canonicalize_currency() is imported from the envelope boundary rather
+    # than re-implemented, so the ledger's bucket keys and the keys the policy
+    # matches on cannot drift apart.
     _raw_params = envelope.get("params")
     params = _raw_params if isinstance(_raw_params, dict) else {}
-    currency = params.get("currency")
     amount = params.get("amount")
-    if currency and isinstance(amount, (int, float)):
-        entry["amount_by_currency"] = {currency: float(amount)}
+    if is_money_amount(amount):
+        currency = canonicalize_currency(params.get("currency"))
+        entry["amount_by_currency"] = {currency: abs(float(amount))}
 
     with _lock:
         if session_id not in _ledger:
