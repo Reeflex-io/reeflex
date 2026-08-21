@@ -52,15 +52,19 @@ Bash READ:
 
 Bash DELETE (rm / shred / SQL):
   reversibility: irreversible  (shell deletes are gone; no recycle bin)
-  blast_radius:
+  blast_radius:  derived per SPEC §4.2 from the shape of the AFFECTED SET.
     SYSTEMIC -- target is /, /*, ~/$HOME, a system dir (/etc /usr /var /bin
                 /lib /boot /dev /sys /proc /run), or `DROP DATABASE` / `DROP SCHEMA`
                 or a fork-bomb pattern
     BROAD    -- rm -r / -rf on any dir (non-systemic), DROP TABLE, TRUNCATE,
                 DELETE FROM without WHERE clause, git clean -fdx
-                OR rm of >= 20 explicit file arguments
+                OR the affected set is a PREDICATE rather than an enumeration:
+                   a wildcard argument (`rm -f *`, `rm ./logs/*.log`) or an rm
+                   whose paths do not parse at all -- the shell decides the set,
+                   so this adapter cannot claim a small one (SPEC §4.2 step 2)
+                OR rm of >= 20 explicit file arguments (BROAD_MIN, inclusive)
     SCOPED   -- rm of 2..19 explicit files
-    SINGLE   -- rm of exactly 1 file
+    SINGLE   -- rm of exactly 1 explicit file
   externality: internal  (unless the same command also matches an outbound
                pattern -- edge case, marked outbound if so)
 
@@ -132,8 +136,22 @@ deletes are irreversible):
 DANGER SIGNATURE (context.danger_signature)
 ==============================================================================
 A short, machine-readable slug surfacing the most salient danger:
-  none | rm_recursive_root | rm_recursive | sql_drop_database | sql_drop_table
-  git_force_push | fork_bomb | publish | disk_write | sensitive_write
+  none | rm_recursive_root | rm_recursive | rm_glob | sql_drop_database
+  sql_drop_table | sql_delete_predicate | git_force_push | fork_bomb | publish
+  disk_write | sensitive_write
+
+Two slugs are new in RFX-131, both naming the case where the affected set is a
+PREDICATE rather than an enumeration (SPEC §4.2 step 2):
+  `rm_glob`              — a wildcard or unparseable rm target. Distinct from
+                           `rm_recursive` because the command need not be
+                           recursive, and an operator reading the audit trail
+                           should see WHY it was priced broad.
+  `sql_delete_predicate` — `DELETE FROM ... WHERE ...`. Distinct from
+                           `sql_drop_table` because a filtered delete is not a
+                           schema change, and conflating them would make the
+                           trail read as more alarming than the action is.
+The demo Rego pack treats this field as informational only (see policy/), so
+adding a slug changes no decision.
 
 ==============================================================================
 """
@@ -181,6 +199,26 @@ _SENSITIVE_PATH_RE = re.compile(
 _SYSTEM_DIR_RE = re.compile(
     r"^(/|/\*|~|\$HOME|/etc|/usr|/var|/bin|/lib|/boot|/dev|/sys|/proc|/run)(/|$)"
 )
+
+# ---------------------------------------------------------------------------
+# Glob / wildcard pattern (SPEC §4.2: a predicate, not an enumeration)
+# ---------------------------------------------------------------------------
+# A path argument carrying a shell wildcard does not name an entity — it names a
+# FILTER, and the shell, not this adapter, decides how many files it expands to.
+# Counting it as one path made `rm -f *` classify as blast_radius `single`
+# (irreversible + single + production -> allow). SPEC §4.2 step 2: an adapter
+# that cannot enumerate the affected set MUST NOT emit `single` or `scoped`.
+#
+# `?` is deliberately EXCLUDED. It is a single-character wildcard whose expansion
+# is bounded, and it appears in ordinary filenames often enough that including it
+# would trade a fail-open for a fail-noisy. `*`, `[...]` and brace expansion all
+# expand without bound. RFX-131.
+_GLOB_RE = re.compile(r"[*\[]|\{[^}]*,[^}]*\}")
+
+
+def _is_glob(path: str) -> bool:
+    """Return True if the path argument is a wildcard rather than an entity name."""
+    return bool(_GLOB_RE.search(path))
 
 # ---------------------------------------------------------------------------
 # Fork-bomb pattern
@@ -233,6 +271,14 @@ _SQL_DROP_DATABASE_RE = re.compile(r"\bDROP\s+(DATABASE|SCHEMA)\b", re.IGNORECAS
 _SQL_DROP_TABLE_RE    = re.compile(r"\bDROP\s+TABLE\b", re.IGNORECASE)
 _SQL_TRUNCATE_RE      = re.compile(r"\bTRUNCATE\b", re.IGNORECASE)
 _SQL_DELETE_NO_WHERE  = re.compile(r"\bDELETE\s+FROM\b(?!.*\bWHERE\b)", re.IGNORECASE | re.DOTALL)
+# SPEC §4.2 step 2 — ANY `DELETE FROM`, with or without a WHERE clause, describes
+# its affected set by a PREDICATE. A filter narrows a predicate to a smaller
+# predicate; it does not enumerate one, and the row count is not in the command
+# text. Before RFX-131 only the no-WHERE form was caught here, so
+# `DELETE FROM orders WHERE status='old'` fell through to the rm path and came
+# out `scoped` — 2..19 entities asserted over an unbounded set, and
+# irreversible+scoped+production is R4's default ALLOW. `WHERE 1=1` was allowed.
+_SQL_DELETE_ANY       = re.compile(r"\bDELETE\s+FROM\b", re.IGNORECASE)
 
 _RM_RECURSIVE_RE   = re.compile(r"\brm\b.*-[a-zA-Z]*r[a-zA-Z]*")
 
@@ -343,8 +389,14 @@ def _bash_verb(command: str) -> str:
         return "delete"
     if _GIT_CLEAN_RE.search(command):
         return "delete"
+    # RFX-131: `_SQL_DELETE_ANY`, not `_SQL_DELETE_NO_WHERE`. A filtered delete is
+    # still a delete. While the router asked for the no-WHERE form,
+    # `DELETE FROM orders WHERE status='old'` was not classified as a delete AT
+    # ALL — it got verb `execute` and `reversibility` never became `irreversible`,
+    # so it missed R2/R3 and was invisible to R5's session delete budget. The
+    # blast_radius error was the visible half of this; the verb was the other.
     if (_SQL_DROP_DATABASE_RE.search(command) or _SQL_DROP_TABLE_RE.search(command)
-            or _SQL_TRUNCATE_RE.search(command) or _SQL_DELETE_NO_WHERE.search(command)):
+            or _SQL_TRUNCATE_RE.search(command) or _SQL_DELETE_ANY.search(command)):
         return "delete"
 
     # EMIT
@@ -415,8 +467,9 @@ def _classify_bash_delete(command: str, preview: Optional[str]) -> dict:
             file_path=None,
         )
 
-    # SQL TRUNCATE / DELETE FROM without WHERE
-    if _SQL_TRUNCATE_RE.search(command) or _SQL_DELETE_NO_WHERE.search(command):
+    # SQL TRUNCATE / DELETE FROM (with or without a WHERE clause — both are
+    # predicates over an unenumerated set; SPEC §4.2 step 2, RFX-131)
+    if _SQL_TRUNCATE_RE.search(command) or _SQL_DELETE_ANY.search(command):
         return _make(
             verb="delete",
             reversibility="irreversible",
@@ -425,7 +478,10 @@ def _classify_bash_delete(command: str, preview: Optional[str]) -> dict:
             magnitude_count=1,
             target_kind="resource",
             target_ref=None,
-            danger_signature="sql_drop_table",
+            danger_signature="sql_delete_predicate"
+            if _SQL_DELETE_ANY.search(command)
+            and not _SQL_DELETE_NO_WHERE.search(command)
+            else "sql_drop_table",
             classification_tier="destructive_broad",
             command_preview=preview,
             file_path=None,
@@ -458,6 +514,12 @@ def _classify_bash_delete(command: str, preview: Optional[str]) -> dict:
     # Check for systemic target (/, /*, ~, $HOME, system dirs)
     is_systemic = any(_is_systemic_path(p) for p in path_args) if path_args else False
 
+    # SPEC §4.2 step 2 — the affected set is a PREDICATE, not an enumeration:
+    # a wildcard argument, or an rm with no parseable path at all. Either way the
+    # cardinality is not in the command text, so `single`/`scoped` are not
+    # available. RFX-131.
+    is_predicate = (not path_args) or any(_is_glob(p) for p in path_args)
+
     # Determine blast_radius and tier.
     # All shell deletes are irreversible; tier is scaled by blast_radius.
     # single/scoped = moderate (don't fire R2 on a routine rm /tmp/x)
@@ -469,6 +531,10 @@ def _classify_bash_delete(command: str, preview: Optional[str]) -> dict:
     elif is_recursive:
         blast_radius = "broad"
         sig = "rm_recursive"
+        tier = "destructive_broad"
+    elif is_predicate:
+        blast_radius = "broad"
+        sig = "rm_glob"
         tier = "destructive_broad"
     elif count >= 20:
         blast_radius = "broad"
