@@ -13,9 +13,25 @@
 # versions ship to PyPI, independent of the tree under review. Red there means
 # "the published packages are broken", not "this PR is broken".
 #
-# The WordPress conformance harness needs a LIVE reeflex-core and is an
-# ALLOWED, PRINTED skip here (--allow-skips wp-conformance) — see
-# reeflex-wordpress/tests/README.md. Everything else runs.
+# RFX-105 / RFX-106 — THE WORDPRESS HARNESSES NOW ACTUALLY RUN HERE.
+# They used to be an "allowed, printed skip" on the grounds that they need a
+# LIVE reeflex-core. That was true and it was also the whole problem: the
+# allowance meant the four PHP harnesses ran in NO automation at all, on any
+# workflow, ever — while release.yml publishes that same plugin to
+# wordpress.org. One of them (fanout-regression-demo.php) had been fatally
+# broken for an unknown period and only turned up when a human ran it by hand.
+# reeflex-core is a stdlib HTTP server with no dependencies beyond opa, which
+# this job already installs, so "needs a live core" costs ~5 seconds: the step
+# below starts one on 127.0.0.1:8099 and passes --core-url. Measured: all four
+# harnesses complete in ~2 minutes.
+#
+# REEFLEX_HOLD_TTL_SECONDS=20 is set on BOTH the core and the gate step
+# deliberately. conformance-demo.php's H9 (an EXPIRED approved hold must be
+# refused by resubmit_hold()) SKIPS itself unless the TTL is <=60 — it will not
+# sleep out a 4h production TTL — and the harness still printed "ALL HOLD
+# SCENARIOS PASS" with H9 skipped. That is a silent skip nested inside an
+# always-skipped component, on the fail-open path the whole RFX-64/65/66/67
+# expiry chain exists to close. With the short TTL, H9 runs and passes.
 #
 # migration-heads (RFX-49) is also an ALLOWED, PRINTED skip: it validates
 # the private reeflex-app repo's alembic graph IF that repo is checked out
@@ -67,11 +83,56 @@ jobs:
           sudo mv opa /usr/local/bin/opa
           opa version
 
+      - name: Ensure a php CLI (the WordPress live-core harnesses need it)
+        run: php --version || (sudo apt-get update -qq && sudo apt-get install -y -qq php-cli && php --version)
+
       - name: Gate selftest — prove the anchored, case-sensitive parsing (DoD 5)
         run: python gate.py --selftest
 
+      - name: Census selftest — prove every silent-skip detector (RFX-87)
+        # Same pattern, one layer down: check_test_census.py is what stops a
+        # test file from sitting in the right directory while collecting zero
+        # tests (PR #89's regression guard did exactly that for its whole
+        # life). Its detectors are proved on synthetic fixtures before the
+        # census verdict is trusted.
+        run: python scripts/check_test_census.py --selftest
+
+      - name: Start a local reeflex-core for the WordPress harnesses
+        working-directory: reeflex-core
+        env:
+          REEFLEX_PORT: "8099"
+          REEFLEX_HOLD_TTL_SECONDS: "20"   # lets conformance-demo.php's H9 run — see header
+          REEFLEX_POLICY_DIR: policy
+          REEFLEX_AUDIT_LOG: /tmp/gate-core-audit.jsonl
+        run: |
+          nohup python main.py > /tmp/gate-core.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8099/healthz; then
+              echo "reeflex-core is up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error title=reeflex-core did not start::the WordPress harnesses cannot run without it"
+          cat /tmp/gate-core.log
+          exit 1
+
       - name: Run the gate
-        run: python gate.py --pypi delegated --allow-skips wp-conformance,migration-heads
+        env:
+          # Must match the core started above: the harness reads this to decide
+          # whether H9 is runnable, the core reads it to set the actual TTL.
+          REEFLEX_HOLD_TTL_SECONDS: "20"
+        # wp-conformance is NO LONGER in --allow-skips: it runs for real now.
+        # migration-heads stays allowed — it validates the PRIVATE reeflex-app
+        # repo's alembic graph, which is never checked out on this runner, and
+        # reeflex-app's own ci.yml runs the enforcing copy on every PR.
+        run: |
+          python gate.py --pypi delegated \
+            --allow-skips migration-heads \
+            --core-url http://127.0.0.1:8099
+
+      - name: reeflex-core log (always, so a harness failure is diagnosable)
+        if: always()
+        run: cat /tmp/gate-core.log || true
 
   smoke-pypi:
     name: fresh-install-from-PyPI smoke
