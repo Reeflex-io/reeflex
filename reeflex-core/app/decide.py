@@ -113,6 +113,30 @@ from .holds import canonical_hash
 
 _WINDOW_SECONDS = int(os.environ.get("REEFLEX_WINDOW_SECONDS", "3600"))
 
+# THE ENVELOPE FIELDS THIS MODULE READS TO REACH A VERDICT.
+#
+# decide.py is the THIRD reader of the envelope, after policy/*.rego and
+# ledger.py, and it is the one that decides things OPA never sees: the freeze
+# gate short-circuits on the verb, and the whole hold-approval chain runs here
+# and can return allow or deny without an eval at all.  RFX-127 lived in
+# exactly that gap — `approval.hold_id` appears in no .rego file and in no
+# ledger read, so an enumeration built from those two would not have covered
+# the field whose absence switched off every budget.
+#
+# Declared here, next to the code that reads them, and required to carry a
+# treatment in app/field_treatments.py.  See tests/test_field_treatments.py.
+#
+# Audit-only caller-supplied fields (approval.parent_decision_id,
+# context.traceparent, meta.*) are deliberately NOT listed: they cannot change
+# a verdict.  They are an evidence-integrity surface, not a decision one — see
+# the RESIDUAL notes in field_treatments.py.
+DECIDE_ENVELOPE_PATHS: tuple[str, ...] = (
+    "agent.session_id",   # ledger key + principal_budgets override key
+    "action.verb",        # freeze gate (_is_read_verb)
+    "approval.present",   # routes into the hold-validation chain
+    "approval.hold_id",   # names the hold the six checks run against
+)
+
 # The Decision returned when OPA evaluation fails for any reason.
 _FAIL_CLOSED_DECISION: dict = {
     "decision": "deny",
@@ -355,6 +379,48 @@ def _validate_approval(envelope: dict) -> tuple[int, dict | None, dict | None]:
             "reeflex_hold_actor_is_approver", "reeflex.core/hold_validation"
         ), hold
 
+    # Check 7: the decision inputs the HASH DOES NOT COVER must also match.
+    #
+    # canonical_hash() projects {action, axes, magnitude, target} — see
+    # holds._HASH_ALLOWLIST — deliberately, so the hash is stable across the
+    # submission and the resubmission.  But `params` carries a decision input
+    # too: R5's money dimension is driven entirely by params.amount.  So a
+    # hold raised for a EUR 6,000 payment could be resubmitted as EUR
+    # 6,000,000 with a BYTE-IDENTICAL hash, and check 5 passed.  The human
+    # approved one number and the agent executed another.  Confirmed end to
+    # end while sweeping the enumeration for RFX-127/133.
+    #
+    # This is the same defect class one layer over: a caller-supplied value
+    # the decision reads, which nothing verified — here, against the value a
+    # human actually saw.
+    #
+    # WHY NOT JUST ADD `params` TO _HASH_ALLOWLIST.  That would change the
+    # PREIMAGE of `envelope_hash`, which is written into the audit record, the
+    # SIEM event and the hold record, and which downstream evidence joins on.
+    # Widening it would silently invalidate every cross-build join for a fix
+    # that does not need it.  Comparing the fields directly binds the same
+    # facts and leaves the hash — and the wire — alone.
+    #
+    # The path list is DERIVED from field_treatments.TREATMENTS rather than
+    # hardcoded, so a future declared decision input in `params` is bound
+    # without anyone remembering to add it here.
+    from .field_treatments import approval_bound_paths  # type: ignore[import]
+
+    held_envelope = hold.get("envelope") or {}
+    for path in approval_bound_paths():
+        block, _, leaf = path.partition(".")
+        now_block = envelope.get(block)
+        was_block = held_envelope.get(block)
+        now = now_block.get(leaf) if isinstance(now_block, dict) else None
+        was = was_block.get(leaf) if isinstance(was_block, dict) else None
+        # `!=` is exact and that is intended: both sides have already been
+        # through validate_and_fill_defaults(), so both are canonical, and a
+        # remaining difference is a real difference.
+        if now != was:
+            return 200, _deny_response(
+                "reeflex_hold_envelope_mismatch", "reeflex.core/hold_validation"
+            ), hold
+
     return 0, None, hold  # all checks passed
 
 
@@ -450,10 +516,63 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
                 return 200, frozen_decision
 
         # Step 4: Check for an approval resubmission (T2c)
+        #
+        # RFX-127 — THE GUARD USED TO READ `if approval_present and
+        # approval.get("hold_id")`.  An envelope carrying a bare
+        # `approval: {"present": true}` with NO hold_id therefore SKIPPED the
+        # six-check validation chain entirely and fell straight through to OPA
+        # still asserting present=true.  R5's predicate is
+        #
+        #     count(exceeded_dimensions) > 0
+        #     not input.approval.present
+        #
+        # so that one unverified boolean switched off EVERY cumulative budget
+        # — deletions, money, external_sends, objects_touched — and the verdict
+        # became R4 default_allow.  Not one matching condition evaded: a whole
+        # rule disabled, by a caller asserting that a human had approved
+        # something when no hold had ever been created, let alone resolved.
+        # Reproduced live on api-dev with the published eval token (control
+        # require_approval -> attack allow) and on a pinned local build; see
+        # scripts/attack-probe-envelope-boundary.py, attack A4.
+        #
+        # This is the SAME shape as RFX-84 (the self-asserted approving
+        # principal on /resolve): a caller stating a fact about human oversight
+        # that nothing checks.
+        #
+        # The fix is to stop excluding the no-hold_id case from validation.
+        # `_validate_approval()` was ALREADY written to handle it — its first
+        # statement returns `reeflex_hold_not_found` when hold_id is absent —
+        # and this guard was the only reason that branch was unreachable.  So
+        # an approval assertion is now always validated, and an assertion that
+        # names no hold is refused rather than believed.
+        #
+        # WHY DENY AND NOT SILENTLY COERCE present -> false.  Either would
+        # restore the budget.  A caller claiming an approval that does not
+        # exist is a signal, not a formatting difference — the same reasoning
+        # principal.resolve_approver() applies to a mismatched principal — and
+        # a silent coercion would let a broken adapter ship an envelope that
+        # LOOKS approved to every downstream reader forever.  The refusal is
+        # audited, so the claim is on the record.
+        #
+        # WRONG-DENY TRADE-OFF (documented deliberately, as #89 did): an
+        # adapter that sets approval.present=true without a hold_id now gets a
+        # deny where it previously got its action through.  Per SPEC §2 that
+        # envelope is already malformed — `present` is "true on resubmission
+        # after hold resolution" and `hold_id` is "hold_id from the
+        # require_approval response" — so the two fields are meaningless apart,
+        # and the previous behaviour was not a feature anyone could rely on
+        # except to evade R5.  A wrong DENY is a nuisance; this wrong ALLOW was
+        # the product failing.
+        #
+        # WIRE CONTRACT: unchanged.  This reuses the existing
+        # `reeflex_hold_not_found` machine reason code rather than minting a
+        # new one — see the PR note flagging that a dedicated
+        # `reeflex_approval_no_hold_id` code would read better but would add
+        # vocabulary to a frozen field.
         approval = envelope.get("approval") or {}
         approval_present = approval.get("present", False)
 
-        if approval_present and approval.get("hold_id"):
+        if approval_present:
             # Validate the approval chain — fail-closed on any exception
             try:
                 fail_code, fail_resp, validated_hold = _validate_approval(envelope)
@@ -594,7 +713,27 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
 
         # Step 6: Build OPA input = envelope + injected cumulative
         opa_input = dict(envelope)
+
+        # `cumulative` is CORE-COMPUTED and unconditionally overwritten here,
+        # so a caller that puts its own `cumulative` object in the envelope
+        # cannot pre-load the ledger with a fabricated history.  Stated
+        # explicitly because the assignment is what makes that true.
         opa_input["cumulative"] = cumulative
+
+        # RFX-127 (belt): `input.approval.present` is a VERIFIED fact in the
+        # OPA input, never the caller's assertion.
+        #
+        # By construction every path that reaches this line has approval
+        # present=false — Step 4 above now routes EVERY present=true envelope
+        # into the six-check validation chain, which either returns a deny or
+        # returns allow without consulting OPA at all.  This assignment makes
+        # that an ENFORCED property rather than an emergent one: if a future
+        # change re-introduces a path where an unvalidated approval reaches
+        # eval, the budget rule still sees present=false and still fires.  A
+        # rule may only be switched off by an approval core has verified.
+        _opa_approval = dict(envelope.get("approval") or {})
+        _opa_approval["present"] = False
+        opa_input["approval"] = _opa_approval
 
         # Step 7: Evaluate via OPA — measure wall-clock latency for telemetry.
         # perf_counter is used for latency only; NOT injected into OPA input

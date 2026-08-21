@@ -250,3 +250,89 @@ test_r6_per_principal_override_is_policy_not_code if {
 	tight_got.decision == "require_approval"
 	tight_got.rule == "reeflex.policy/cumulative_budget"
 }
+
+# ---- money has UNITS (RFX-133) ----------------------------------------
+# The money dimension is the one budget over a QUANTITY WITH A UNIT. It used
+# to aggregate as sum(amount_by_currency), i.e. EUR + JPY + IDR compared
+# against one scalar, which is not a quantity of money. It now aggregates as
+# dimensionless UTILISATION (used_c / limit_c), per currency.
+
+_money_envelope(params, cumulative) := {
+	"agent": {"session_id": "sess-money-test"},
+	"action": {"verb": "transact"},
+	"target": {"environment": "staging"},
+	"axes": {"reversibility": "reversible", "blast_radius": "single", "externality": "internal"},
+	"magnitude": {"count": 1},
+	"params": params,
+	"cumulative": cumulative,
+	"approval": {"present": false},
+}
+
+# An amount with NO declared currency lands in the "XXX" bucket, which
+# accumulates against the base limit. Omitting the field buys nothing.
+test_money_undeclared_currency_still_accumulates if {
+	envelope := _money_envelope(
+		{"amount": 2000},
+		{"amount_by_currency": {"XXX": 4000}},
+	)
+	got := policy.decision with input as envelope
+	got.decision == "require_approval"
+	got.rule == "reeflex.policy/cumulative_budget"
+}
+
+# A small amount in a low-unit-value currency is NOT counted as a large one.
+# 4000 EUR (0.800 of 5000) + 2000 JPY (0.0025 of 800000) = 0.8025. The old
+# naive sum read this as 6000 > 5000 and held it.
+test_money_small_foreign_amount_is_not_a_large_one if {
+	envelope := _money_envelope(
+		{"amount": 2000, "currency": "JPY"},
+		{"amount_by_currency": {"EUR": 4000}},
+	)
+	got := policy.decision with input as envelope
+	got.decision == "allow"
+}
+
+# Per-currency limits alone would reopen fragmentation one currency over.
+# 4900 EUR (0.980) + 4900 USD (0.891) = 1.871 -> exceeded.
+test_money_split_across_currencies_still_trips if {
+	envelope := _money_envelope(
+		{"amount": 4900, "currency": "USD"},
+		{"amount_by_currency": {"EUR": 4900}},
+	)
+	got := policy.decision with input as envelope
+	got.decision == "require_approval"
+	got.rule == "reeflex.policy/cumulative_budget"
+}
+
+# A negative amount is EXPOSURE, not a credit: it cannot unwind the budget.
+test_money_negative_amount_does_not_unwind if {
+	envelope := _money_envelope(
+		{"amount": -2000, "currency": "EUR"},
+		{"amount_by_currency": {"EUR": 4000}},
+	)
+	got := policy.decision with input as envelope
+	got.decision == "require_approval"
+}
+
+# A currency the author priced generously is respected: 100000 JPY is 0.125
+# of the declared 800000 limit, not "100000 > 5000".
+test_money_declared_per_currency_limit_is_used if {
+	envelope := _money_envelope(
+		{"amount": 100000, "currency": "JPY"},
+		{"amount_by_currency": {}},
+	)
+	got := policy.decision with input as envelope
+	got.decision == "allow"
+}
+
+# ---- RFX-127: the approval that switches R5 off ------------------------
+# The rule still honours a TRUE approval (core only ever sets present=true in
+# the OPA input for an approval it verified), and still fires without one.
+test_r5_still_fires_without_an_approval if {
+	envelope := _money_envelope(
+		{"amount": 2000, "currency": "EUR"},
+		{"amount_by_currency": {"EUR": 4000}},
+	)
+	got := policy.decision with input as envelope
+	got.decision == "require_approval"
+}

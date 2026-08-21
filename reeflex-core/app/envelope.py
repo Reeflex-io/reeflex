@@ -9,15 +9,23 @@ Implements SPEC §2 rules:
 
 EVERY CLOSED ENUM IS CANONICALIZED HERE, IN ONE PLACE.  The rules in
 policy/*.rego compare caller-supplied strings by EXACT match, so a closed-enum
-field that reaches OPA verbatim fails OPEN on any near-miss.  Three fields are
-closed enums per the SPEC and all three are folded to their canonical member
+field that reaches OPA verbatim fails OPEN on any near-miss.  Four fields are
+closed enums per the SPEC and all four are folded to their canonical member
 before eval, with anything unrecognized coerced to the most-guarded member:
     axes.*             (SPEC §4)  -> F1
     target.environment (SPEC §2)  -> F5, added by RFX-CORE-1 / PR #89
     action.verb        (SPEC §3)  -> F6, added by RFX-CORE-3
+    params.currency    (SPEC §4.1) -> F7, added by RFX-133
 If a future rule exact-matches a NEW caller-supplied field, canonicalize it
 here first — that is the whole lesson of #89 and RFX-CORE-3.
   - NOTE: meta.signature / meta.nonce verification = roadmap (TODO below).
+
+THE ENUMERATION IS THE POINT, NOT THE FOUR INSTANCES.  `app/field_treatments.py`
+declares EVERY caller-supplied field the decision path reads, together with the
+treatment it gets here (canonicalize / validate / verify).  `tests/
+test_field_treatments.py` derives the set of fields the policy ACTUALLY reads
+from policy/*.rego and from ledger.py, and fails if any of them lacks a
+declared treatment — so a new field cannot reach a rule untreated.
 
 SKELETON SHORTCUTS (upgrade path documented):
   - Signature verification (meta.signature): TODO — wire ed25519 verify once
@@ -28,6 +36,7 @@ SKELETON SHORTCUTS (upgrade path documented):
 
 from __future__ import annotations
 
+import math
 import threading
 import unicodedata
 from typing import Any
@@ -403,6 +412,103 @@ def _delete_signal_from_ability(ability: Any) -> bool:
     return _VERB_CANON.get(words[0]) == "delete"
 
 # ---------------------------------------------------------------------------
+# F7: params.currency — the UNIT on the money budget (RFX-133).
+#
+# THE DEFECT.  R5's `money` dimension aggregates `params.amount` across the
+# session.  ledger.py only recorded an amount when `params.currency` was ALSO
+# truthy, so OMITTING the currency meant the amount never entered
+# `cumulative.amount_by_currency` at all: every call re-compared a single
+# amount against the limit and N calls of (limit - 1) accumulated to nothing.
+# The budget whose entire purpose is fragmentation resistance was evaded by
+# leaving one optional field out.  Confirmed live on a pinned build of this
+# commit — see scripts/attack-probe-envelope-boundary.py, attack A5.
+#
+# THE UNIT ERROR UNDERNEATH IT.  Even when the budget DID fire, the number
+# compared against the limit was `sum(amount_by_currency.values())` — EUR
+# added to JPY added to IDR.  That is not a quantity of money, it is a sum of
+# unlike units, and no amount of canonicalization fixes it.  See the "money
+# has UNITS" section of budgets.rego for the resolution: per-currency limits,
+# aggregated as DIMENSIONLESS UTILISATION (used_c / limit_c), which is
+# legitimate arithmetic across currencies where summing amounts is not.
+#
+# THE TREATMENT HERE is the canonicalization half.  A currency is an ISO 4217
+# alpha-3 code or it is UNDECLARED:
+#   - normalize (NFKC, drop control/format chars, trim), then upper-case, so
+#     "eur", " EUR ", "Eur​" are one currency, not four ledger buckets;
+#   - accept exactly three ASCII letters;
+#   - anything else — absent, empty, "€", "euros", "Bitcoin", 42 — becomes
+#     "XXX", which is ISO 4217's own code for "no currency involved".
+#
+# "XXX" IS A REAL BUCKET, NOT A DISCARD.  That is the whole fix for the
+# evasion: an amount with no usable currency still accumulates, against the
+# base limit, so omitting the field buys nothing.
+#
+# WHY NOT VALIDATE AGAINST THE FULL ISO 4217 LIST, and why arbitrary alpha-3
+# codes are safe: a caller could mint 1,000 fake currency codes to get 1,000
+# separate buckets.  Under a naive sum that would be an evasion; under the
+# utilisation rule it is not, because 1,000 buckets each at 99% of their limit
+# sum to a utilisation of ~990, which trips immediately.  So the closed-list
+# check would add maintenance (180+ codes, revised by ISO) for no gate.
+#
+# WHY SYMBOLS AND WORDS ARE NOT ALIASED.  "€" and "yen" are unambiguous, but
+# "$" is not (USD/CAD/AUD/...), and a firewall that GUESSES which currency a
+# caller meant has invented a fact.  Bucketing them as XXX is both honest and
+# strictly tighter, since XXX shares the base limit.
+#
+# NARROW BY DESIGN: this canonicalization is applied ONLY when the sibling
+# `params.amount` is a number.  `params` is adapter-specific free-form data
+# (SPEC §2) and core has no business rewriting a `currency` key that is not
+# denominating a money amount.  When there is no amount, the field is
+# policy-inert and is left exactly as the adapter sent it.
+#
+# TRADE-OFF (documented deliberately, same as #89 and RFX-CORE-3): the
+# canonical currency is what appears in the ledger, the cumulative object and
+# the audit line — the caller's original spelling of a money-denominating
+# currency is not preserved.  This is the treatment SPEC §3 already mandates
+# for `action.verb` ("the NORMALIZED verb is what appears in the cumulative
+# ledger ... and the audit line"), applied one field over.  params is NOT part
+# of the envelope_hash projection (holds._HASH_ALLOWLIST = action, axes,
+# magnitude, target), so hold binding is unaffected.
+# ---------------------------------------------------------------------------
+
+# ISO 4217's code for "no currency involved" — the bucket an amount lands in
+# when the caller declared no usable currency for it.
+CURRENCY_UNDECLARED: str = "XXX"
+
+
+def canonicalize_currency(raw: Any) -> str:
+    """Fold a caller-supplied currency to an ISO 4217 alpha-3 code or "XXX"."""
+    if not isinstance(raw, str):
+        return CURRENCY_UNDECLARED
+    token = _normalize_token(raw).upper()
+    if len(token) == 3 and token.isascii() and token.isalpha():
+        return token
+    return CURRENCY_UNDECLARED
+
+
+def is_money_amount(raw: Any) -> bool:
+    """True if this value is a number the money budget must account for.
+
+    `bool` is excluded even though it subclasses `int`: `{"amount": true}` is
+    not a quantity, and admitting it would let `True` accumulate as 1.0.
+
+    NaN AND INFINITY ARE EXCLUDED, AND THAT IS NOT A DETAIL.  Python's
+    json.loads accepts the bare tokens `NaN`, `Infinity` and `-Infinity`
+    (they are not valid JSON — RFC 8259 has no such literals — but the
+    stdlib parser is lenient by default).  A single `{"amount": NaN}` used to
+    be recorded in the ledger verbatim, and from then on EVERY comparison
+    against that currency's accumulated total was false, because every
+    comparison with NaN is false.  One call permanently disabled the money
+    budget for that currency for the rest of the session.  Found by walking
+    the enumeration in field_treatments.py during the RFX-127/133 sweep: the
+    field was declared, the treatment was incomplete.
+    """
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        return False
+    return math.isfinite(raw)
+
+
+# ---------------------------------------------------------------------------
 # Nonce store — in-memory replay protection (skeleton; see upgrade TODO above)
 # ---------------------------------------------------------------------------
 
@@ -513,6 +619,33 @@ def validate_and_fill_defaults(raw: Any) -> dict:
     _raw_params = envelope.get("params")
     if _raw_params is not None and not isinstance(_raw_params, dict):
         envelope["params"] = {}
+
+    # -- F7: canonicalize params.currency when it denominates a money amount.
+    # params.amount + params.currency are the ONE part of the free-form params
+    # block that the decision path reads (R5's `money` dimension, SPEC §4.1),
+    # so that pair — and only that pair — gets the closed-enum treatment.
+    # Applied only when `amount` is a number, so a `currency` key that is not
+    # denominating money is left untouched.  See the F7 block above.
+    _params = envelope.get("params")
+    if isinstance(_params, dict):
+        _amount = _params.get("amount")
+        # A non-finite amount is REFUSED, not silently read as "no amount".
+        # Same treatment F2 gives an invalid magnitude.count, for the same
+        # reason: a decision-critical number that is not a number is a
+        # structural error, and reinterpreting it would hide a caller's real
+        # intent behind a zero.  See is_money_amount() for what a NaN did to
+        # the ledger before this existed.
+        if isinstance(_amount, float) and not math.isfinite(_amount):
+            raise ValidationError(
+                "params.amount must be a finite number, got %r "
+                "(NaN/Infinity are not valid JSON)" % (_amount,)
+            )
+        if is_money_amount(_amount):
+            _norm_params = dict(_params)
+            _norm_params["currency"] = canonicalize_currency(
+                _norm_params.get("currency")
+            )
+            envelope["params"] = _norm_params
 
     # -- F1: Axes: coerce absent OR non-canonical values to most-restrictive --
     # Exact, case-sensitive match against the SPEC §4 closed enum.
