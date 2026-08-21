@@ -463,9 +463,30 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
                 # fail_resp (the six _validate_approval checks, or the
                 # exception path above) — every /v1/decide transit gets one.
                 fail_resp["decision_id"] = decision_id
+                # NAME THE HOLD THE DENIAL WAS DECIDED AGAINST. This branch is
+                # every hold-validation refusal, including the one that says an
+                # action was refused BECAUSE ITS HOLD TIMED OUT
+                # (reeflex_hold_expired) -- which is exactly the fact an Art.14
+                # report needs and, until this line existed, the only record of
+                # it carried no hold_id at all, so nothing downstream could
+                # attach the denial to the hold it was about. Conditioned on
+                # `validated_hold`: the hold_id is written only when this store
+                # actually holds that hold, so a hold_id on an audit line always
+                # names a real hold and a fabricated/typo'd id in an envelope
+                # (reeflex_hold_not_found) never invents a phantom one.
+                # parent_decision_id comes from the hold's own creating decision
+                # (the same fallback the allow path uses), stitching the refusal
+                # back to the request that was originally gated.
+                denied_hold_id = ""
+                denied_parent = ""
+                if validated_hold:
+                    denied_hold_id = validated_hold.get("id") or ""
+                    denied_parent = validated_hold.get("decision_id") or ""
                 _try_audit(
                     session_id, envelope, {}, fail_resp,
-                    decision_id=decision_id, envelope_hash=envelope_hash,
+                    decision_id=decision_id, hold_id=denied_hold_id,
+                    envelope_hash=envelope_hash,
+                    parent_decision_id=denied_parent,
                     traceparent=traceparent,
                 )
                 return fail_code or 200, fail_resp
@@ -644,10 +665,18 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
         # Step 11: Audit (best-effort; audit failure does not change the decision)
         # hold_id is carried through only when a hold was just created above
         # (decision_response.get("hold_id", "") is "" on allow/deny).
+        # expires_ts rides along the same way, from the SAME hold record that
+        # produced the response's expires_ts -- so the audited line and the HTTP
+        # response state one identical deadline. Downstream (the evidence
+        # connector's tail) this is the only place a consumer can learn when a
+        # hold times out: it was previously response-only, so anything reading
+        # the log had to guess a TTL, and a guessed TTL drifts from this core's
+        # REEFLEX_HOLD_TTL_SECONDS. "" on every non-hold decision.
         _try_audit(
             session_id, envelope, cumulative, decision_response,
             decision_id=decision_id,
             hold_id=decision_response.get("hold_id", "") or "",
+            expires_ts=decision_response.get("expires_ts", "") or "",
             envelope_hash=envelope_hash,
             traceparent=traceparent,
         )
@@ -692,6 +721,7 @@ def _try_audit(
     *,
     decision_id: str = "",
     hold_id: str = "",
+    expires_ts: str = "",
     envelope_hash: str = "",
     parent_decision_id: str = "",
     traceparent: str = "",
@@ -706,6 +736,7 @@ def _try_audit(
             session_id, envelope, cumulative, decision_response,
             decision_id=decision_id,
             hold_id=hold_id,
+            expires_ts=expires_ts,
             envelope_hash=envelope_hash,
             parent_decision_id=parent_decision_id,
             traceparent=traceparent,
