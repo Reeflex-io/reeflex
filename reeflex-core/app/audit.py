@@ -170,11 +170,13 @@ def record(
                             is non-load-bearing metadata, fail-open on absence
                             (consistent with every other `.get(..., "")` in
                             this record; it never affects the decision).
-      agent_id               envelope.agent.id — the same source
-                            decide.py._get_agent_identity() uses for the hold
-                            actor==approver check, so this field and that
-                            check are always reading the identical value.
-                            Empty string if absent.
+      agent_id               envelope.agent.id — one of the identities
+                            principal.actor_identities() uses for the hold
+                            actor==approver check (RFX-CORE-2 widened that
+                            check to also cover agent.on_behalf_of and
+                            agent.session_id, and to compare NORMALIZED
+                            values, so it is no longer a single verbatim
+                            field). Empty string if absent.
     """
     rec: dict = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -224,6 +226,8 @@ def record_hold_resolution(
     decision_id: str = "",
     resolved_ts: str = "",
     observed_ts: str = "",
+    verified: bool = False,
+    principal_source: str = "asserted",
 ) -> dict:
     """
     Append ONE hold_resolution audit event to the SAME append-only JSONL
@@ -288,6 +292,14 @@ def record_hold_resolution(
         "hold_id": hold_id,
         "resolution": resolution,
         "decided_by": decided_by,
+        # RFX-CORE-2: is `decided_by` VERIFIED, or only what the caller claimed?
+        # This stream is what an Art.14 human-oversight report is built from, so
+        # an unverified approver must be visible HERE -- otherwise a report has
+        # no way to tell a real human decision from a fabricated one, which is
+        # exactly the defect RFX-74 saw from the reporting side. Additive:
+        # existing consumers that ignore these keys are unaffected.
+        "decided_by_verified": bool(verified),
+        "principal_source": principal_source,
         "decision_id": decision_id,
         "resolved_ts": resolved_ts or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }

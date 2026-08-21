@@ -210,6 +210,11 @@ def _fold_record(rec: dict) -> None:
             existing["decided_by"] = rec.get("decided_by")
             existing["decided_ts"] = rec.get("decided_ts")
             existing["reason"] = rec.get("reason")
+            # RFX-CORE-2 provenance. Records written before these fields
+            # existed carry no verification claim, so they fold to the
+            # conservative reading rather than being assumed verified.
+            existing["decided_by_verified"] = bool(rec.get("decided_by_verified", False))
+            existing["principal_source"] = rec.get("principal_source", "asserted")
         elif event_type == "expired":
             existing["status"] = "expired"
         elif event_type == "consumed":
@@ -271,14 +276,24 @@ def _audit_hold_resolution(
     resolved_ts: str,
     decision_id: str = "",
     observed_ts: str = "",
+    *,
+    verified: bool = False,
+    principal_source: str = "asserted",
 ) -> None:
-    """Best-effort hold_resolution audit write. Fail-open: swallows all errors."""
+    """Best-effort hold_resolution audit write. Fail-open: swallows all errors.
+
+    verified/principal_source (RFX-CORE-2) travel onto the Art.14 evidence
+    record too: the audit stream is what a report is built from, so if the
+    hold store knows an approver was never verified, the evidence line must
+    say so as well -- otherwise the forgery is simply laundered one hop later.
+    """
     try:
         from app.audit import record_hold_resolution  # type: ignore[import]
         record_hold_resolution(
             hold_id, resolution, decided_by,
             decision_id=decision_id, resolved_ts=resolved_ts,
             observed_ts=observed_ts,
+            verified=verified, principal_source=principal_source,
         )
     except Exception:  # noqa: BLE001
         pass
@@ -380,9 +395,14 @@ def _append_expired_event(hold_id: str) -> None:
     # decision by any actor) -- "system:reeflex-core" is a documented
     # best-effort sentinel for decided_by, distinct from any real
     # "human:*"/"agent:*" principal format so it is never mistaken for one.
+    # principal_source="system" / verified=True: an expiry is not a claim by
+    # any caller, it is a timeout CORE ITSELF observed, so it is the one
+    # resolution whose principal needs no external verification. Marking it
+    # "asserted" would be as wrong as marking a forged human approval verified.
     _audit_hold_resolution(
         hold_id, "expired", "system:reeflex-core", expired_ts,
         observed_ts=observed_ts,
+        verified=True, principal_source="system",
     )
 
 
@@ -464,6 +484,10 @@ def create_hold(envelope: dict, rule_id: str, *, decision_id: str = "") -> dict:
         "rule_id": rule_id,
         "status": "pending",
         "decided_by": None,
+        # RFX-CORE-2: present from creation so the record shape is stable and
+        # a consumer never has to distinguish "absent" from "not verified".
+        "decided_by_verified": False,
+        "principal_source": None,
         "decided_ts": None,
         "reason": None,
         "consumed_ts": None,
@@ -560,6 +584,9 @@ def resolve_hold(
     principal_type: str,
     principal_id: str,
     reason: str | None = None,
+    *,
+    verified: bool = False,
+    principal_source: str = "asserted",
 ) -> dict | None:
     """Resolve (approve or reject) a pending hold.
 
@@ -569,6 +596,26 @@ def resolve_hold(
     this function only writes the state-change record.
 
     decision : "approved" | "rejected"
+
+    verified / principal_source (RFX-CORE-2, keyword-only, additive):
+        WHETHER `decided_by` IS EVIDENCE OR MERELY A CLAIM.  The resolve
+        endpoint takes the principal from the request body; unless the
+        deployment binds credentials to principals
+        (REEFLEX_RESOLVER_TOKENS -- see app/principal.py) core cannot verify
+        that the caller is the human it names.  Recording that distinction is
+        the point: a `decided_by` of "human:leo" written from an unverified
+        assertion previously looked identical, in holds.jsonl and in every
+        downstream Art.14 report, to one a real human gave.  That is the
+        upstream cause of RFX-74 (a fabricated `decided_by: human:...`
+        rendered as evidence in the Attest report).
+
+        Defaults are the conservative reading (verified=False,
+        source="asserted") so any caller that does not pass them -- including
+        an older one -- produces a record that does NOT claim verification.
+
+        The frozen "{type}:{identity}" shape of `decided_by` is deliberately
+        UNCHANGED; this is an additive sibling field, not a reformatting, so
+        the holds API, the CLI, the dashboard and Attest all keep parsing it.
     """
     decided_ts = _iso_now()
     decided_by = f"{principal_type}:{principal_id}"
@@ -579,6 +626,8 @@ def resolve_hold(
         "event_type": "resolved",
         "status": new_status,
         "decided_by": decided_by,
+        "decided_by_verified": bool(verified),
+        "principal_source": principal_source,
         "decided_ts": decided_ts,
         "reason": reason,
         "ts": decided_ts,
@@ -602,7 +651,10 @@ def resolve_hold(
     # this hold_id, so the two correlate. "expired" is emitted separately in
     # _append_expired_event(). See audit.record_hold_resolution() docstring.
     if new_status in ("approved", "rejected"):
-        _audit_hold_resolution(hold_id, new_status, decided_by, decided_ts)
+        _audit_hold_resolution(
+            hold_id, new_status, decided_by, decided_ts,
+            verified=bool(verified), principal_source=principal_source,
+        )
 
     return result
 

@@ -55,7 +55,11 @@ Adapters also expose a mode:
 | `REEFLEX_AUDIT_LOG` | *(off)* | Path to the append-only JSONL audit log. Empty disables file audit. |
 | `REEFLEX_HOLDS_PATH` | *(in-memory)* | Path to the holds store. |
 | `REEFLEX_HOLD_TTL_SECONDS` | `14400` | Default hold TTL (4 hours) before `expires_ts`. |
-| `REEFLEX_RESOLUTION_POLICY` | — | Who may resolve a hold (HIL / AIL policy). See [Why Reeflex](../why-reeflex.md#ail). |
+| `REEFLEX_RESOLUTION_POLICY` | — | Which principal **type** may resolve a hold (HIL / AIL policy). See [Why Reeflex](../why-reeflex.md#ail). |
+| `REEFLEX_RESOLVER_TOKENS` | — | Binds a bearer token to the principal it **is**: `{"tok": {"type":"human","id":"alice"}}`. Without it the approving principal is only *asserted* by the caller, and resolutions are recorded `decided_by_verified: false`. **Set this (or the flag below) if you claim four-eyes.** |
+| `REEFLEX_REQUIRE_VERIFIED_APPROVER` | `false` | `true`/`1`/`yes` → refuse to resolve a hold whose approver cannot be verified (`403 principal_not_verified`). |
+
+`REEFLEX_RESOLUTION_POLICY` checks the principal type the caller *claims*; `REEFLEX_RESOLVER_TOKENS` is what establishes *who the caller is*. See [reeflex-core README → Approver verification](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-core/README.md#approver-verification-rfx-core-2).
 
 ## Freeze (operator kill-switch)
 
