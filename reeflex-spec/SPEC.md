@@ -127,6 +127,8 @@ Every action is priced on three axes. This is what makes coverage intrinsic inst
 - `broad` — a large set / whole table / bucket
 - `systemic` — could affect the system itself (schema, infra, all users)
 
+`blast_radius` is the only axis that selects between `require_approval` and `deny` (§5, R2 vs R3), so its derivation is normative rather than advisory. See **§4.2**.
+
 **`externality`** — does it reach beyond the system?
 - `internal` — stays inside the controlled system
 - `outbound` — reaches third parties (email, API, publish)
@@ -218,6 +220,62 @@ bakes a dimension limit into Python. See `reeflex-core/policy/budgets.rego`
 for the full mechanism and `reeflex-core/tests/test_budgets_rfx11.py` for an
 end-to-end demo, including one that edits `budgets.rego` alone (zero Python
 changes) to prove the tolerance is genuinely policy-controlled.
+
+---
+
+## 4.2 Deriving `blast_radius` — the affected set, not the action's name
+
+`blast_radius` carries more weight than the other two axes: it is what separates *"a human may approve this"* (R2, `broad`) from *"no human may approve this"* (R3, `systemic`). An adapter that gets it wrong does not merely mis-price an action — it moves it across the canon's hardest boundary. This section is therefore **normative**, and the conformance suite (§7) asserts it against a shared vector file so that two adapters cannot conform in incompatible shapes.
+
+### The input to the derivation
+
+> `blast_radius` is derived from **the set of entities the action affects**, and from nothing else.
+
+Specifically it is **not** derived from the name of the action. A name is a naming convention, not a measurement: `core/truncate-postmeta` wipes a table and contains no alarming substring, while `posts/delete-all-revisions-of-post` contains `all-` and may be one row. An adapter that pattern-matches names for this axis is guessing, and it will guess wrong in **both** directions.
+
+The affected set is the set of entities whose state the action changes — **not** the parameters the call receives. `delete-all-revisions-of(post_id=7)` receives one identifier and affects an unenumerated set of revisions; its affected set is unenumerated, and one id in the input does not make it `single`.
+
+### The decision procedure
+
+Applied in order; the first match wins.
+
+1. **The target is the system's own structure or control plane** → `systemic`.
+   The action changes *what the system is* or *who may act in it*, rather than which entities it holds: schema or database (`DROP SCHEMA`, `DROP DATABASE`), the filesystem root or a system directory, site-wide configuration or routing, the runtime itself, or the access-control model. Such effects are not enumerable as entities at all, which is why they sit above `broad`.
+
+2. **The affected set is not enumerable by the adapter at the call site** → `broad`.
+   The set is described by a *predicate* rather than an *enumeration*: a whole table or bucket, a directory, a glob or wildcard, a `WHERE` clause, "everything matching", or simply no target list at all. The adapter cannot state the cardinality, so it MUST NOT claim a small one.
+
+   Note that a `WHERE` clause does **not** make a set enumerable — it narrows a predicate to a smaller predicate. `DELETE FROM t WHERE status='old'` is `broad` for the same reason `DELETE FROM t` is: the number of rows it hits is not in the command text (`IMPACT-MODEL.md`). A filter is evidence of intent, not of cardinality.
+
+3. **The affected set is enumerable** → cardinality decides:
+   - `>= BROAD_MIN` (**20**) → `broad`
+   - `2 … BROAD_MIN - 1` → `scoped`
+   - exactly `1` → `single`
+
+   `BROAD_MIN` is **inclusive**: a set of exactly 20 is `broad`. The boundary is stated here, and carried as `broad_min` in the conformance vectors, because it is otherwise the kind of constant each adapter picks for itself — the two reference adapters disagreed at exactly this value (one used `> 20`, the other `>= 20`) until the suite compared them.
+
+### The two MUSTs this creates
+
+- **An adapter that cannot enumerate the affected set MUST NOT emit `single` or `scoped`.** Absence of an enumeration is a predicate over an unknown-size set — the *broadest* signal available, not the narrowest. Defaulting a missing target list to "one entity" is a fail-open default: it is the assumption most likely to be wrong and the one whose wrongness always favours the agent.
+- **Where the affected set *is* enumerated, its cardinality is authoritative and a name-derived signal MUST NOT raise the value above it.** An enumeration is evidence; a name is not. This is the same principle in the other direction, and it exists so that conservatism stays truthful instead of becoming noise an operator learns to ignore.
+
+An adapter MAY use name-derived signals to satisfy step 1 (a name is often the only place a container claim appears) and MAY use them to raise `broad` to `systemic`. It MUST NOT use them to reach `single` or `scoped`.
+
+The asymmetry is deliberate and it is the whole distinction this section draws. A name can answer *"is the target the system itself?"* — that is a claim about **kind**, it is made by the operator who wrote the ability, and it can only raise. A name cannot answer *"how many entities does this affect?"* — that is a claim about **cardinality**, and reading it off a substring is the guess that RFX-131 measured. Step 1 is the permitted use; steps 2 and 3 are where names are now forbidden.
+
+### The declaration, and why it is needed
+
+Steps 1 and 2 sometimes need a fact the call site cannot see. `delete-all-revisions-of(post_id=7)` presents an enumeration of length 1 and affects an unenumerated set; a whole-site configuration change may carry no distinguishing substring at all. In both cases the honest source is the **operator who registered the action**, not an inference.
+
+An adapter SHOULD therefore accept a **registration-time scope declaration** — `container` | `predicate` | `enumerated` — supplied where the action is defined rather than by the agent that calls it, and subject to the same monotonic rule the verb override already follows (§3): **a declaration may raise the derived value or leave it alone; it MUST NOT lower it.** A declaration that arrives with the call rather than with the registration is agent-supplied input and MUST NOT be honoured.
+
+Where nothing is declared, the adapter derives the shape from the evidence in the call — an enumeration if it holds one, a predicate otherwise. The default is `predicate`, which is why the fail-open closes even for actions nobody annotates.
+
+### What this does and does not buy
+
+It makes the axis **decidable at the call site**: an adapter always knows whether it was handed an enumeration or a filter, and it never has to query the resource to answer that. What it does not buy is a true row count — *"how many rows will `DELETE ... WHERE status='old'` actually hit"* is not in the command text and is knowable only at the resource (see `IMPACT-MODEL.md`). This section deliberately does not ask for that number. It asks the adapter to say **which of the two situations it is in**, and to stop reporting the unenumerated case as the smallest one.
+
+Nor does it make an asserted value true. A compromised adapter can emit `single` for a table wipe and the envelope is still conformant; `reeflex-core` canonicalizes this field but cannot verify it (see `reeflex-core/app/field_treatments.py`, and §6 on envelope signing). What the section removes is the much larger surface of adapters that are **honest and wrong**.
 
 ---
 
@@ -417,6 +475,18 @@ Minimum conformance for v0.1:
 - Honors every returned obligation.
 - Emits an audit record per decision.
 - Supplies a stable `session_id` so cumulative (anti-fragmentation) policies can bind.
+
+### Where the suite actually lives
+
+Machine-readable vectors are in **`reeflex-spec/conformance/`**, one file per normative derivation. Each case states the situation *abstractly* under `given` and then binds it to a concrete call per adapter, so the same case is the same case in every language:
+
+| file | asserts | §  |
+|---|---|---|
+| `blast-radius.json` | `axes.blast_radius` from the shape of the affected set | §4.2 |
+
+Both reference adapters run the same file — `reeflex-claude/tests/test_conformance_blast_radius.py` and `reeflex-wordpress/tests/conformance-blast-radius.php` — and neither carries its own copy of the expectations. A runner **MUST** report a case it cannot express as NOT APPLICABLE **by name** rather than skipping it silently, so that the number of cases actually exercised stays a real number.
+
+Two things this arrangement is for, both learned the hard way (RFX-131). Until the vectors existed, "MUST pass the conformance suite" named no suite for the axes, and each adapter derived them its own way. And a shared file is what makes a *disagreement* visible: the two reference adapters had picked different cardinality boundaries — one `> 20`, the other `>= 20` — so a 20-entity delete was `scoped` in one and `broad` in the other, and both were green against their own tests. `broad_min` is carried in the vector file for that reason.
 
 ---
 
