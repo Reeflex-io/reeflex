@@ -1,13 +1,13 @@
 """
-test_envelope_boundary_attacks.py — ALL FIVE envelope-boundary attacks, in one
-re-runnable file (RFX-97).
+test_envelope_boundary_attacks.py — every known envelope-boundary attack, in
+one re-runnable file (RFX-97).
 
 =============================================================================
 WHY ONE FILE
 =============================================================================
-Five ways to beat the deterministic decision path were found separately and
-fixed in three PRs.  RFX-97's release decision needs a single answer to a
-single question — "do all five fail on THIS artifact?" — so all five live
+Ways to beat the deterministic decision path keep being found separately and
+fixed one at a time.  RFX-97's release decision needs a single answer to a
+single question — "do they all fail on THIS artifact?" — so they all live
 here, drive the REAL decide.process() path end to end (envelope -> validate ->
 ledger -> OPA -> decision, no mocking of OPA), and can be pointed at any build.
 
@@ -18,15 +18,33 @@ ledger -> OPA -> decision, no mocking of OPA), and can be pointed at any build.
     A3  RFX-84   the approving human on /v1/holds/{id}/resolve was
                  self-asserted and nothing verified it.        fixed PR #90
     A4  RFX-127  approval:{present:true} with NO hold_id switched off EVERY
-                 cumulative budget.                            fixed here
+                 cumulative budget.                            fixed PR #92
     A5  RFX-133  the money budget was evaded by omitting params.currency,
-                 and the sum it compared mixed currencies.     fixed here
+                 and the sum it compared mixed currencies.     fixed PR #92
+    A6  RFX-133  (the second half) a hold raised for EUR 6,000 was
+                 resubmitted as EUR 6,000,000 — `params` is outside the
+                 envelope_hash projection, so nothing bound the amount a
+                 human actually saw.                           fixed PR #92
+    A7  RFX-138  the approval bound the ACTION and not the AGENT: a human
+                 approved agent ALPHA and agent BETA executed the
+                 irreversible production delete, while ALPHA was refused
+                 `reeflex_hold_consumed`.  Same bot with
+                 on_behalf_of alice -> bob was the same hole with no trace
+                 at all.                                       fixed here
 
-They are ONE defect in five places: A CALLER-SUPPLIED VALUE THAT THE POLICY
-READS WITHOUT CANONICALISING OR VERIFYING IT.  The structural fix is the
-enumeration in app/field_treatments.py and its test; this file is the
-behavioural proof that the five known instances are shut, and the artifact
-RFX-97 can re-run against any future build.
+They are ONE defect in seven places: A CALLER-SUPPLIED VALUE THE DECISION
+READS WITHOUT CANONICALISING OR VERIFYING IT.  A6 and A7 are the same sentence
+one layer up — a caller-supplied value nothing checked against WHAT A HUMAN
+ACTUALLY APPROVED.  The structural fix is the enumeration in
+app/field_treatments.py and its test; this file is the behavioural proof that
+the known instances are shut, and the artifact RFX-97 can re-run against any
+future build.
+
+THE COUNT IS DELIBERATELY NOT IN THE TITLE ANY MORE.  It said "ALL FIVE" while
+A7 was live on the published release and on main, which reads as a completeness
+claim the file could not make.  scripts/attack-probe-rfx97-release-gate.py is
+the release-facing half and carries the same row set; if you add an attack
+here, add it there, or the gate reports SECURE for a build that is not.
 
 Live evidence for A4/A5 (raw request and raw verdict, before and after) is in
 scripts/attack-probe-envelope-boundary.py.  A4 was reproduced on LIVE api-dev
@@ -641,10 +659,243 @@ class TestA6bApprovalBindsTheAmount(_AttackCase):
         self.assertEqual("deny", decision)
 
     def test_a6b_the_bound_paths_are_derived_not_hardcoded(self):
-        """If a new params-block decision input is declared, it is bound."""
+        """If a new field in a bound block is declared, it is bound.
+
+        This assertion is a PIN, not a description: it went red on the RFX-138
+        fix, which is the whole reason it is written as an exact tuple rather
+        than an `assertIn`.  What an approval binds is not a detail that may
+        drift — every entry below is a promise a human made when they clicked
+        approve, and each has to be argued for:
+
+          agent.id            WHO acted (RFX-138 variant A: a human approved
+                              ALPHA, BETA spent it)
+          agent.on_behalf_of  WHO they acted FOR (variant B: same bot, same
+                              session, alice -> bob, no trace anywhere)
+          agent.session_id    the raiser's session.  Follows from declaring
+                              the `agent` block bound, and is what every
+                              reference adapter already sends back verbatim —
+                              WordPress calls it a LOCKED DECISION ("the actor
+                              stays the actor"), and reeflex-mcp's holds
+                              tracker is KEYED on session_id so a
+                              cross-session resubmission cannot even find the
+                              hold.
+          params.amount       WHAT it costs (RFX-133: EUR 6,000 approved, EUR
+          params.currency     6,000,000 executed, hash byte-identical)
+
+        Adding a path here without a line above it means somebody widened what
+        an approval means without saying so.  Removing one means somebody
+        narrowed it.
+        """
         from app.field_treatments import approval_bound_paths
-        self.assertEqual(("params.amount", "params.currency"),
-                         approval_bound_paths())
+        self.assertEqual(
+            ("agent.id", "agent.on_behalf_of", "agent.session_id",
+             "params.amount", "params.currency"),
+            approval_bound_paths())
+
+
+class TestA7ApprovalBindsTheActor(_AttackCase):
+    """A7 — RFX-138.  A human's approval was bound to the ACTION, not to the
+    AGENT it was granted for.
+
+    THE SAME DEFECT AS A6b, ONE FIELD OVER, AND WORSE.  A6b was "the human
+    approved one NUMBER and the agent executed another".  This is "the human
+    approved one AGENT and a different agent executed it" — and the agent the
+    human actually approved was then locked out with
+    `reeflex_hold_consumed`, so the hijack was also a denial of service
+    against the legitimate actor.
+
+    Measured before the fix, twice, on two builds:
+      * live api-dev.reeflex.io, reeflex-core v0.1.13 (qa--018)
+      * origin/main 44c6f85 from source, i.e. AFTER #92/#93 added check 7
+    Both allowed the substituted agent, with rule
+    reeflex.policy/approved_resubmission.
+
+    WHY CHECK 7 DID NOT ALREADY COVER IT — the mechanism, not the symptom.
+    check 7 iterates approval_bound_paths(), which filters TREATMENTS by the
+    bound-block set.  The `agent` block was excluded with the reasoning "not a
+    decision input to a rule", which is TRUE and is the wrong test: agent.id
+    and agent.on_behalf_of are not inputs to a RULE, they are WHO THE HUMAN
+    SAID YES TO.  And the deeper cause is RFX-139: neither field was declared
+    in TREATMENTS at all, so no filter over the declarations could have
+    returned them however check 7 was written.  See
+    tests/test_field_treatments.py for the derivation that now makes an
+    undeclared read of this shape impossible.
+    """
+
+    def _approved_hold(self, *, agent_id, session, on_behalf_of=None,
+                       approver="human:qa018-approver",
+                       count=901) -> tuple[str, dict]:
+        """Raise a production irreversible-broad hold and have a human approve it.
+
+        Returns (hold_id, the envelope that raised it) so the caller can
+        resubmit a MUTATED COPY and change exactly one identity field —
+        everything else byte-identical, which is the point.
+        """
+        from app.holds import resolve_hold
+        env = _env(session_id=session, verb="delete", ability="posts/bulk-delete",
+                   environment="production", reversibility="irreversible",
+                   blast_radius="broad", count=count, agent_id=agent_id)
+        if on_behalf_of is not None:
+            env["agent"]["on_behalf_of"] = on_behalf_of
+        status, resp = process(env)
+        self.assertEqual("require_approval", resp.get("decision"), resp)
+        hold_id = resp["hold_id"]
+        ptype, _, pid = approver.partition(":")
+        resolve_hold(hold_id, "approve", ptype, pid, reason="reviewed")
+        return hold_id, env
+
+    @staticmethod
+    def _resubmit(env: dict, hold_id: str, **agent_overrides) -> dict:
+        """The held envelope, resubmitted with the approval and one identity
+        field changed.  Deep-copied so the stored hold is not mutated."""
+        import copy
+        out = copy.deepcopy(env)
+        out["approval"] = {"present": True, "hold_id": hold_id}
+        out["agent"].update(agent_overrides)
+        return out
+
+    # -- variant A: agent substitution -----------------------------------
+    def test_a7_another_agent_cannot_spend_the_approval(self):
+        s = self.session("a7a")
+        hold_id, env = self._approved_hold(agent_id="agent:ALPHA", session=s)
+        decision, rule = _verdict(self._resubmit(env, hold_id,
+                                                 id="agent:BETA"))
+        self.assertEqual(
+            "deny", decision,
+            "a human approved agent:ALPHA and agent:BETA executed the "
+            "irreversible production delete on that approval (rule %s)" % rule)
+        self.assertEqual("reeflex.core/hold_validation", rule)
+
+    def test_a7_the_approved_agent_is_not_locked_out_by_the_attempt(self):
+        """The half of the defect a substitution test alone would miss.
+
+        Before the fix, BETA's resubmission CONSUMED the hold, so ALPHA — the
+        only agent a human ever approved — came back
+        `deny reeflex_hold_consumed`.  A guard that merely refused BETA while
+        still burning the hold would leave the denial of service intact.
+        """
+        s = self.session("a7b")
+        hold_id, env = self._approved_hold(agent_id="agent:ALPHA", session=s)
+        beta, _ = process(self._resubmit(env, hold_id, id="agent:BETA"))
+        decision, rule = _verdict(self._resubmit(env, hold_id))
+        self.assertEqual(
+            "allow", decision,
+            "the substitution attempt burned the hold, so the agent the "
+            "human DID approve was refused: %s" % rule)
+
+    def test_a7_the_substitution_is_named_not_reported_as_a_hash_mismatch(self):
+        """The action matched perfectly; only the actor moved.
+
+        Reporting that as `reeflex_hold_envelope_mismatch` would tell the
+        operator the one thing that is not true.  qa--018's finding was that
+        the substitution left NO trace anywhere — this reason is the trace.
+        """
+        s = self.session("a7c")
+        hold_id, env = self._approved_hold(agent_id="agent:ALPHA", session=s)
+        _status, resp = process(self._resubmit(env, hold_id, id="agent:BETA"))
+        self.assertEqual("reeflex_hold_actor_substituted", resp.get("reason"),
+                         resp)
+
+    # -- variant B: principal substitution, the one with no trace ---------
+    def test_a7_the_same_agent_cannot_swap_who_it_acts_for(self):
+        """Same bot, same agent.id, same session_id — only on_behalf_of moved.
+
+        Worse than variant A because core's own audit line for the allow was
+        BYTE-IDENTICAL to a legitimate resubmission: same agent_id, same
+        session_id, same envelope_hash, and on_behalf_of is not in the audit
+        record at all.  Reachable by one env var: reeflex-claude reads
+        on_behalf_of from REEFLEX_CLAUDE_PRINCIPAL in the agent's own process.
+        """
+        s = self.session("a7d")
+        hold_id, env = self._approved_hold(
+            agent_id="agent:shared-bot", session=s,
+            on_behalf_of="user:alice@customer.test",
+            approver="human:manager@customer.test", count=902)
+        decision, rule = _verdict(self._resubmit(
+            env, hold_id, on_behalf_of="user:bob@customer.test"))
+        self.assertEqual(
+            "deny", decision,
+            "a human approved the bot acting for alice and it executed "
+            "acting for bob (rule %s)" % rule)
+
+    def test_a7_dropping_on_behalf_of_entirely_is_also_refused(self):
+        """Absence is a substitution too, and the cheapest one to try.
+
+        `!=` between None and "user:alice" is fail-closed by luck; this pins
+        it, because the normalising comparison folds unusable values to "" and
+        a fold is exactly where an absent-vs-empty hole would open.
+        """
+        s = self.session("a7e")
+        hold_id, env = self._approved_hold(
+            agent_id="agent:shared-bot", session=s,
+            on_behalf_of="user:alice@customer.test",
+            approver="human:manager@customer.test", count=903)
+        stripped = self._resubmit(env, hold_id)
+        stripped["agent"].pop("on_behalf_of")
+        decision, _rule = _verdict(stripped)
+        self.assertEqual("deny", decision)
+
+    # -- the fix must not break the honest gate ---------------------------
+    def test_a7_the_approved_agent_may_still_spend_its_own_approval(self):
+        """The control. Without it, a deny-everything change looks like a fix."""
+        for label, kwargs in (
+            ("id only", dict(agent_id="agent:GAMMA")),
+            ("id + on_behalf_of", dict(agent_id="agent:GAMMA",
+                                       on_behalf_of="user:alice")),
+            ("no agent.id at all", dict(agent_id=None)),
+        ):
+            with self.subTest(shape=label):
+                s = self.session("a7f")
+                hold_id, env = self._approved_hold(session=s, **kwargs)
+                decision, rule = _verdict(self._resubmit(env, hold_id))
+                self.assertEqual("allow", decision,
+                                 "%s: honest resubmission refused (%s)"
+                                 % (label, rule))
+
+    def test_a7_a_recased_or_padded_identity_is_the_same_actor(self):
+        """The fold is load-bearing in BOTH directions.
+
+        Comparing identities raw would fail CLOSED on `svc-bot` vs `SVC-BOT`,
+        which is safe and wrong: it turns an approval a human granted into a
+        refusal for the gate that legitimately owns it.  Check 6 has folded
+        identities since RFX-CORE-2; binding has to give the same answer or
+        the two guards disagree about who somebody is.
+        """
+        for variant in ("AGENT:SVC-BOT", " agent:svc-bot ",
+                        "agent:svc-bot​", "agent:svc-bot﻿"):
+            with self.subTest(variant=variant):
+                s = self.session("a7g")
+                hold_id, env = self._approved_hold(agent_id="agent:svc-bot",
+                                                   session=s)
+                decision, rule = _verdict(self._resubmit(env, hold_id,
+                                                         id=variant))
+                self.assertEqual(
+                    "allow", decision,
+                    "%r was read as a different actor than 'agent:svc-bot' "
+                    "(%s)" % (variant, rule))
+
+    def test_a7_the_guard_cannot_be_made_vacuous_by_omitting_identity(self):
+        """RFX-CORE-2's A2 lesson, applied to binding rather than four-eyes.
+
+        The old actor==approver check was SKIPPED ENTIRELY when agent.id was
+        absent, because SPEC §2 does not require it.  A binding that only
+        compared agent.id would have the same hole: send no id and no
+        on_behalf_of, and there is nothing to bind.  agent.session_id closes
+        it — SPEC §2 REQUIRES it and envelope.py F3 rejects an empty one — so
+        the bound identity set is never empty.  This test is the proof, not
+        the hope: two agents that BOTH send no agent.id are still two agents.
+        """
+        s_alpha = self.session("a7h")
+        s_beta = self.session("a7i")
+        hold_id, env = self._approved_hold(agent_id=None, session=s_alpha)
+        substituted = self._resubmit(env, hold_id, session_id=s_beta)
+        decision, rule = _verdict(substituted)
+        self.assertEqual(
+            "deny", decision,
+            "with no agent.id on either side the binding was vacuous and a "
+            "second session spent the approval (%s)" % rule)
+        _status, resp = process(substituted)
+        self.assertEqual("reeflex_hold_actor_substituted", resp.get("reason"))
 
 
 # ---------------------------------------------------------------------------

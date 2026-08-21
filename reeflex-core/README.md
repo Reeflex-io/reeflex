@@ -365,6 +365,7 @@ When an envelope carries `approval.present=true` and validation fails, `/v1/deci
 | `reeflex_hold_consumed` | The hold was already used for a prior resubmission. Single-use. |
 | `reeflex_hold_envelope_mismatch` | The `sha256` of the action-defining fields in this envelope does not match the hash stored when the hold was created (the action was modified). |
 | `reeflex_hold_actor_is_approver` | The resubmitting agent's identity matches the identity that resolved the hold. |
+| `reeflex_hold_actor_substituted` | The action matches the approved one exactly, but the **actor does not**: `agent.id`, `agent.on_behalf_of` or `agent.session_id` differs from the envelope the human approved. An approval authorises *that* agent, acting for *that* person, to do *that* thing — not the action alone. Identities are compared folded (NFKC, casefold, trim), so a re-cased or zero-width-padded identity is the same actor, not a refusal. |
 
 ### Approval principals
 
@@ -434,6 +435,22 @@ Each hold stores the `sha256` of the **action-defining projection** of the origi
 When the adapter resubmits an envelope with `approval={present:true, hold_id:"..."}`, core recomputes the hash over the same projection. If the hashes do not match, the resubmission is denied with `reeflex_hold_envelope_mismatch`.
 
 The `approval` field is deliberately excluded from the projection: the hash is identical for the original submission (where `approval.present=false`) and the resubmission (where `approval` carries the `hold_id`). Adding the approval field does not break the binding. A modified action — different verb, count, target, or axes — produces a different hash and cannot ride the old approval.
+
+**What the hash covers is not everything an approval binds, and it should not be.** The projection deliberately omits the blocks that must stay stable across a resubmission, and two of those carry things a human was agreeing to:
+
+| block | in the hash? | bound to the approval? | why |
+|---|---|---|---|
+| `action`, `axes`, `magnitude`, `target` | yes | yes, by the hash | **what** the action is |
+| `params` | no | yes, field by field | **what it costs** — the money budget is driven entirely by `params.amount`, so a hold raised for EUR 6,000 must not be resubmitted as EUR 6,000,000 with a byte-identical hash |
+| `agent` | no | yes, field by field, on folded identities | **who** — an approval authorises *that agent acting for that person*, not the action alone. Without this, a human approves agent ALPHA and agent BETA spends the approval (and ALPHA is then refused `reeflex_hold_consumed`) |
+| `approval` | no | no | it is the thing being validated |
+| `context`, `meta` | no | no | audit-only; they cannot change a verdict and they are not who the approval names |
+
+`params` mismatches are reported as `reeflex_hold_envelope_mismatch`; `agent` mismatches as `reeflex_hold_actor_substituted`, because in that case the action matched perfectly and only the actor moved — reporting it as a hash mismatch would name the one thing that is not true.
+
+Widening the hash preimage to cover these blocks would be the wrong fix: `envelope_hash` is written into the audit record, the SIEM event, the hold record and the evidence chain, and changing what it is computed over silently invalidates every cross-build join on it. Field comparison binds the same facts and leaves the wire alone.
+
+**Adapter contract.** A resubmission must carry the ORIGINAL agent identity — `id`, `on_behalf_of` and `session_id` as captured when the hold was created — not the identity of whatever context triggers the retry. Every reference adapter already does this: the WordPress adapter passes `$agent_override` verbatim ("the actor stays the actor"), and the MCP gateway's holds tracker is keyed on `(session_id, action_hash)` so a cross-session resubmission cannot even find the hold. Core now enforces it.
 
 TTL default is 4 hours (`REEFLEX_HOLD_TTL_SECONDS`). A hold past its `expires_ts` evaluates to `deny` with reason `reeflex_hold_expired`.
 

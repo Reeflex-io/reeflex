@@ -5,17 +5,26 @@ attack-probe-rfx97-release-gate.py — the RFX-97 release gate.
 WHAT THIS IS FOR
 ================
 RFX-97 asks one question that no test suite answers: *if we cut a release from
-this commit, which of the five known evasions does it actually close?*  A unit
-suite answers "does the fix's own test pass"; this answers "does the ARTEFACT
-still fall over when you push on it".  Point it at a built image (or api-dev)
-and it replays all five attacks and prints a verdict per evasion.
+this commit, which of the known evasions does it actually close?*  A unit suite
+answers "does the fix's own test pass"; this answers "does the ARTEFACT still
+fall over when you push on it".  Point it at a built image (or api-dev) and it
+replays every attack and prints a verdict per evasion.
 
-    THE FIVE
+    THE KNOWN EVASIONS
     RFX-86   environment string compared exactly ("Prod" fell to default_allow)   fix #89
     RFX-85   delete-verb spelling slipped past R5                                 fix #90
     RFX-84   the approving human on /resolve was self-asserted                    fix #90
     RFX-127  R5 switched off entirely by approval:{present:true}, no hold_id       fix #92
     RFX-133  R5 money budget evaded by omitting params.currency                   fix #92
+    RFX-138  a human's approval for agent ALPHA spent by agent BETA, and the
+             same bot swapping on_behalf_of alice -> bob (A7)                     fix TBD
+
+THE ROW SET IS THE CLAIM.  This file said "all five" and exited 0 against
+v0.1.13 while RFX-138 was live on that exact image -- an exit code of 0 reads
+as "safe to cut a release", so a missing row is not a documentation gap, it is
+a false all-clear.  Adding an attack to
+reeflex-core/tests/test_envelope_boundary_attacks.py without adding it here
+re-opens that gap.
 
 USAGE
 =====
@@ -31,8 +40,9 @@ USAGE
     --json PATH   also write the machine-readable verdict table
     --only A1,A4  run a subset
 
-EXIT CODE = the number of evasions still exploitable.  0 means all five closed,
-so a release cut here closes RFX-97.  CI can gate on it directly.
+EXIT CODE = the number of evasions still exploitable.  0 means every evasion
+IN THE TABLE ABOVE is closed on this artefact -- which is a statement about
+that list, not about the artefact.  CI can gate on it directly.
 
 THE DISCIPLINE THIS FILE ENCODES (and why a naive probe reports the opposite)
 ============================================================================
@@ -581,6 +591,111 @@ def attack_a5():
 
 
 # ---------------------------------------------------------------------------
+# A7 — RFX-138: the approval bound the ACTION, not the AGENT it was granted for
+# ---------------------------------------------------------------------------
+#
+# WHY THIS ROW EXISTS, AND WHY ITS ABSENCE MATTERED.  Without it this gate
+# printed "0 evasions, all five closed" against v0.1.13 — the published image —
+# while a human's approval for agent ALPHA could be spent by agent BETA on an
+# irreversible production delete.  An exit code of 0 reads as "safe to cut a
+# release"; it was answering a question with one row missing.  Confirmed on
+# live api-dev v0.1.13 AND on origin/main 44c6f85 by qa--018.
+#
+# THE CONTROL MATTERS MORE HERE THAN ANYWHERE ELSE IN THIS FILE.  The evasion
+# and the control differ by ONE STRING, so a build that denies every
+# resubmission — a broken adapter contract, a stricter hash, a hold store that
+# lost the envelope — would score this CLOSED while being useless.  The
+# control is "the agent the human actually approved gets its allow"; if that
+# fails, the row is INCONCLUSIVE, not CLOSED.
+#
+# AND THE SECOND HALF OF THE DEFECT IS CHECKED SEPARATELY: before the fix, the
+# substitute's resubmission CONSUMED the hold, so the legitimate agent came
+# back `reeflex_hold_consumed`.  A build that refuses BETA but still burns the
+# hold has fixed the hijack and kept the denial of service.
+
+def attack_a7():
+    banner("A7  RFX-138 — the approval bound the action, not the agent")
+
+    # ---- CONTROL: an honest resubmission must be ALLOWED -------------------
+    s_ctl = sid("a7-ctl")
+    hold_ctl, env_ctl = _raise_hold(s_ctl, agent_id="agent:a7-gamma",
+                                    label="A7 control")
+    control_ok = False
+    if hold_ctl:
+        _resolve(hold_ctl, "human", "a7-approver-human", "A7 control: approve")
+        env_ctl["approval"] = {"present": True, "hold_id": hold_ctl}
+        _, rc = call("POST", "/v1/decide", env_ctl,
+                     "A7 control: the approved agent resubmits")
+        control_ok = verdict(rc) == "allow"
+        print("  CONTROL approved agent resubmits -> %-16s %s"
+              % (verdict(rc), rule(rc)))
+    if not control_ok:
+        print("  !! control did not ALLOW — resubmission is broken on this "
+              "build for some other reason; A7 is inconclusive, not closed")
+
+    evaded, detail = [], {}
+
+    # ---- variant A: a different agent.id spends the approval --------------
+    s_a = sid("a7-a")
+    hold_a, env_a = _raise_hold(s_a, agent_id="agent:a7-alpha",
+                                label="A7-A: ALPHA raises")
+    if hold_a:
+        _resolve(hold_a, "human", "a7-approver-human",
+                 "A7-A: a human approves ALPHA")
+        beta = json.loads(json.dumps(env_a))
+        beta["agent"]["id"] = "agent:a7-beta"
+        beta["approval"] = {"present": True, "hold_id": hold_a}
+        _, rb = call("POST", "/v1/decide", beta,
+                     "A7-A: BETA resubmits with ALPHA's hold_id")
+        print("  A/ different agent.id            -> %-16s %s"
+              % (verdict(rb), rule(rb)))
+        if verdict(rb) == "allow":
+            evaded.append("agent.id substituted")
+
+        # The denial-of-service half: is ALPHA's approval still spendable?
+        env_a["approval"] = {"present": True, "hold_id": hold_a}
+        _, ra = call("POST", "/v1/decide", env_a,
+                     "A7-A: ALPHA, the approved agent, tries")
+        print("     then ALPHA (the approved one) -> %-16s %s"
+              % (verdict(ra), ra.get("reason", "")))
+        detail["approved_agent_locked_out"] = verdict(ra) != "allow"
+        if verdict(ra) != "allow" and verdict(rb) != "allow":
+            # Refused BETA and still burned the hold: half a fix.
+            evaded.append("hold consumed by the refused substitution")
+
+    # ---- variant B: same bot, same session, on_behalf_of alice -> bob -----
+    s_b = sid("a7-b")
+    hold_b, env_b = _raise_hold(s_b, agent_id="agent:a7-shared-bot",
+                                on_behalf_of="user:alice@a7.invalid",
+                                label="A7-B: bot FOR alice raises")
+    if hold_b:
+        _resolve(hold_b, "human", "a7-manager@a7.invalid",
+                 "A7-B: a manager approves the alice request")
+        swapped = json.loads(json.dumps(env_b))
+        swapped["agent"]["on_behalf_of"] = "user:bob@a7.invalid"
+        swapped["approval"] = {"present": True, "hold_id": hold_b}
+        _, rs = call("POST", "/v1/decide", swapped,
+                     "A7-B: SAME bot, SAME session, acting for bob")
+        print("  B/ on_behalf_of alice -> bob     -> %-16s %s"
+              % (verdict(rs), rule(rs)))
+        if verdict(rs) == "allow":
+            evaded.append("agent.on_behalf_of substituted")
+        detail["substitution_is_named"] = \
+            rs.get("reason") == "reeflex_hold_actor_substituted"
+
+    f = finding(
+        "A7", "RFX-138", "the approval bound the action, not the agent",
+        "this PR", control_ok, evaded, 3,
+        "an irreversible production action executes for an agent, or for a "
+        "person, no human ever approved — and the approved agent is locked "
+        "out. On the on_behalf_of variant core's audit line is byte-identical "
+        "to a legitimate resubmission",
+    )
+    f["detail"] = detail
+    return f
+
+
+# ---------------------------------------------------------------------------
 # reporting
 # ---------------------------------------------------------------------------
 
@@ -597,7 +712,7 @@ def finding(code, ticket, name, fixed_in, control_ok, evaded, total, impact):
 
 
 ATTACKS = {"A1": attack_a1, "A2": attack_a2, "A3": attack_a3,
-           "A4": attack_a4, "A5": attack_a5}
+           "A4": attack_a4, "A5": attack_a5, "A7": attack_a7}
 
 
 def main():
@@ -609,7 +724,7 @@ def main():
     which = [c.strip().upper() for c in args.only.split(",") if c.strip()] \
         or list(ATTACKS)
 
-    print("reeflex-core RFX-97 release gate — all five evasions, one artefact")
+    print("reeflex-core RFX-97 release gate — every known evasion, one artefact")
     print("target : %s" % BASE)
     print("run    : %s" % RUN)
     print("attacks: %s" % ", ".join(which))

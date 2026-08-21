@@ -254,6 +254,49 @@ TREATMENTS: dict[str, Treatment] = {
              "budget.",
     ),
 
+    # -- agent identity: WHO the approval was granted to -- RFX-138 / RFX-139
+    # These two were read by the decision path and declared NOWHERE, and that
+    # omission is the mechanism by which RFX-138 escaped a sweep designed to
+    # be exhaustive: check 7 binds a resubmission to the approval by iterating
+    # approval_bound_paths(), which is DERIVED from this table, so a field
+    # that is never declared can never be bound.  decide.py's check 6 reads
+    # both — one frame deeper, inside principal.actor_identities() — which is
+    # exactly the FOURTH READER the RESIDUAL section below predicted.
+    "agent.id": Treatment(
+        CANONICALISE, "principal.normalize_identity "
+                      "(decide._validate_approval checks 6 and 7)",
+        closed_set=frozenset(),  # an identifier, not a list core maintains
+        conservative_default="",  # unusable -> "" -> contributes no identity
+        unverifiable_assertion=True,
+        note="NOT a decision input to any rule — it is the SUBJECT OF THE "
+             "HUMAN'S APPROVAL, which is why excluding the agent block from "
+             "the bound set was wrong (RFX-138: a human approved ALPHA and "
+             "BETA spent the approval; ALPHA was then refused "
+             "reeflex_hold_consumed). Folded NFKC/casefold/strip before any "
+             "comparison so a re-cased or zero-width-padded identity is "
+             "neither a spurious mismatch nor a way around check 6. The fold "
+             "makes the COMPARISON honest; it does nothing to make the "
+             "claimed identity TRUE — see the RESIDUAL note and RFX-9.",
+    ),
+    "agent.on_behalf_of": Treatment(
+        CANONICALISE, "principal.normalize_identity "
+                      "(decide._validate_approval checks 6 and 7)",
+        closed_set=frozenset(),
+        conservative_default="",
+        unverifiable_assertion=True,
+        note="The human the agent declares it acts FOR. Read by four-eyes "
+             "(principal.actor_identities) so that an agent acting for Alice "
+             "cannot have 'Alice' approve it, and bound to the approval by "
+             "check 7 so that the SAME agent in the SAME session cannot swap "
+             "alice -> bob after a human said yes for alice. That variant is "
+             "worse than agent substitution because it left no trace at all: "
+             "agent_id, session_id and envelope_hash are byte-identical to a "
+             "legitimate resubmission. reeflex-claude reads it from an env "
+             "var in the agent's own process (envelope.py:67), so the agent "
+             "picks whom it claims to act for — the definition of an "
+             "unverifiable assertion.",
+    ),
+
     # -- agent.session_id (SPEC §2, REQUIRED) -------------------------------
     "agent.session_id": Treatment(
         VALIDATE, "envelope.validate_and_fill_defaults (F3) + "
@@ -366,35 +409,97 @@ def _truncate(parts: list[str]) -> str:
 #: narrowing what an approval binds.
 HASH_COVERED_BLOCKS: frozenset[str] = frozenset({"action", "axes", "magnitude", "target"})
 
-#: Blocks that carry a decision input but are NOT part of the envelope hash,
-#: and are therefore not bound to an approval by check 5.
+#: Blocks an approval must bind that the envelope hash DOES NOT COVER.
 #:
-#: `params` is the whole list, and it is not an academic gap: the money budget
-#: is driven entirely by params.amount, so a hold raised for a EUR 6,000
-#: payment could be resubmitted as EUR 6,000,000 and the hash was byte-identical
-#: — the human approved one number and the agent executed another. Confirmed
-#: end to end during the RFX-127/133 sweep.
+#: WHAT A HUMAN APPROVES is "this agent, acting for this person, doing this
+#: thing".  canonical_hash() covers only the last third of that sentence, so
+#: the other two thirds have to be bound field by field — and there are TWO
+#: distinct reasons a block belongs in this set, which is the thing the first
+#: version of it got wrong:
 #:
-#: `approval` is excluded because it is the thing being validated, and
-#: `agent`/`context`/`meta` because they are not decision inputs to a rule
-#: (agent.session_id keys the ledger, which is recomputed at resubmission
-#: time by design).
-_UNBOUND_DECISION_BLOCKS: frozenset[str] = frozenset({"params"})
+#: `params` — IT CARRIES A DECISION INPUT.  The money budget is driven
+#: entirely by params.amount, so a hold raised for a EUR 6,000 payment could
+#: be resubmitted as EUR 6,000,000 with a byte-identical hash: the human
+#: approved one number and the agent executed another.  Confirmed end to end
+#: during the RFX-127/133 sweep.
+#:
+#: `agent` — IT CARRIES THE SUBJECT OF THE APPROVAL.  This block was
+#: previously excluded with the reasoning "not a decision input to a rule".
+#: That sentence is TRUE and it was the wrong test: agent.id and
+#: agent.on_behalf_of are not inputs to a RULE, they are WHO THE HUMAN SAID
+#: YES TO.  Excluding them meant a human could approve agent ALPHA and agent
+#: BETA would spend the approval — measured on origin/main 44c6f85 and on
+#: live api-dev v0.1.13, with ALPHA (the agent actually approved) then
+#: refused `reeflex_hold_consumed`.  Same bot, same session, on_behalf_of
+#: alice -> bob was the same hole with no trace at all: agent_id, session_id
+#: and envelope_hash all byte-identical to a legitimate resubmission
+#: (RFX-138).
+#:
+#: THE ADAPTER CONTRACT ALREADY REQUIRED THIS AND NOTHING CHECKED IT.  The
+#: WordPress reference adapter carries `{id, on_behalf_of, session_id}`
+#: verbatim from hold creation into the resubmission and calls it a "LOCKED
+#: DECISION ... the actor stays the actor"
+#: (class-reeflex-normalizer.php, $agent_override); reeflex-mcp's holds
+#: tracker is KEYED on (session_id, action_hash) so a cross-session
+#: resubmission cannot even find the hold; the n8n recipe respreads the whole
+#: envelope and regenerates only `meta.nonce`.  Binding the agent block
+#: enforces at the core boundary an invariant every reference adapter already
+#: promises.
+#:
+#: `approval` is still excluded because it is the thing being validated, and
+#: `context`/`meta` because they are audit-only: they cannot change a verdict
+#: and they are not who the approval names.  See RESIDUAL note 4.
+_APPROVAL_BOUND_BLOCKS: frozenset[str] = frozenset({"params", "agent"})
 
 
 def approval_bound_paths() -> tuple[str, ...]:
-    """Caller-supplied decision inputs an approval must bind BEYOND the hash.
+    """Caller-supplied fields an approval must bind BEYOND the hash.
 
     Derived from TREATMENTS, so a future declared field in one of these
     blocks is bound automatically instead of being remembered.  This is the
     enumeration doing the work: the fix is not "also check the amount", it is
-    "check everything the decision reads that the hash does not cover".
+    "check everything the approval covers that the hash does not".
+
+    The derivation is only as good as the table: RFX-138 escaped this
+    function while it was already shipping, because agent.id and
+    agent.on_behalf_of were read by check 6 and declared nowhere, so no
+    filter over TREATMENTS could ever have returned them.  A field that is
+    never declared can never be bound.
     """
     return tuple(sorted(
         path for path, t in TREATMENTS.items()
         if t.kind != CORE_COMPUTED
-        and path.split(".")[0] in _UNBOUND_DECISION_BLOCKS
+        and path.split(".")[0] in _APPROVAL_BOUND_BLOCKS
     ))
+
+
+def bound_value(path: str, raw: object) -> object:
+    """The comparison key for `path` when binding a resubmission to a hold.
+
+    Most fields compare as-is: both sides have already been through
+    validate_and_fill_defaults(), so both are canonical and a remaining
+    difference is a real difference.
+
+    The `agent` block is the exception, and deliberately so.  "Is this the
+    same actor?" is decided by principal.normalize_identity() everywhere else
+    in this codebase — check 6 here, and the resolve-time four-eyes guard in
+    server.py — so binding must use the same answer, or the two guards
+    disagree about who somebody is.  Concretely, the fold is what stops
+    `svc-bot` vs `SVC-BOT` being read as an actor substitution (a false deny
+    on a legitimate resubmission), and it is what stops a zero-width
+    character from making one identity look like two.
+
+    NOTE it is the COMPARISON that folds, not the field: agent.session_id is
+    declared VALIDATE and its RAW value keys the cumulative ledger, because
+    folding case there would merge two adapters' distinct sessions into one
+    budget.  Same field, two uses, and only one of them is an identity
+    question.
+    """
+    if path.split(".")[0] != "agent":
+        return raw
+    from .principal import normalize_identity  # local: avoids an import cycle
+
+    return normalize_identity(raw)
 
 
 def undeclared(paths: set[str]) -> set[str]:

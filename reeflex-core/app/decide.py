@@ -132,10 +132,44 @@ _WINDOW_SECONDS = int(os.environ.get("REEFLEX_WINDOW_SECONDS", "3600"))
 # the RESIDUAL notes in field_treatments.py.
 DECIDE_ENVELOPE_PATHS: tuple[str, ...] = (
     "agent.session_id",   # ledger key + principal_budgets override key
+    "agent.id",           # four-eyes (check 6) + approval binding (check 7)
+    "agent.on_behalf_of",  # four-eyes (check 6) + approval binding (check 7)
     "action.verb",        # freeze gate (_is_read_verb)
     "approval.present",   # routes into the hold-validation chain
-    "approval.hold_id",   # names the hold the six checks run against
+    "approval.hold_id",   # names the hold the checks run against
+    "params.amount",      # approval binding (check 7) -- see below
+    "params.currency",    # approval binding (check 7) -- see below
 )
+
+# WHY agent.id AND agent.on_behalf_of ARE ON THAT LIST NOW (RFX-139).
+#
+# They always were read here.  Check 6 calls principal.is_self_approval(),
+# whose actor_identities() iterates ("id", "on_behalf_of", "session_id") --
+# so the read happens ONE FRAME DEEPER, in app/principal.py, which no
+# enumeration in this repo scanned.  field_treatments.py's own RESIDUAL note 3
+# predicted this exactly: "a FOURTH reader would be invisible to it in exactly
+# the same way".  principal.py was the fourth reader.
+#
+# The cost of the omission was not tidiness.  approval_bound_paths() -- check
+# 7, the fix for the EUR 6,000 -> EUR 6,000,000 resubmission -- is DERIVED
+# from TREATMENTS, so an undeclared field cannot be bound by it however
+# carefully check 7 is written.  That is the mechanism by which RFX-138
+# survived a sweep whose entire purpose was to be exhaustive: a human
+# approved agent ALPHA's production delete and agent BETA executed it.
+#
+# tests/test_field_treatments.py no longer takes this tuple's word for it: it
+# drives a RECORDING envelope through the real approval chain and asserts that
+# every path the chain actually dereferences is declared here. An AST scan
+# would not have caught this one -- the reads are behind a tuple loop in
+# another module -- which is why the derivation is a runtime probe.
+#
+# AND params.amount / params.currency ARE ON THE LIST FOR THE SAME REASON.
+# They were NOT found by reading the code: the new probe flagged them on its
+# first run.  Check 7 has dereferenced both since #92, and this tuple named
+# neither -- they were declared in field_treatments.TREATMENTS only because
+# ledger.py reads them too, so the "nothing undeclared" test stayed green by
+# accident.  Two independent instances of RFX-139's defect in one function is
+# the argument for deriving this list instead of maintaining it.
 
 # The Decision returned when OPA evaluation fails for any reason.
 _FAIL_CLOSED_DECISION: dict = {
@@ -309,6 +343,12 @@ def _validate_approval(envelope: dict) -> tuple[int, dict | None, dict | None]:
       4. status != consumed                 else deny "reeflex_hold_consumed"
       5. canonical_hash(envelope) == stored else deny "reeflex_hold_envelope_mismatch"
       6. agent identity != decided_by ident else deny "reeflex_hold_actor_is_approver"
+      7. every approval-bound field outside the hash matches the held
+         envelope, else deny -- "reeflex_hold_actor_substituted" when the
+         difference is WHO (the agent block: RFX-138), and
+         "reeflex_hold_envelope_mismatch" when it is WHAT (params: the money
+         amount, RFX-133).  The path set is derived from
+         field_treatments.approval_bound_paths().
     """
     from .holds import get_hold, canonical_hash, is_expired  # type: ignore[import]
 
@@ -401,10 +441,40 @@ def _validate_approval(envelope: dict) -> tuple[int, dict | None, dict | None]:
     # that does not need it.  Comparing the fields directly binds the same
     # facts and leaves the hash — and the wire — alone.
     #
+    # AND IT MUST ALSO BIND WHO THE APPROVAL WAS GRANTED TO (RFX-138).
+    #
+    # The first version of this check bound `params` only, excluding the
+    # `agent` block with the reasoning "not a decision input to a rule".  That
+    # sentence is true and it was the wrong test.  agent.id and
+    # agent.on_behalf_of are not inputs to a RULE; they are the SUBJECT OF THE
+    # HUMAN'S APPROVAL — and check 6, four lines up, reads both of them, so
+    # they are demonstrably inputs to the approval chain this check belongs
+    # to.  Measured consequence, on origin/main 44c6f85 and on live api-dev
+    # v0.1.13:
+    #
+    #   agent ALPHA raises a production irreversible delete -> hold
+    #   a human approves ALPHA's request                    -> approved
+    #   agent BETA resubmits with ALPHA's hold_id           -> ALLOW
+    #   ALPHA, the agent the human approved, then tries     -> deny,
+    #                                                          hold_consumed
+    #
+    # The irreversible production action executed for an agent no human ever
+    # saw, and the agent the human DID approve was locked out.  The
+    # on_behalf_of variant is worse because it leaves no trace: same bot, same
+    # session, alice -> bob, and core's own audit line is byte-identical to a
+    # legitimate resubmission.
+    #
+    # Widening _HASH_ALLOWLIST to cover the agent block is the wrong fix for
+    # the same reason it was the wrong fix for params, above.
+    #
     # The path list is DERIVED from field_treatments.TREATMENTS rather than
-    # hardcoded, so a future declared decision input in `params` is bound
-    # without anyone remembering to add it here.
-    from .field_treatments import approval_bound_paths  # type: ignore[import]
+    # hardcoded, so a future declared field in a bound block is covered
+    # without anyone remembering to add it here.  That derivation is exactly
+    # why RFX-139 had to be fixed first: an undeclared field cannot be bound
+    # by a filter over the declarations, however careful this loop is.
+    from .field_treatments import (  # type: ignore[import]
+        approval_bound_paths, bound_value,
+    )
 
     held_envelope = hold.get("envelope") or {}
     for path in approval_bound_paths():
@@ -413,12 +483,26 @@ def _validate_approval(envelope: dict) -> tuple[int, dict | None, dict | None]:
         was_block = held_envelope.get(block)
         now = now_block.get(leaf) if isinstance(now_block, dict) else None
         was = was_block.get(leaf) if isinstance(was_block, dict) else None
-        # `!=` is exact and that is intended: both sides have already been
-        # through validate_and_fill_defaults(), so both are canonical, and a
-        # remaining difference is a real difference.
-        if now != was:
+        # Comparison is exact for everything the envelope already
+        # canonicalised, and folded through principal.normalize_identity()
+        # for the `agent` block, because "is this the same actor?" has to be
+        # answered the same way here as in check 6 and at resolve time --
+        # otherwise the two guards disagree about who somebody is, and
+        # `svc-bot` vs `SVC-BOT` becomes a false deny on an honest gate.
+        if bound_value(path, now) != bound_value(path, was):
+            # NAME THE FAILURE HONESTLY.  On an actor substitution the action
+            # matched perfectly -- same hash, same everything a human read --
+            # and only the identity moved.  Reporting that as
+            # "envelope_mismatch" would tell the operator the one thing that
+            # is NOT true and hide the one thing that is; and the qa finding
+            # this fixes was precisely that the substitution left no trace
+            # anywhere.  This reason IS the trace.
+            reason = (
+                "reeflex_hold_actor_substituted" if block == "agent"
+                else "reeflex_hold_envelope_mismatch"
+            )
             return 200, _deny_response(
-                "reeflex_hold_envelope_mismatch", "reeflex.core/hold_validation"
+                reason, "reeflex.core/hold_validation"
             ), hold
 
     return 0, None, hold  # all checks passed
