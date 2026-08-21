@@ -50,8 +50,10 @@ Run:
 from __future__ import annotations
 
 import ast
+import os
 import pathlib
 import sys
+import tempfile
 import unittest
 
 _repo_root = pathlib.Path(__file__).resolve().parent.parent
@@ -60,11 +62,18 @@ if str(_repo_root) not in sys.path:
 
 from app.envelope import validate_and_fill_defaults
 from app.field_treatments import (
+    BIND_ACTOR,
+    BIND_HASH,
+    BIND_NONE,
+    BIND_VALUE,
     CANONICALISE,
     CORE_COMPUTED,
+    HASH_COVERED_BLOCKS,
     TREATMENTS,
     VALIDATE,
     VERIFY,
+    approval_actor_paths,
+    approval_bound_paths,
     policy_input_paths,
     undeclared,
 )
@@ -106,6 +115,73 @@ def _envelope(**over) -> dict:
         else:
             base[head] = value
     return base
+
+
+# ---------------------------------------------------------------------------
+# A recording envelope — the derivation for readers a regex cannot follow
+#
+# RFX-139: DECIDE_ENVELOPE_PATHS is HAND-MAINTAINED, and it was wrong.  It
+# omitted agent.id and agent.on_behalf_of, which decide.py has always read --
+# indirectly, through principal.is_self_approval(), which iterates a tuple of
+# field names in ANOTHER MODULE.  No amount of grepping decide.py finds that,
+# and the AST scan that keeps ledger.py honest would not either.
+#
+# So this derivation is dynamic: run the real code against an envelope that
+# records every field dereferenced, wherever the dereference happens.  It
+# follows indirection by construction, because it watches the data rather than
+# the source.
+# ---------------------------------------------------------------------------
+
+class _RecordingBlock(dict):
+    """A top-level envelope block that records every field read from it."""
+
+    def __init__(self, block: str, data: dict, sink: set) -> None:
+        super().__init__(data)
+        self._block = block
+        self._sink = sink
+
+    def _seen(self, key):
+        if isinstance(key, str):
+            self._sink.add("%s.%s" % (self._block, key))
+
+    def get(self, key, default=None):
+        self._seen(key)
+        return super().get(key, default)
+
+    def __getitem__(self, key):
+        self._seen(key)
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        self._seen(key)
+        return super().__contains__(key)
+
+
+class _RecordingEnvelope(dict):
+    """An envelope whose blocks record their reads.
+
+    Bare top-level block reads (`envelope["action"]`, as canonical_hash() does
+    over its whole projection) are deliberately NOT recorded: a treatment is
+    declared per FIELD, and whole-block coverage is check 5's job, asserted
+    separately against holds._HASH_ALLOWLIST.
+    """
+
+    def __init__(self, data: dict, sink: set) -> None:
+        super().__init__(data)
+        self._sink = sink
+
+    def _wrap(self, key, value):
+        if isinstance(value, dict) and not isinstance(value, _RecordingBlock):
+            return _RecordingBlock(key, value, self._sink)
+        return value
+
+    def get(self, key, default=None):
+        if not dict.__contains__(self, key):
+            return default
+        return self._wrap(key, dict.__getitem__(self, key))
+
+    def __getitem__(self, key):
+        return self._wrap(key, dict.__getitem__(self, key))
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +279,100 @@ class TestEnumerationIsTotal(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 1b. Every field says what an APPROVAL of it binds  (RFX-138 / RFX-139)
+# ---------------------------------------------------------------------------
+
+class TestApprovalBindingIsDeclared(unittest.TestCase):
+    """A treatment says how a field is made safe to COMPARE.  It does not say
+    what a human's approval of that value is worth on the next request that
+    cites the hold -- and that is where RFX-138 lived: `agent` was outside the
+    envelope hash and outside check 7, so an approval of agent A's irreversible
+    production delete was spendable by agent B.
+
+    The old derivation selected on a BLOCK list, with `agent` excluded by a
+    comment asserting it carried no decision input.  It did.  These tests make
+    the exclusion a per-field DECLARATION that has to be written down, so the
+    next omission is a red gate rather than a comment nobody re-reads.
+    """
+
+    def test_every_caller_supplied_field_declares_a_binding(self):
+        undeclared_binding = sorted(
+            p for p, t in TREATMENTS.items()
+            if t.kind != CORE_COMPUTED
+            and t.approval_binding not in (BIND_HASH, BIND_VALUE, BIND_ACTOR, BIND_NONE)
+        )
+        self.assertEqual(
+            [], undeclared_binding,
+            "caller-supplied field(s) with no declared approval_binding: %s.\n"
+            "Say what a human's approval binds about the field: BIND_HASH "
+            "(inside canonical_hash), BIND_VALUE (compared by check 7), "
+            "BIND_ACTOR (part of who the approval was granted to, check 8), or "
+            "BIND_NONE with the reason in the note. RFX-138 was an UNDECLARED "
+            "binding, not a wrong one." % undeclared_binding,
+        )
+
+    def test_core_computed_fields_declare_no_binding(self):
+        """Nothing for an approval to bind: core recomputes them per request."""
+        for path, t in TREATMENTS.items():
+            if t.kind == CORE_COMPUTED:
+                self.assertEqual("", t.approval_binding, path)
+
+    def test_bind_hash_means_the_hash_actually_covers_it(self):
+        """BIND_HASH is a claim about holds._HASH_ALLOWLIST. Check it.
+
+        If the hash projection is ever narrowed, the fields it drops must stop
+        claiming to be bound by it -- otherwise the table would keep saying
+        "check 5 has this" about a field check 5 no longer sees.
+        """
+        from app.holds import _HASH_ALLOWLIST
+        self.assertEqual(
+            set(_HASH_ALLOWLIST), set(HASH_COVERED_BLOCKS),
+            "HASH_COVERED_BLOCKS has drifted from holds._HASH_ALLOWLIST",
+        )
+        for path, t in TREATMENTS.items():
+            block = path.split(".")[0]
+            if t.approval_binding == BIND_HASH:
+                self.assertIn(block, HASH_COVERED_BLOCKS,
+                              "%s claims the hash binds it, but the hash does "
+                              "not cover the %r block" % (path, block))
+            elif t.kind != CORE_COMPUTED and block in HASH_COVERED_BLOCKS:
+                self.fail("%s is inside the hash projection but declares %r"
+                          % (path, t.approval_binding))
+
+    def test_the_derived_lists_are_what_the_checks_run_against(self):
+        """The two derivations must stay non-empty and disjoint."""
+        value_bound = set(approval_bound_paths())
+        actor_bound = set(approval_actor_paths())
+        self.assertTrue(value_bound, "check 7 would bind nothing")
+        self.assertTrue(actor_bound, "check 8 would bind nothing")
+        self.assertEqual(set(), value_bound & actor_bound)
+        # Regression anchors: the two fields each check exists for.
+        self.assertIn("params.amount", value_bound)      # RFX-133 / check 7
+        self.assertIn("agent.id", actor_bound)           # RFX-138 / check 8
+        self.assertIn("agent.on_behalf_of", actor_bound)
+
+    def test_the_actor_key_reads_exactly_the_declared_actor_paths(self):
+        """principal.approval_actor_key() and the table must agree.
+
+        A field declared BIND_ACTOR that the key never reads is a promise the
+        code does not keep; a field the key reads that is not declared is
+        RFX-139 again.
+        """
+        from app.principal import approval_actor_key
+        sink: set[str] = set()
+        # BOTH branches: a named agent (which never reaches the fallback) and
+        # a SPEC-minimal envelope (which is the only thing that does).
+        approval_actor_key(_RecordingEnvelope(
+            {"agent": {"id": "a", "on_behalf_of": "b", "session_id": "c"}}, sink))
+        approval_actor_key(_RecordingEnvelope({"agent": {"session_id": "c"}}, sink))
+        self.assertEqual(
+            set(approval_actor_paths()), sink,
+            "approval_actor_key() reads %s; the table declares %s"
+            % (sorted(sink), sorted(approval_actor_paths())),
+        )
+
+
+# ---------------------------------------------------------------------------
 # 2. The ledger's declared read-set matches its code
 # ---------------------------------------------------------------------------
 
@@ -276,6 +446,115 @@ _HOSTILE = [
     [],
     {},
 ]
+
+
+# ---------------------------------------------------------------------------
+# 2b. decide.py's declared read-set matches what it ACTUALLY dereferences
+# ---------------------------------------------------------------------------
+
+class TestDecideDeclarationMatchesCode(unittest.TestCase):
+    """The counterpart to TestLedgerDeclarationMatchesCode, for the reader a
+    static scan cannot follow.
+
+    RFX-139 in one sentence: the guard was sound and the list it was pointed
+    at was short.  `undeclared(set(DECIDE_ENVELOPE_PATHS)) == set()` passes
+    trivially when DECIDE_ENVELOPE_PATHS omits a field decide.py reads -- it
+    checks the list against the table, never the list against the CODE.  So
+    this runs the approval chain against a recording envelope and asserts
+    against what was really touched.
+
+    SCOPE, STATED HONESTLY.  It sweeps _validate_approval(), which is where
+    both defects that reached production through decide.py lived (RFX-127's
+    skipped validation, RFX-138's unbound actor) and which reaches allow and
+    deny verdicts OPA never sees.  It does NOT sweep all of process(), because
+    process() also hands the envelope to the audit writer, whose reads
+    (context.traceparent, meta.*) are audit-only by design and deliberately
+    outside this table -- sweeping them would force treatments for fields that
+    cannot change a verdict.  The freeze gate's action.verb read stays covered
+    by the static declaration above.
+    """
+
+    def setUp(self) -> None:
+        import app.holds as holds_mod
+        self._dir = tempfile.TemporaryDirectory(prefix="rfx139_sweep_")
+        holds_mod._reset(os.path.join(self._dir.name, "holds.jsonl"))
+        self._holds = holds_mod
+
+    def tearDown(self) -> None:
+        os.environ.pop("REEFLEX_HOLDS_PATH", None)
+        self._dir.cleanup()
+
+    def _sweep(self) -> set:
+        """Every envelope field the approval chain dereferences, all 8 checks.
+
+        The hold is APPROVED and the envelope matches it, so the chain runs to
+        the end instead of short-circuiting at check 1 -- a sweep that stops at
+        the first refusal would under-report exactly the way the hand-written
+        list did.
+        """
+        from app.decide import _validate_approval
+        raw = _envelope(agent__on_behalf_of="user:sweep",
+                        params={"amount": 10, "currency": "EUR"})
+        filled = validate_and_fill_defaults(raw)
+        rec = self._holds.create_hold(filled, "reeflex.policy/sweep")
+        self._holds.resolve_hold(rec["id"], "approve", "human", "sweeper", None)
+
+        sink: set = set()
+        env = dict(filled)
+        env["approval"] = {"present": True, "hold_id": rec["id"]}
+        code, resp, _hold = _validate_approval(_RecordingEnvelope(env, sink))
+        self.assertEqual((0, None), (code, resp),
+                         "the sweep envelope must pass all 8 checks, or the "
+                         "chain short-circuited and the sweep under-reports")
+        return sink
+
+    def test_the_approval_chain_reads_nothing_undeclared(self):
+        touched = self._sweep()
+        self.assertTrue(touched, "recorded no reads — the derivation broke")
+        missing = undeclared(touched)
+        self.assertEqual(
+            set(), missing,
+            "the hold-approval chain dereferences envelope field(s) with NO "
+            "declared treatment: %s. Declare each in app/field_treatments.py — "
+            "this is the RFX-139 check: the guard must run against what the "
+            "code reads, not against a list someone maintained by hand."
+            % sorted(missing),
+        )
+
+    def test_decide_declares_the_paths_only_it_reads(self):
+        """A path the chain reads that no OTHER reader explains must be in
+        DECIDE_ENVELOPE_PATHS.
+
+        This is the assertion that was red before RFX-138 was fixed:
+        agent.id and agent.on_behalf_of are read by is_self_approval() and by
+        approval_actor_key(), appear in no .rego file and in no ledger read,
+        and were in nobody's declared list.
+        """
+        explained_elsewhere = (policy_input_paths(_rego_sources())
+                               | set(LEDGER_ENVELOPE_PATHS))
+        decide_only = self._sweep() - explained_elsewhere
+        undeclared_here = decide_only - set(DECIDE_ENVELOPE_PATHS)
+        self.assertEqual(
+            set(), undeclared_here,
+            "decide.py alone reads %s and DECIDE_ENVELOPE_PATHS does not list "
+            "it. The list is what the approval binding is derived from, so a "
+            "field missing from it can never be bound (RFX-138/RFX-139)."
+            % sorted(undeclared_here),
+        )
+
+    def test_the_sweep_would_catch_a_new_undeclared_reader(self):
+        """Negative control: the derivation must actually be able to go red.
+
+        Without this, a recorder that silently stopped recording would leave
+        both tests above passing forever -- the same failure mode as the guard
+        they replace.
+        """
+        sink: set = set()
+        env = _RecordingEnvelope({"agent": {"session_id": "s"},
+                                  "params": {"fee_currency": "EUR"}}, sink)
+        (env.get("params") or {}).get("fee_currency")
+        self.assertIn("params.fee_currency", sink)
+        self.assertEqual({"params.fee_currency"}, undeclared(sink))
 
 
 def _hostile_variants(canonical: str) -> list:

@@ -365,6 +365,7 @@ When an envelope carries `approval.present=true` and validation fails, `/v1/deci
 | `reeflex_hold_consumed` | The hold was already used for a prior resubmission. Single-use. |
 | `reeflex_hold_envelope_mismatch` | The `sha256` of the action-defining fields in this envelope does not match the hash stored when the hold was created (the action was modified). |
 | `reeflex_hold_actor_is_approver` | The resubmitting agent's identity matches the identity that resolved the hold. |
+| `reeflex_hold_actor_mismatch` | The resubmitting agent is **not the party the approval was granted to**: `agent.id` or `agent.on_behalf_of` differs from the envelope the human approved (for an envelope that names no agent at all, `agent.session_id` is compared instead). The hold is **not** consumed, so the agent that *was* approved can still act. |
 
 ### Approval principals
 
@@ -434,6 +435,13 @@ Each hold stores the `sha256` of the **action-defining projection** of the origi
 When the adapter resubmits an envelope with `approval={present:true, hold_id:"..."}`, core recomputes the hash over the same projection. If the hashes do not match, the resubmission is denied with `reeflex_hold_envelope_mismatch`.
 
 The `approval` field is deliberately excluded from the projection: the hash is identical for the original submission (where `approval.present=false`) and the resubmission (where `approval` carries the `hold_id`). Adding the approval field does not break the binding. A modified action — different verb, count, target, or axes — produces a different hash and cannot ride the old approval.
+
+**What the hash does *not* cover, and what covers it instead.** The projection is deliberately narrow so it stays stable across the submission and the resubmission, which means two things it omits have to be bound separately:
+
+- **`params`** carries a decision input (`params.amount` drives the money budget), so a hold raised for EUR 6,000 could be resubmitted as EUR 6,000,000 with a byte-identical hash. Those fields are compared directly against the held envelope; a difference denies with `reeflex_hold_envelope_mismatch`.
+- **`agent`** says *who* is acting, so an approval was spendable by any caller that knew the `hold_id` — a different agent, or the same bot claiming a different `on_behalf_of`. The resubmission's actor identity must match the approved envelope's; a difference denies with `reeflex_hold_actor_mismatch` **without consuming the hold**. `agent.session_id` is compared only when the envelope names no agent at all, so an agent that restarts (new session) does not lose an approval it was granted.
+
+Both lists are derived from `app/field_treatments.py`, where every caller-supplied field declares what an approval binds about it — so a new decision input is bound by declaring it, not by remembering to.
 
 TTL default is 4 hours (`REEFLEX_HOLD_TTL_SECONDS`). A hold past its `expires_ts` evaluates to `deny` with reason `reeflex_hold_expired`.
 

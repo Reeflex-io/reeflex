@@ -54,9 +54,15 @@ approval:
   - Add hold_id + expires_ts to the /v1/decide response.
 
 When the request carries approval={present:true, hold_id:"..."}:
-  - Run the validation chain (6 checks).  On FIRST failure return deny with
-    a machine reason code.
+  - Run the validation chain (8 checks).  On FIRST failure return deny with
+    a machine reason code, WITHOUT consuming the hold.
   - On success: mark_consumed(hold_id), return ALLOW, audit.
+
+The chain grew from 6 to 8 because checks 5 and 6 turned out not to cover
+everything a human was shown: check 7 binds the decision inputs the envelope
+hash omits (params — RFX-133), and check 8 binds WHO the approval was granted
+to (agent.id / agent.on_behalf_of — RFX-138, a human's approval was otherwise
+spendable by any agent holding the hold_id).
 
 =============================================================================
 TRACEABILITY (decision_id / hold_id / envelope_hash / parent_decision_id /
@@ -132,9 +138,19 @@ _WINDOW_SECONDS = int(os.environ.get("REEFLEX_WINDOW_SECONDS", "3600"))
 # the RESIDUAL notes in field_treatments.py.
 DECIDE_ENVELOPE_PATHS: tuple[str, ...] = (
     "agent.session_id",   # ledger key + principal_budgets override key
+    # RFX-139: these two were READ here all along and declared nowhere.
+    # Check 6 calls principal.is_self_approval(), which iterates
+    # ("id", "on_behalf_of", "session_id"); check 8 compares them as the
+    # approval's actor key.  Only session_id was listed, so
+    # tests/test_field_treatments.py's "decide.py reads nothing undeclared"
+    # assertion passed by under-reporting -- and a path that is never declared
+    # can never be picked up by the approval binding derived from TREATMENTS.
+    # That is how RFX-138 got through a sweep built to be exhaustive.
+    "agent.id",           # four-eyes compare + approval actor key
+    "agent.on_behalf_of", # four-eyes compare + approval actor key
     "action.verb",        # freeze gate (_is_read_verb)
     "approval.present",   # routes into the hold-validation chain
-    "approval.hold_id",   # names the hold the six checks run against
+    "approval.hold_id",   # names the hold the eight checks run against
 )
 
 # The Decision returned when OPA evaluation fails for any reason.
@@ -309,6 +325,16 @@ def _validate_approval(envelope: dict) -> tuple[int, dict | None, dict | None]:
       4. status != consumed                 else deny "reeflex_hold_consumed"
       5. canonical_hash(envelope) == stored else deny "reeflex_hold_envelope_mismatch"
       6. agent identity != decided_by ident else deny "reeflex_hold_actor_is_approver"
+      7. decision inputs outside the hash    else deny "reeflex_hold_envelope_mismatch"
+         match the held envelope (params)
+      8. the actor is the party the approval else deny "reeflex_hold_actor_mismatch"
+         was granted to (RFX-138)
+
+    Checks 5-8 are four answers to one question -- "is this the same request a
+    human said yes to" -- split by what they compare: the hashed projection,
+    the identity of the approver, the decision inputs the hash omits, and the
+    identity of the requester.  Each of the last three exists because the one
+    before it turned out not to cover something.
     """
     from .holds import get_hold, canonical_hash, is_expired  # type: ignore[import]
 
@@ -420,6 +446,43 @@ def _validate_approval(envelope: dict) -> tuple[int, dict | None, dict | None]:
             return 200, _deny_response(
                 "reeflex_hold_envelope_mismatch", "reeflex.core/hold_validation"
             ), hold
+
+    # Check 8: the approval was granted to a PARTY, not just to an action.
+    #
+    # RFX-138.  Checks 1-7 answer "is this the action a human approved".
+    # Nothing answered "and is this the requester they approved it for".
+    # `agent` is outside canonical_hash()'s {action, axes, magnitude, target}
+    # projection and outside check 7's params comparison, so any caller
+    # holding the hold_id could spend someone else's approval:
+    #
+    #   * agent ALPHA raises an irreversible production delete, a human
+    #     approves it, agent BETA resubmits the identical action with ALPHA's
+    #     hold_id and receives allow -- and because the resubmission CONSUMES
+    #     the hold, ALPHA, the agent the human actually approved, is then
+    #     refused (reeflex_hold_consumed).
+    #   * quieter and worse: one bot, one session, one action, only
+    #     agent.on_behalf_of changed from alice to bob.  The audit line for
+    #     that allow is byte-identical to a legitimate resubmission.
+    #
+    # Both confirmed on the built artefact from 44c6f85 (the commit AFTER
+    # check 7 landed) -- see scripts/attack-probe-rfx97-release-gate.py A6.
+    #
+    # WHY A DEDICATED REASON CODE.  The defect's sting is that the
+    # substitution left no trace; reusing reeflex_hold_envelope_mismatch would
+    # record the refusal as if the ACTION had been altered, which is a
+    # different fact.  reeflex_hold_actor_mismatch names what happened and is
+    # additive to the code table in the README (a consumer switching on the
+    # reason -- reeflex-mcp's gateway is the only one -- treats an unknown
+    # reason as the deny it is).
+    #
+    # AND THE HOLD IS NOT CONSUMED: this returns before mark_consumed(), so
+    # the approval the human granted survives for the agent it was granted to.
+    from .principal import approval_actor_key  # type: ignore[import]
+
+    if approval_actor_key(envelope) != approval_actor_key(held_envelope):
+        return 200, _deny_response(
+            "reeflex_hold_actor_mismatch", "reeflex.core/hold_validation"
+        ), hold
 
     return 0, None, hold  # all checks passed
 
