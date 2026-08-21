@@ -783,6 +783,39 @@ class TestA7ApprovalBindsTheActor(_AttackCase):
             "the substitution attempt burned the hold, so the agent the "
             "human DID approve was refused: %s" % rule)
 
+    def test_a7_a_restarted_agent_does_not_lose_an_approval_a_human_granted(self):
+        """THE WRONG-DENY THIS FIX ALMOST SHIPPED, and it is not hypothetical.
+
+        A hold lives 4h by default. An agent that restarts between raising the
+        hold and resubmitting it presents the SAME agent.id and the SAME
+        on_behalf_of with a NEW session_id — it is the same party acting for
+        the same person, and a human has already said yes to exactly that.
+
+        An earlier version of this fix bound all three identity fields
+        uniformly (it fell out of declaring the whole `agent` block bound and
+        comparing field by field) and DENIED this — a wrong deny on the one
+        path in the product where a human explicitly approved something, and
+        one origin/main does not have. Measured on all three trees before the
+        semantics were changed.
+
+        So the actor key treats session_id as a FALLBACK, used only when the
+        envelope names no agent at all. The security cost is ~nil: an attacker
+        who must already present the same agent.id AND the same on_behalf_of
+        is that agent as far as core can tell, and a rotated session buys
+        nothing they did not already have.
+        """
+        s = self.session("a7j")
+        hold_id, env = self._approved_hold(
+            agent_id="agent:restarting-gate", session=s,
+            on_behalf_of="user:alice", approver="human:manager@customer.test")
+        after_restart = self._resubmit(env, hold_id,
+                                       session_id=self.session("a7k"))
+        decision, rule = _verdict(after_restart)
+        self.assertEqual(
+            "allow", decision,
+            "the gate restarted and lost an approval a human had already "
+            "granted for this exact agent, person and action (%s)" % rule)
+
     def test_a7_the_substitution_is_named_not_reported_as_a_hash_mismatch(self):
         """The action matched perfectly; only the actor moved.
 
@@ -793,7 +826,7 @@ class TestA7ApprovalBindsTheActor(_AttackCase):
         s = self.session("a7c")
         hold_id, env = self._approved_hold(agent_id="agent:ALPHA", session=s)
         _status, resp = process(self._resubmit(env, hold_id, id="agent:BETA"))
-        self.assertEqual("reeflex_hold_actor_substituted", resp.get("reason"),
+        self.assertEqual("reeflex_hold_actor_mismatch", resp.get("reason"),
                          resp)
 
     # -- variant B: principal substitution, the one with no trace ---------
@@ -895,7 +928,7 @@ class TestA7ApprovalBindsTheActor(_AttackCase):
             "with no agent.id on either side the binding was vacuous and a "
             "second session spent the approval (%s)" % rule)
         _status, resp = process(substituted)
-        self.assertEqual("reeflex_hold_actor_substituted", resp.get("reason"))
+        self.assertEqual("reeflex_hold_actor_mismatch", resp.get("reason"))
 
 
 # ---------------------------------------------------------------------------

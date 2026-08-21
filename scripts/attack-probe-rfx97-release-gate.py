@@ -681,11 +681,39 @@ def attack_a7():
         if verdict(rs) == "allow":
             evaded.append("agent.on_behalf_of substituted")
         detail["substitution_is_named"] = \
-            rs.get("reason") == "reeflex_hold_actor_substituted"
+            rs.get("reason") == "reeflex_hold_actor_mismatch"
+
+    # ---- SECOND CONTROL: a restarted agent must keep its approval ---------
+    # A build that "closes" A7 by binding agent.session_id passes both
+    # evasions above and breaks a real gate: a hold lives 4h by default, and
+    # an agent that restarts in between presents the same agent.id and the
+    # same on_behalf_of with a NEW session. Denying that is a wrong deny on
+    # the one path where a human explicitly said yes, and it is a REGRESSION
+    # against main -- so the gate has to be able to see it. Scored as an
+    # evasion row rather than a note, because a release that ships it is not
+    # releasable.
+    s_r = sid("a7-restart")
+    hold_r, env_r = _raise_hold(s_r, agent_id="agent:a7-restarting",
+                               on_behalf_of="user:a7-alice",
+                               label="A7 restart: raise before the restart")
+    if hold_r:
+        _resolve(hold_r, "human", "a7-manager@a7.invalid",
+                 "A7 restart: a human approves it")
+        rebooted = json.loads(json.dumps(env_r))
+        rebooted["agent"]["session_id"] = sid("a7-restart-2")
+        rebooted["approval"] = {"present": True, "hold_id": hold_r}
+        _, rr = call("POST", "/v1/decide", rebooted,
+                     "A7 restart: same agent, same person, NEW session")
+        print("  CONTROL restarted agent resubmits -> %-16s %s"
+              % (verdict(rr), rule(rr)))
+        detail["restarted_agent_keeps_approval"] = verdict(rr) == "allow"
+        if verdict(rr) != "allow":
+            evaded.append("WRONG DENY: a restarted agent lost a human's "
+                          "approval (session bound too tightly)")
 
     f = finding(
         "A7", "RFX-138", "the approval bound the action, not the agent",
-        "this PR", control_ok, evaded, 3,
+        "this PR", control_ok, evaded, 4,
         "an irreversible production action executes for an agent, or for a "
         "person, no human ever approved — and the approved agent is locked "
         "out. On the on_behalf_of variant core's audit line is byte-identical "

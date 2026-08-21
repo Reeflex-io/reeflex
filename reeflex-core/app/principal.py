@@ -164,6 +164,78 @@ def is_self_approval(envelope: dict, principal_type: str, principal_id: str) -> 
     return bool(actor_identities(envelope) & approver_identities(principal_type, principal_id))
 
 
+def approval_actor_key(envelope: dict) -> tuple[str, ...]:
+    """WHO an approval is granted TO -- comparable across two envelopes.
+
+    RFX-138.  `actor_identities()` above answers a SET question, "is the
+    approver one of the raisers", and is deliberately loose.  This answers a
+    different one: given two envelopes, are they the same party acting for the
+    same person?  That must be an ORDERED, EXACT comparison -- a set
+    intersection would let an agent that merely OVERLAPS the approved
+    identities spend the approval.
+
+    WHAT IS IN THE KEY, AND WHY NOT MORE
+
+      agent.id + agent.on_behalf_of   the party, and the person it acts for.
+                                      Changing either means a human approved
+                                      one requester and a different one turned
+                                      up, which is the whole finding.
+
+      agent.session_id                ONLY as a fallback, when the envelope
+                                      names no agent at all.  SPEC §2 makes
+                                      agent.id optional and session_id
+                                      REQUIRED, so without the fallback a
+                                      conformant minimal envelope would carry
+                                      an EMPTY key and the guard would be
+                                      vacuous for exactly the adapters least
+                                      likely to be watched -- RFX-CORE-2's
+                                      attack A2, rebuilt.  Same reasoning as
+                                      actor_identities()'s session fallback.
+
+    WHY session_id IS NOT IN THE KEY WHEN THE AGENT IS NAMED, which is the one
+    judgement call in this function and it was MEASURED, not reasoned.  A hold
+    lives for hours (REEFLEX_HOLD_TTL_SECONDS defaults to 4h), and an agent
+    that restarts between raising the hold and resubmitting it gets a new
+    session.  Binding the session turns that restart into a DENY on an action a
+    human has already explicitly approved -- a wrong deny on the one path in
+    this product where a human said yes, and one that main does NOT have.  An
+    earlier version of this fix bound all three fields uniformly and did
+    exactly that; the case is now
+    test_a7_a_restarted_agent_does_not_lose_an_approval_a_human_granted.
+    The security cost of the exclusion is ~nil: an attacker who must already
+    present the same agent.id and the same on_behalf_of IS that agent as far as
+    core can tell, and a rotated session buys them nothing they did not
+    already have.  The ledger is recomputed per session by design; identity is
+    what an approval is about.
+
+    Normalized (NFKC, control/format stripped, casefolded), the same treatment
+    the four-eyes guard uses -- for the mirrored reason.  There it must not let
+    a variant spelling THROUGH; here it must not REFUSE one, or a re-cased
+    identity becomes a false deny on an honest gate.  Falls back to the
+    stripped raw string when normalization empties it, so an identity made
+    entirely of invisible characters is still COMPARED rather than collapsing
+    to "" on both sides and comparing equal.
+
+    NOTE the shape carries meaning: the no-agent-named case returns a
+    THREE-tuple, so a session key can never compare equal to a named one.
+    """
+    agent = envelope.get("agent") or {}
+    if not isinstance(agent, dict):
+        agent = {}
+
+    def key_for(field: str) -> str:
+        raw = agent.get(field)
+        norm = normalize_identity(raw)
+        if norm:
+            return norm
+        return raw.strip() if isinstance(raw, str) else ""
+
+    named = (key_for("id"), key_for("on_behalf_of"))
+    if any(named):
+        return named
+    return ("", "", key_for("session_id"))
+
+
 # ---------------------------------------------------------------------------
 # Credential -> principal binding
 # ---------------------------------------------------------------------------

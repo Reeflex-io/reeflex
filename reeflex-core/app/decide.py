@@ -54,8 +54,9 @@ approval:
   - Add hold_id + expires_ts to the /v1/decide response.
 
 When the request carries approval={present:true, hold_id:"..."}:
-  - Run the validation chain (6 checks).  On FIRST failure return deny with
-    a machine reason code.
+  - Run the validation chain (7 checks).  On FIRST failure return deny with
+    a machine reason code, WITHOUT consuming the hold -- so a refused
+    substitution does not burn the approval its rightful actor still needs.
   - On success: mark_consumed(hold_id), return ALLOW, audit.
 
 =============================================================================
@@ -344,11 +345,13 @@ def _validate_approval(envelope: dict) -> tuple[int, dict | None, dict | None]:
       5. canonical_hash(envelope) == stored else deny "reeflex_hold_envelope_mismatch"
       6. agent identity != decided_by ident else deny "reeflex_hold_actor_is_approver"
       7. every approval-bound field outside the hash matches the held
-         envelope, else deny -- "reeflex_hold_actor_substituted" when the
-         difference is WHO (the agent block: RFX-138), and
-         "reeflex_hold_envelope_mismatch" when it is WHAT (params: the money
-         amount, RFX-133).  The path set is derived from
-         field_treatments.approval_bound_paths().
+         envelope, else deny -- "reeflex_hold_envelope_mismatch" when the
+         difference is WHAT (params: the money amount, RFX-133) and
+         "reeflex_hold_actor_mismatch" when it is WHO (the agent block:
+         RFX-138).  The path set is derived from
+         field_treatments.approval_bound_paths(); the actor block is compared
+         as one ordered key (principal.approval_actor_key) rather than field
+         by field, so a restarted agent keeps its approval.
     """
     from .holds import get_hold, canonical_hash, is_expired  # type: ignore[import]
 
@@ -473,37 +476,62 @@ def _validate_approval(envelope: dict) -> tuple[int, dict | None, dict | None]:
     # why RFX-139 had to be fixed first: an undeclared field cannot be bound
     # by a filter over the declarations, however careful this loop is.
     from .field_treatments import (  # type: ignore[import]
-        approval_bound_paths, bound_value,
+        ACTOR_BOUND_BLOCK, approval_bound_paths,
     )
+    from .principal import approval_actor_key  # type: ignore[import]
 
     held_envelope = hold.get("envelope") or {}
+
+    # -- the value comparison: fields whose VALUE a human agreed to ----------
     for path in approval_bound_paths():
         block, _, leaf = path.partition(".")
+        if block == ACTOR_BOUND_BLOCK:
+            # Bound, but not field-by-field -- see the actor comparison below.
+            continue
         now_block = envelope.get(block)
         was_block = held_envelope.get(block)
         now = now_block.get(leaf) if isinstance(now_block, dict) else None
         was = was_block.get(leaf) if isinstance(was_block, dict) else None
-        # Comparison is exact for everything the envelope already
-        # canonicalised, and folded through principal.normalize_identity()
-        # for the `agent` block, because "is this the same actor?" has to be
-        # answered the same way here as in check 6 and at resolve time --
-        # otherwise the two guards disagree about who somebody is, and
-        # `svc-bot` vs `SVC-BOT` becomes a false deny on an honest gate.
-        if bound_value(path, now) != bound_value(path, was):
-            # NAME THE FAILURE HONESTLY.  On an actor substitution the action
-            # matched perfectly -- same hash, same everything a human read --
-            # and only the identity moved.  Reporting that as
-            # "envelope_mismatch" would tell the operator the one thing that
-            # is NOT true and hide the one thing that is; and the qa finding
-            # this fixes was precisely that the substitution left no trace
-            # anywhere.  This reason IS the trace.
-            reason = (
-                "reeflex_hold_actor_substituted" if block == "agent"
-                else "reeflex_hold_envelope_mismatch"
-            )
+        # `!=` is exact and that is intended: both sides have already been
+        # through validate_and_fill_defaults(), so both are canonical, and a
+        # remaining difference is a real difference.
+        if now != was:
             return 200, _deny_response(
-                reason, "reeflex.core/hold_validation"
+                "reeflex_hold_envelope_mismatch", "reeflex.core/hold_validation"
             ), hold
+
+    # -- the actor comparison: WHO a human agreed to ------------------------
+    #
+    # The `agent` block is bound as ONE KEY rather than field by field, and
+    # that is not a shortcut -- it is the only way to get the session
+    # semantics right.  principal.approval_actor_key() reads agent.id and
+    # agent.on_behalf_of, and falls back to agent.session_id ONLY when the
+    # envelope names no agent at all.  Comparing all three uniformly would
+    # refuse a gate that merely RESTARTED between raising the hold and
+    # resubmitting it, inside the 4h TTL: a wrong deny on the one path where a
+    # human has explicitly said yes, and one main does not have.  Measured,
+    # not reasoned -- an earlier version of this fix did exactly that, and
+    # test_a7_a_restarted_agent_does_not_lose_an_approval_a_human_granted is
+    # the case.  Credit to dev-1, who reached the same conclusion
+    # independently and wrote down the restart argument.
+    #
+    # The RFX-139 derivation property survives the special case: the actor
+    # block is still declared bound in field_treatments, and
+    # test_the_actor_key_reads_every_declared_actor_path asserts that
+    # approval_actor_key() actually dereferences every declared `agent.*`
+    # path.  So a future `agent.tenant_id` cannot be declared and then quietly
+    # left out of the comparison -- which is the whole class RFX-139 names.
+    #
+    # NAME THE FAILURE HONESTLY.  On an actor substitution the action matched
+    # perfectly -- same hash, same params, same everything a human read -- and
+    # only the identity moved.  Reporting that as `envelope_mismatch` would
+    # tell the operator the one thing that is NOT true and hide the one thing
+    # that is; and qa's finding was precisely that the substitution left no
+    # trace anywhere.  This reason IS the trace.
+    if approval_actor_key(envelope) != approval_actor_key(held_envelope):
+        return 200, _deny_response(
+            "reeflex_hold_actor_mismatch", "reeflex.core/hold_validation"
+        ), hold
 
     return 0, None, hold  # all checks passed
 

@@ -451,6 +451,23 @@ HASH_COVERED_BLOCKS: frozenset[str] = frozenset({"action", "axes", "magnitude", 
 #: and they are not who the approval names.  See RESIDUAL note 4.
 _APPROVAL_BOUND_BLOCKS: frozenset[str] = frozenset({"params", "agent"})
 
+#: The bound block that is compared as ONE ORDERED KEY rather than field by
+#: field, because "is this the same actor?" is not a per-field question.
+#:
+#: principal.approval_actor_key() reads agent.id and agent.on_behalf_of, and
+#: falls back to agent.session_id ONLY when the envelope names no agent at all.
+#: Comparing all three uniformly refuses a gate that merely RESTARTED between
+#: raising the hold and resubmitting it, inside the 4h TTL — a wrong deny on
+#: the one path where a human has explicitly said yes, and one main does not
+#: have.  See that function's docstring for the measured case and why the
+#: security cost of the exclusion is ~nil.
+#:
+#: Naming it here rather than inlining "agent" in decide.py keeps the special
+#: case declared in the same file as the binding it modifies, so a reader of
+#: approval_bound_paths() cannot conclude that every returned path is compared
+#: the same way.
+ACTOR_BOUND_BLOCK: str = "agent"
+
 
 def approval_bound_paths() -> tuple[str, ...]:
     """Caller-supplied fields an approval must bind BEYOND the hash.
@@ -473,33 +490,21 @@ def approval_bound_paths() -> tuple[str, ...]:
     ))
 
 
-def bound_value(path: str, raw: object) -> object:
-    """The comparison key for `path` when binding a resubmission to a hold.
+def actor_bound_paths() -> tuple[str, ...]:
+    """The declared `agent.*` paths the actor key must actually read.
 
-    Most fields compare as-is: both sides have already been through
-    validate_and_fill_defaults(), so both are canonical and a remaining
-    difference is a real difference.
-
-    The `agent` block is the exception, and deliberately so.  "Is this the
-    same actor?" is decided by principal.normalize_identity() everywhere else
-    in this codebase — check 6 here, and the resolve-time four-eyes guard in
-    server.py — so binding must use the same answer, or the two guards
-    disagree about who somebody is.  Concretely, the fold is what stops
-    `svc-bot` vs `SVC-BOT` being read as an actor substitution (a false deny
-    on a legitimate resubmission), and it is what stops a zero-width
-    character from making one identity look like two.
-
-    NOTE it is the COMPARISON that folds, not the field: agent.session_id is
-    declared VALIDATE and its RAW value keys the cumulative ledger, because
-    folding case there would merge two adapters' distinct sessions into one
-    budget.  Same field, two uses, and only one of them is an identity
-    question.
+    Exists so the special case above cannot become a hole: RFX-139's defect is
+    "a field is read (or should be) and nothing says so", and carving the
+    agent block out of the field-by-field loop would reintroduce it if nothing
+    checked that the carve-out still covers every declared path.
+    tests/test_field_treatments.py compares this against what
+    principal.approval_actor_key() dereferences at runtime.
     """
-    if path.split(".")[0] != "agent":
-        return raw
-    from .principal import normalize_identity  # local: avoids an import cycle
-
-    return normalize_identity(raw)
+    return tuple(sorted(
+        path for path, t in TREATMENTS.items()
+        if t.kind != CORE_COMPUTED
+        and path.split(".")[0] == ACTOR_BOUND_BLOCK
+    ))
 
 
 def undeclared(paths: set[str]) -> set[str]:

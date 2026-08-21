@@ -530,6 +530,45 @@ class TestTheApprovalChainDeclaresWhatItReads(unittest.TestCase):
             "is what stops it going stale." % sorted(undeclared_by_decide),
         )
 
+    def test_the_actor_key_reads_every_declared_actor_path(self):
+        """The carve-out must not become the hole it was carved out of.
+
+        The `agent` block is declared approval-bound but is compared as ONE
+        ORDERED KEY by principal.approval_actor_key(), not field by field, so
+        that agent.session_id can be a FALLBACK rather than a co-equal (see
+        that function's docstring: binding it uniformly refuses a gate that
+        merely restarted, which is a wrong deny on a human-approved action).
+
+        A carve-out from a derived loop is exactly the shape RFX-139 names: a
+        field gets declared, and nothing notices it is no longer compared. So
+        this drives the RECORDING envelope through the actor key and asserts
+        it dereferences every declared `agent.*` path. Declare
+        `agent.tenant_id` tomorrow and this goes red until the key reads it.
+        """
+        from app.field_treatments import actor_bound_paths
+        from app.principal import approval_actor_key
+
+        declared = set(actor_bound_paths())
+        self.assertTrue(declared, "no agent.* path is declared bound at all")
+
+        seen: set = set()
+        approval_actor_key(_RecordingEnvelope(
+            {"agent": {"id": "a", "on_behalf_of": "b", "session_id": "c"}},
+            seen))
+        # The fallback branch only runs when nothing is named, so exercise it
+        # too — otherwise session_id would look unread.
+        approval_actor_key(_RecordingEnvelope(
+            {"agent": {"session_id": "c"}}, seen))
+
+        missing = declared - seen
+        self.assertEqual(
+            set(), missing,
+            "approval_actor_key() never reads declared approval-bound "
+            "path(s) %s — they are declared as binding the approval and bind "
+            "nothing. Either read them or stop declaring them."
+            % sorted(missing),
+        )
+
     def test_the_probe_is_not_vacuous(self):
         """A probe that records nothing interesting proves nothing.
 

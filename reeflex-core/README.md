@@ -365,7 +365,7 @@ When an envelope carries `approval.present=true` and validation fails, `/v1/deci
 | `reeflex_hold_consumed` | The hold was already used for a prior resubmission. Single-use. |
 | `reeflex_hold_envelope_mismatch` | The `sha256` of the action-defining fields in this envelope does not match the hash stored when the hold was created (the action was modified). |
 | `reeflex_hold_actor_is_approver` | The resubmitting agent's identity matches the identity that resolved the hold. |
-| `reeflex_hold_actor_substituted` | The action matches the approved one exactly, but the **actor does not**: `agent.id`, `agent.on_behalf_of` or `agent.session_id` differs from the envelope the human approved. An approval authorises *that* agent, acting for *that* person, to do *that* thing — not the action alone. Identities are compared folded (NFKC, casefold, trim), so a re-cased or zero-width-padded identity is the same actor, not a refusal. |
+| `reeflex_hold_actor_mismatch` | The action matches the approved one exactly, but the **actor does not**: `agent.id` or `agent.on_behalf_of` differs from the envelope the human approved (or `agent.session_id`, when the envelope names no agent at all). An approval authorises *that* agent, acting for *that* person, to do *that* thing — not the action alone. Identities are compared folded (NFKC, casefold, trim), so a re-cased or zero-width-padded identity is the same actor rather than a refusal — and `session_id` is a fallback, not a co-equal, so an agent that merely **restarts** inside the hold's TTL does not lose an approval a human already granted. |
 
 ### Approval principals
 
@@ -442,11 +442,11 @@ The `approval` field is deliberately excluded from the projection: the hash is i
 |---|---|---|---|
 | `action`, `axes`, `magnitude`, `target` | yes | yes, by the hash | **what** the action is |
 | `params` | no | yes, field by field | **what it costs** — the money budget is driven entirely by `params.amount`, so a hold raised for EUR 6,000 must not be resubmitted as EUR 6,000,000 with a byte-identical hash |
-| `agent` | no | yes, field by field, on folded identities | **who** — an approval authorises *that agent acting for that person*, not the action alone. Without this, a human approves agent ALPHA and agent BETA spends the approval (and ALPHA is then refused `reeflex_hold_consumed`) |
+| `agent` | no | yes, as one ordered actor key on folded identities | **who** — an approval authorises *that agent acting for that person*, not the action alone. Without this, a human approves agent ALPHA and agent BETA spends the approval (and ALPHA is then refused `reeflex_hold_consumed`). `session_id` is a fallback used only when the envelope names no agent, so a gate that restarts inside the TTL keeps its approval |
 | `approval` | no | no | it is the thing being validated |
 | `context`, `meta` | no | no | audit-only; they cannot change a verdict and they are not who the approval names |
 
-`params` mismatches are reported as `reeflex_hold_envelope_mismatch`; `agent` mismatches as `reeflex_hold_actor_substituted`, because in that case the action matched perfectly and only the actor moved — reporting it as a hash mismatch would name the one thing that is not true.
+`params` mismatches are reported as `reeflex_hold_envelope_mismatch`; `agent` mismatches as `reeflex_hold_actor_mismatch`, because in that case the action matched perfectly and only the actor moved — reporting it as a hash mismatch would name the one thing that is not true.
 
 Widening the hash preimage to cover these blocks would be the wrong fix: `envelope_hash` is written into the audit record, the SIEM event, the hold record and the evidence chain, and changing what it is computed over silently invalidates every cross-build join on it. Field comparison binds the same facts and leaves the wire alone.
 
