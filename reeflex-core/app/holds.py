@@ -32,6 +32,17 @@ Expiry is LAZY:
     fires once
   - no background thread
 
+  CONSEQUENCE, STATED SO NOBODY DEPENDS ON WHAT THIS DOES NOT DO: "the first
+  time it is observed" can be never. This store does not notice a deadline on
+  its own, so a deployment where nothing lists or validates a pending hold
+  keeps it `pending` indefinitely. Anything that must SHOW a human that their
+  hold timed out (the portal inbox, a digest, an Art.14 report) therefore
+  cannot wait to be told by this module -- it needs the hold's `expires_ts`,
+  which is why audit.record() now carries it on the require_approval line
+  (see audit.py). When something does eventually look, the appended record
+  states the real deadline plus how late the observation was, rather than
+  back-dating the deadline to the observation (_append_expired_event).
+
 THREAD SAFETY: a single module-level lock protects both file I/O and the
 in-memory index.
 
@@ -248,7 +259,9 @@ def _fire_webhook(event: str, payload: dict) -> None:
 #                 transition is durably written (see its docstring: expiry
 #                 is detected on next read/access, not by a background
 #                 sweep, so this event fires the FIRST time a pending hold
-#                 is observed past its expires_ts).
+#                 is observed past its expires_ts -- and carries the hold's
+#                 own expires_ts as resolved_ts, i.e. WHEN IT TIMED OUT, with
+#                 the detection time kept separately as observed_ts).
 # ---------------------------------------------------------------------------
 
 def _audit_hold_resolution(
@@ -257,6 +270,7 @@ def _audit_hold_resolution(
     decided_by: str,
     resolved_ts: str,
     decision_id: str = "",
+    observed_ts: str = "",
 ) -> None:
     """Best-effort hold_resolution audit write. Fail-open: swallows all errors."""
     try:
@@ -264,6 +278,7 @@ def _audit_hold_resolution(
         record_hold_resolution(
             hold_id, resolution, decided_by,
             decision_id=decision_id, resolved_ts=resolved_ts,
+            observed_ts=observed_ts,
         )
     except Exception:  # noqa: BLE001
         pass
@@ -301,17 +316,29 @@ def _append_expired_event(hold_id: str) -> None:
     """Append an expired event record and update the index.
 
     Fire-and-forget on webhook.
+
+    TWO DISTINCT TIMES, BOTH RECORDED, NEITHER INVENTED:
+      expired_ts   the hold's own `expires_ts` -- WHEN THE ACTION TIMED OUT.
+                   This is the fact an Art.14 report is about: the deadline
+                   the human did not meet. It is read from the hold record,
+                   never computed here.
+      observed_ts  when core DETECTED it. Expiry is lazy (see the module
+                   docstring: evaluated on read/validate, no background
+                   thread), so on a deployment where nothing reads a pending
+                   hold this can be days or weeks after the deadline.
+      ts           the append time of THIS record == observed_ts, so the
+                   append-only file stays in monotonic write order.
+
+    Both fields used to be `_iso_now()`, which made the append-only stream
+    claim that holds created in July timed out in August -- the instant
+    something first happened to list them. That is not a rounding error: it
+    is the evidence stream stating the wrong date for the event it exists to
+    evidence. Detection lag is now visible as lag (observed_ts) instead of
+    being written over the deadline.
     """
     path = _holds_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    expired_ts = _iso_now()
-    rec: dict = {
-        "id": hold_id,
-        "event_type": "expired",
-        "expired_ts": expired_ts,
-        "ts": expired_ts,
-    }
-    line = json.dumps(rec, separators=(",", ":")) + "\n"
+    observed_ts = _iso_now()
     with _lock:
         _ensure_loaded()
         if hold_id not in _index:
@@ -319,6 +346,18 @@ def _append_expired_event(hold_id: str) -> None:
         if _index[hold_id].get("status") != "pending":
             # Already transitioned — skip duplicate expiry
             return
+        # The deadline, from the hold record itself. Fallback to the
+        # observation time ONLY if this hold carries no parsable expires_ts
+        # at all (pre-TTL records); never a guessed offset.
+        expired_ts = _index[hold_id].get("expires_ts") or observed_ts
+        rec: dict = {
+            "id": hold_id,
+            "event_type": "expired",
+            "expired_ts": expired_ts,
+            "observed_ts": observed_ts,
+            "ts": observed_ts,
+        }
+        line = json.dumps(rec, separators=(",", ":")) + "\n"
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(line)
             fh.flush()
@@ -330,7 +369,12 @@ def _append_expired_event(hold_id: str) -> None:
         "hold_id": hold_id,
         "rule_id": hold.get("rule_id", ""),
         "status": "expired",
-        "ts": expired_ts,
+        # `ts` keeps its existing meaning (when this event was emitted) so no
+        # deployed subscriber changes behaviour; the two precise fields are
+        # additive alongside it.
+        "ts": observed_ts,
+        "expired_ts": expired_ts,
+        "observed_ts": observed_ts,
     })
     # Art.14 evidence: expiry has no deciding principal (a timeout, not a
     # decision by any actor) -- "system:reeflex-core" is a documented
@@ -338,6 +382,7 @@ def _append_expired_event(hold_id: str) -> None:
     # "human:*"/"agent:*" principal format so it is never mistaken for one.
     _audit_hold_resolution(
         hold_id, "expired", "system:reeflex-core", expired_ts,
+        observed_ts=observed_ts,
     )
 
 

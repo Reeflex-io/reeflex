@@ -113,6 +113,7 @@ def record(
     *,
     decision_id: str = "",
     hold_id: str = "",
+    expires_ts: str = "",
     envelope_hash: str = "",
     parent_decision_id: str = "",
     traceparent: str = "",
@@ -130,8 +131,25 @@ def record(
                             so audit / SIEM / hold records join on the exact
                             same value.
       hold_id               present when a hold is involved: on require_approval
-                            hold-creation, and on resubmission the consumed
-                            hold_id.  Omitted (key absent) when not applicable.
+                            hold-creation, on resubmission the consumed hold_id,
+                            and on a hold-validation DENIAL that was decided
+                            against a hold this store actually holds (e.g.
+                            reeflex_hold_expired -- see decide.py's fail_resp
+                            branch).  Omitted (key absent) when not applicable,
+                            including when the claimed hold does not exist, so a
+                            hold_id on an audit line always names a real hold.
+      expires_ts            the hold's DEADLINE, present only on the
+                            require_approval line that CREATED the hold (the
+                            same value /v1/decide returns in its response).
+                            Written here so a downstream consumer of this log --
+                            the evidence connector's tail, a SIEM -- learns when
+                            the hold times out WITHOUT having to guess it from a
+                            locally-configured TTL that can drift from this
+                            core's REEFLEX_HOLD_TTL_SECONDS.  A hold nobody
+                            answers can then be shown as timed out by whoever
+                            holds the human's inbox, instead of sitting pending
+                            forever because only core knew the deadline.
+                            Omitted (key absent) when no hold was created.
       parent_decision_id    present on a resubmission once resolved (adapter-
                             supplied or hold-fallback).  Omitted when not
                             applicable.
@@ -180,6 +198,8 @@ def record(
     }
     if hold_id:
         rec["hold_id"] = hold_id
+    if expires_ts:
+        rec["expires_ts"] = expires_ts
     if parent_decision_id:
         rec["parent_decision_id"] = parent_decision_id
     if traceparent:
@@ -203,6 +223,7 @@ def record_hold_resolution(
     *,
     decision_id: str = "",
     resolved_ts: str = "",
+    observed_ts: str = "",
 ) -> dict:
     """
     Append ONE hold_resolution audit event to the SAME append-only JSONL
@@ -233,9 +254,23 @@ def record_hold_resolution(
                  a decision_id on this event. (The field is kept in the shape
                  for forward-compat / a future emission that has a transit.)
     resolved_ts  keyword-only, default "" (falls back to "now" if empty).
-                 ISO8601 UTC — the timestamp of the ACTUAL resolution decision
-                 (holds.py's `decided_ts` for approve/reject; the expiry
-                 detection time for expired).
+                 ISO8601 UTC — the timestamp of the ACTUAL resolution
+                 (holds.py's `decided_ts` for approve/reject; for "expired",
+                 the hold's own `expires_ts` — the DEADLINE, i.e. the moment
+                 the action actually timed out, NOT the moment core happened
+                 to notice. Expiry is lazy: on a stock deployment nothing may
+                 read a pending hold for weeks, and stamping this field with
+                 the detection time made the append-only Art.14 stream claim
+                 actions timed out a month after their real deadline. An
+                 append-only evidence stream that records the wrong time is
+                 worse than one that records nothing.)
+    observed_ts  keyword-only, default "" (key omitted when empty). ISO8601
+                 UTC — when core DETECTED the resolution, written only when it
+                 differs from `resolved_ts`, i.e. only for a lazily-detected
+                 expiry. Both facts are kept, neither is invented: the
+                 auditor sees when the action timed out AND how long it took
+                 anyone to look. Hiding the detection lag would be its own
+                 dishonesty; recording it as the timeout was the defect.
 
     Discriminator field: "event": "hold_resolution" lets a connector/SIEM
     distinguish this from a decision record (decision records have no
@@ -256,6 +291,8 @@ def record_hold_resolution(
         "decision_id": decision_id,
         "resolved_ts": resolved_ts or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    if observed_ts and observed_ts != rec["resolved_ts"]:
+        rec["observed_ts"] = observed_ts
 
     return _append_and_readback(
         rec,
