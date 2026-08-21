@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import sys
 import unittest
@@ -225,6 +226,84 @@ class TestNoSubcommand(unittest.TestCase):
         code, out, _ = _run([])
         self.assertEqual(code, cli.EXIT_SETUP_ERROR)
         self.assertIn("usage", out.lower())
+
+
+# ---------------------------------------------------------------------------
+# Approver provenance (RFX-149)
+#
+# Core gained `decided_by_verified` / `principal_source` (RFX-84) precisely so
+# that "an unverified claim is no longer indistinguishable from a real human
+# decision".  Measured against a core carrying that change, this CLI printed
+# ONE identical success sentence for both -- byte-for-byte -- so at the only
+# surface a human reads, it stayed exactly indistinguishable.  These tests
+# fail if that regresses.
+# ---------------------------------------------------------------------------
+
+_VERIFIED = {
+    "id": "abc123", "status": "approved", "decided_by": "human:leo",
+    "decided_ts": "t", "decided_by_verified": True, "principal_source": "credential",
+}
+_ASSERTED = {
+    "id": "abc123", "status": "approved", "decided_by": "human:leo",
+    "decided_ts": "t", "decided_by_verified": False, "principal_source": "asserted",
+}
+
+
+class TestApproverProvenance(_PatchClientFn):
+    def _approve(self, record: dict) -> tuple[int, str, str]:
+        self._patch("resolve_hold", lambda hold_id, decision, reason=None: record)
+        return _run(["approve", "abc123"])
+
+    def test_verified_and_unverified_are_distinguishable(self) -> None:
+        _, out_v, err_v = self._approve(_VERIFIED)
+        _, out_a, err_a = self._approve(_ASSERTED)
+        # The regression this exists for: the two runs producing identical
+        # human-readable output.
+        self.assertNotEqual(out_v + err_v, out_a + err_a)
+        self.assertIn("VERIFIED", err_v)
+        self.assertNotIn("UNVERIFIED", err_v)
+        self.assertIn("UNVERIFIED", err_a)
+
+    def test_unverified_says_so_without_being_asked_for_json(self) -> None:
+        # An operator who never passes --json must still be told.  Core's own
+        # warning goes to CORE's stderr, on the other side of the wire.
+        code, out, err = self._approve(_ASSERTED)
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("approved", out)
+        self.assertIn("asserted", err)
+
+    def test_json_output_is_untouched(self) -> None:
+        self._patch("resolve_hold", lambda hold_id, decision, reason=None: _ASSERTED)
+        code, out, _ = _run(["approve", "abc123", "--json"])
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertEqual(json.loads(out), _ASSERTED)
+
+    def test_old_core_is_not_reported_either_way(self) -> None:
+        # A core predating RFX-84 sends neither field.  Claiming "verified" or
+        # "unverified" would both be inventing evidence.
+        _, _, err = self._approve(
+            {"id": "abc123", "status": "approved", "decided_by": "human:leo", "decided_ts": "t"}
+        )
+        self.assertIn("not reported", err)
+        self.assertNotIn("UNVERIFIED", err)
+        self.assertNotIn("VERIFIED", err)
+
+    def test_list_of_resolved_holds_names_the_approver(self) -> None:
+        # `list --status approved` used to be a list of approvals with no
+        # approver: id, rule, timestamps and nothing else.
+        self._patch("list_holds", lambda status=None: {"items": [dict(_ASSERTED, rule_id="r", envelope={})], "count": 1})
+        code, out, _ = _run(["list", "--status", "approved"])
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("human:leo", out)
+        self.assertIn("UNVERIFIED", out)
+
+    def test_pending_holds_print_no_decider_line(self) -> None:
+        self._patch("list_holds", lambda status=None: {
+            "items": [{"id": "p1", "status": "pending", "rule_id": "r", "envelope": {}}], "count": 1})
+        code, out, err = _run(["list", "--status", "pending"])
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertEqual(err, "")
+        self.assertNotIn("decided", out)
 
 
 if __name__ == "__main__":

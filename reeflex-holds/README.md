@@ -142,16 +142,35 @@ reeflex-holds approve <hold-id> --reason "reviewed the envelope, looks fine"
 reeflex-holds reject  <hold-id> --reason "not today"
 ```
 
-`list` prints a table (id, status, rule, ability, magnitude, timestamps);
-add `--json` on any subcommand for raw JSON instead. Exit codes: `0` on
-success, `1` if `reeflex-core` refused the request (e.g. `actor_is_approver`,
-`not_resolvable`, a 404), `2` on a local setup/connection problem (core
-unreachable, or `REEFLEX_PRINCIPAL` unset for `approve`/`reject`) -- never a
-silent `0` with no output. `approve`/`reject` never take a `--principal`
-flag: the resolving identity is always `REEFLEX_PRINCIPAL`, exactly like the
-`resolve_hold` MCP tool below, so a resolution made from this CLI is
-indistinguishable in `reeflex-core`'s evidence from one made through the
-dashboard or an MCP client. Run `reeflex-holds --help` for the full usage.
+`list` prints a table (id, status, rule, ability, magnitude, timestamps, plus
+the decider and how that decider was established once a hold has been
+resolved); add `--json` on any subcommand for raw JSON instead. Exit codes:
+`0` on success, `1` if `reeflex-core` refused the request (e.g.
+`actor_is_approver`, `not_resolvable`, a 404), `2` on a local
+setup/connection problem (core unreachable, or `REEFLEX_PRINCIPAL` unset for
+`approve`/`reject`) -- never a silent `0` with no output.
+
+**These exit codes are a property of the CLI, which only exists in releases
+from 0.2.0 on.** An earlier wheel has no CLI at all: any argv fell into the
+stdio MCP transport, so `reeflex-holds approve <hold-id>` exited `0` with no
+output and never opened a connection (RFX-42/RFX-149). Check
+`reeflex-holds --help` prints a usage banner before trusting an exit code
+from this tool.
+
+`approve`/`reject` never take a `--principal` flag: the resolving identity is
+always `REEFLEX_PRINCIPAL`, exactly like the `resolve_hold` MCP tool below,
+so a resolution made from this CLI is indistinguishable in `reeflex-core`'s
+evidence from one made through an MCP client. It is **not** automatically
+indistinguishable from a dashboard resolution: since RFX-84, core records
+`decided_by_verified` / `principal_source` on every resolution, and an
+approver it cannot tie to a bound credential is recorded as `asserted` --
+an unverified claim, whichever surface made it. `approve`/`reject` print
+which of the two you got on stderr, and `list` prints it per resolved hold.
+To make a CLI resolution verified, bind the operator's token in core's
+`REEFLEX_RESOLVER_TOKENS`; core refuses a principal that disagrees with its
+binding (403 `principal_mismatch`) rather than recording the claim.
+
+Run `reeflex-holds --help` for the full usage.
 
 ## Running it as an MCP server
 
