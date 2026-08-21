@@ -42,6 +42,58 @@ _AXIS_DEFAULTS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
+# F5: target.environment is a CLOSED ENUM (SPEC §2: production | staging | dev),
+# and SPEC §7 requires unknown/undeterminable values to default safe-conservative
+# — exactly the treatment the axes above already get.  Historically environment
+# was passed to OPA VERBATIM, so R2/R3 (which match `environment == "production"`
+# exactly) FAILED OPEN on any near-miss: "Production", "PROD", "prod",
+# "production " (trailing space), a zero-width char, etc. all missed the exact
+# match and fell through to R4 default_allow — i.e. an irreversible systemic
+# production action was ALLOWED with no human.  We now canonicalize environment
+# the same way we canonicalize axes: strip + casefold, map known aliases to the
+# canonical tier, and coerce anything unrecognized to the most-guarded tier
+# ("production") so the firewall fails CLOSED, never open.
+#
+# TRADE-OFF (documented deliberately): coercing an UNRECOGNIZED environment
+# string (e.g. a custom "qa-eu") to "production" can turn an allow into a
+# hold/deny (a wrong-DENY).  For a safety firewall that is the correct bias —
+# a wrong DENY is a nuisance, a wrong ALLOW is the product failing.  Adapters
+# SHOULD emit one of the SPEC enum values; out-of-enum strings are treated as
+# production by design.
+# ---------------------------------------------------------------------------
+
+_ENV_CANON: dict[str, str] = {
+    "production": "production",
+    "prod": "production",
+    "prods": "production",
+    "prd": "production",
+    "live": "production",
+    "staging": "staging",
+    "stage": "staging",
+    "stg": "staging",
+    "dev": "dev",
+    "development": "dev",
+    "develop": "dev",
+    "test": "dev",
+    "testing": "dev",
+}
+
+# The conservative default for any environment string we do not recognize:
+# the most-guarded tier, so R2/R3 fire rather than being evaded.
+_ENV_DEFAULT: str = "production"
+
+
+def _canonicalize_environment(raw_env: str) -> str:
+    """Map a raw environment string to its canonical SPEC tier.
+
+    strip + casefold first (so "Production", " production ", "PRODUCTION" all
+    normalize), then look up the alias table.  Anything unrecognized coerces to
+    the most-restrictive tier ("production") — fail-closed, never fail-open.
+    """
+    normalized = raw_env.strip().casefold()
+    return _ENV_CANON.get(normalized, _ENV_DEFAULT)
+
+# ---------------------------------------------------------------------------
 # Nonce store — in-memory replay protection (skeleton; see upgrade TODO above)
 # ---------------------------------------------------------------------------
 
@@ -130,6 +182,16 @@ def validate_and_fill_defaults(raw: Any) -> dict:
 
     # Build normalized copy
     envelope = dict(raw)
+
+    # -- F5: canonicalize target.environment to the closed SPEC enum. --
+    # `environment` is already guaranteed a non-empty string above.  We map it
+    # to its canonical tier (production|staging|dev), coercing case/whitespace
+    # near-misses AND any unrecognized value to the most-restrictive tier so
+    # R2/R3 cannot be evaded by writing "Production" / "prod" instead of
+    # "production".  target is copied first so the caller's dict is untouched.
+    _norm_target = dict(target)
+    _norm_target["environment"] = _canonicalize_environment(environment)
+    envelope["target"] = _norm_target
 
     # -- params: free passthrough; must be a dict for ledger to iterate safely.
     # If present but not a dict (string, list, number) -> coerce to {}.
