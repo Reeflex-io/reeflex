@@ -13,14 +13,16 @@ Subcommands:
             if settings.json is not wired up.
 
 STRUCTURAL FIX (code-reports/cold-start-doc-fidelity-friction-log-dev-2-
-20260701.md, finding F12): once pip-installed, `reeflex-claude` is a console
-entry point resolved via PATH. The hook command written by `setup` is the
-bare string "reeflex-claude hook" -- no absolute path, no cwd-dependent
-`python -m` import -- so the "wrong cwd -> ModuleNotFoundError -> non-zero
-exit -> Claude Code silently runs the tool anyway" failure class cannot occur
-on this path. It remains possible only on the git-clone / hook_entry.py
-"Development install" path documented in README.md, which retains its own
-warning and manual verify instructions.
+20260701.md, finding F12): "hook cannot start -> non-zero exit -> Claude Code
+silently runs the tool anyway" is a silent-allow bypass, so the wired command
+must not depend on ambient state. Writing the BARE console-script name did not
+achieve that -- it swapped a cwd dependency for a PATH dependency, and qa--032
+measured the consequence on a real agent: pip-install into a virtualenv, launch
+`claude` from an ordinary shell, and every tool call ran ungated with no audit
+record and no message from Claude Code. `setup` now writes the ABSOLUTE form
+(setup_settings.hook_command_for_settings()), and `check` verifies the command
+that is actually IN settings.json rather than one it resolves for itself -- the
+distinction that made its FileNotFoundError branch unreachable.
 """
 
 from __future__ import annotations
@@ -28,6 +30,8 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -40,10 +44,13 @@ from .setup_settings import (
     HOOK_COMMAND,
     SettingsError,
     has_hook_entry,
+    hook_command_for_settings,
+    is_ours,
     load_settings,
     merge_env,
     merge_hook_entry,
     resolve_settings_path,
+    wired_hook_command,
     write_settings,
 )
 
@@ -232,8 +239,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
                                       DEFAULT_ENVIRONMENT, choices=("production", "staging", "dev"))
     token       = _prompt_token(args.token)
 
+    # Absolute path, not the bare name: the hook is spawned by Claude Code with
+    # the launching shell's PATH, which need not contain the virtualenv pip
+    # installed into. An unresolvable command exits non-zero -> silent allow.
+    hook_command = hook_command_for_settings()
+
     try:
-        replaced = merge_hook_entry(settings, command=HOOK_COMMAND,
+        replaced = merge_hook_entry(settings, command=hook_command,
                                      matcher=DEFAULT_MATCHER, timeout=DEFAULT_TIMEOUT)
 
         env_updates = {
@@ -254,7 +266,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
     action = "Updated existing" if replaced else "Wrote new"
     print(f"[reeflex-claude] {action} PreToolUse hook entry in {path}")
     print(f"[reeflex-claude]   matcher: {DEFAULT_MATCHER}")
-    print(f"[reeflex-claude]   command: {HOOK_COMMAND}  (timeout {DEFAULT_TIMEOUT}s)")
+    print(f"[reeflex-claude]   command: {hook_command}  (timeout {DEFAULT_TIMEOUT}s)")
+    if hook_command == HOOK_COMMAND:
+        print("[reeflex-claude]   WARNING: could not locate the 'reeflex-claude' "
+              "executable, so the hook is wired by bare name. If the shell that "
+              "launches Claude Code cannot resolve it, the hook exits non-zero "
+              "and Claude Code RUNS THE TOOL ANYWAY (silent allow). Install into "
+              "an environment that is on PATH when you launch Claude Code.")
     shown_env = {k: ("***" if k == "REEFLEX_CORE_TOKEN" else v) for k, v in env_updates.items()}
     print(f"[reeflex-claude]   env: {json.dumps(shown_env)}")
 
@@ -384,44 +402,111 @@ def run_deny_probe(hook_cmd: List[str], timeout: float = _PROBE_TIMEOUT_SECONDS)
     return True, f"hook denied the probe and exited 0 (fail-closed verified). stdout={proc.stdout.strip()}"
 
 
+def _wired_command_resolves(command: str) -> bool:
+    """
+    True if the argv[0] of `command` can actually be started.
+
+    Mirrors what a hook runner does: split the string, then look argv[0] up as a
+    path (absolute or relative) or on PATH. Any parsing failure counts as
+    unresolvable -- if we cannot tell what would be executed, neither can we
+    promise it will run.
+    """
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return False
+    if not parts:
+        return False
+    exe = parts[0]
+    if os.sep in exe or (os.altsep and os.altsep in exe):
+        return os.path.isfile(exe) and os.access(exe, os.X_OK)
+    return shutil.which(exe) is not None
+
+
+def _wired_matcher(settings: dict):
+    """Return the matcher string on the block holding our hook entry, or None."""
+    hooks_root = settings.get("hooks")
+    if not isinstance(hooks_root, dict):
+        return None
+    pretool = hooks_root.get("PreToolUse")
+    if not isinstance(pretool, list):
+        return None
+    for block in pretool:
+        if not isinstance(block, dict):
+            continue
+        block_hooks = block.get("hooks")
+        if not isinstance(block_hooks, list):
+            continue
+        for item in block_hooks:
+            if isinstance(item, dict) and is_ours(item.get("command")):
+                return block.get("matcher")
+    return None
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     hook_cmd = resolve_hook_command()
     print(f"[reeflex-claude] probing hook command: {hook_cmd}")
     passed, detail = run_deny_probe(hook_cmd)
-
-    print("=" * 70)
-    if passed:
-        print("PASS -- fail-closed verified")
-    else:
-        print("FAIL -- fail-closed NOT verified")
-    print("=" * 70)
-    print(detail)
+    notes = [detail]
     if not passed:
-        print(
+        notes.append(
             "Remediation: reinstall with 'pip install --force-reinstall reeflex-claude', "
             "confirm 'reeflex-claude hook' resolves on PATH, then re-run 'reeflex-claude check'."
         )
 
-    # Advisory settings check -- does not affect PASS/FAIL exit code.
+    # Settings checks. These CAN fail the check: a hook Claude Code cannot spawn
+    # is indistinguishable, from the user's side, from having no gate at all.
     path = resolve_settings_path(args.target)
     if path.exists():
         try:
             settings = load_settings(path)
         except SettingsError as exc:
-            print(f"[reeflex-claude] WARNING: could not check {path}: {exc}")
+            notes.append(f"[reeflex-claude] WARNING: could not check {path}: {exc}")
         else:
             if has_hook_entry(settings):
-                print(f"[reeflex-claude] settings OK: {path} contains the reeflex-claude PreToolUse hook.")
+                notes.append(
+                    f"[reeflex-claude] settings OK: {path} contains the reeflex-claude PreToolUse hook."
+                )
+                # The command Claude Code will spawn is the string in the FILE,
+                # not the one we just resolved for the probe above. Resolving it
+                # ourselves only proves the INSTALLING shell can find it, which
+                # it always can -- that is why this check existed and never fired.
+                wired = wired_hook_command(settings)
+                if wired and not _wired_command_resolves(wired):
+                    passed = False
+                    notes.append(
+                        f"[reeflex-claude] FAIL: the wired hook command ({wired!r}) does "
+                        "not resolve to an executable from this shell. A PreToolUse hook "
+                        "that cannot start exits non-zero, and Claude Code then RUNS THE "
+                        "TOOL ANYWAY -- a silent allow with no audit record. Re-run "
+                        "'reeflex-claude setup' to wire the absolute path."
+                    )
+                matcher = _wired_matcher(settings)
+                if matcher is not None and matcher != DEFAULT_MATCHER:
+                    notes.append(
+                        f"[reeflex-claude] WARNING: hook matcher is {matcher!r}, not "
+                        f"{DEFAULT_MATCHER!r}. Claude Code treats the matcher as an "
+                        "allowlist: any tool whose name does not match -- every 'mcp__*' "
+                        "tool, Task, SlashCommand, Skill, and every tool added to Claude "
+                        "Code later -- reaches no gate at all. Re-run "
+                        "'reeflex-claude setup' unless this narrowing is deliberate."
+                    )
             else:
-                print(
+                notes.append(
                     f"[reeflex-claude] WARNING: {path} exists but does not contain a "
                     "reeflex-claude PreToolUse hook entry. Run 'reeflex-claude setup' to wire it in."
                 )
     else:
-        print(
+        notes.append(
             f"[reeflex-claude] NOTE: {path} not found. The hook works standalone, but "
             "Claude Code will not call it until you run 'reeflex-claude setup'."
         )
+
+    print("=" * 70)
+    print("PASS -- fail-closed verified" if passed else "FAIL -- fail-closed NOT verified")
+    print("=" * 70)
+    for line in notes:
+        print(line)
 
     return 0 if passed else 1
 

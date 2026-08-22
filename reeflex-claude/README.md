@@ -57,7 +57,7 @@ reeflex-claude check   # verifies the deny path: fails closed if core is unreach
 `setup` targets the current project's `./.claude/settings.json` by default
 (created, with parent directories, if absent); pass `--global` to target
 `~/.claude/settings.json` instead. It **merges** — an existing settings file
-keeps every unrelated key; only the `reeflex-claude hook` PreToolUse entry
+keeps every unrelated key; only the reeflex-claude `hook` PreToolUse entry
 and the `REEFLEX_*` keys in the `env` block are written or updated. A
 corrupt existing `settings.json` is left untouched and `setup` exits `1`
 with an explanation — it never guesses or overwrites.
@@ -82,8 +82,8 @@ Expected `reeflex-claude setup` output (abridged):
 
 ```
 [reeflex-claude] Wrote new PreToolUse hook entry in /path/to/.claude/settings.json
-[reeflex-claude]   matcher: Bash|Write|Edit|MultiEdit|Read|Glob|Grep|LS|NotebookEdit|WebFetch|WebSearch
-[reeflex-claude]   command: reeflex-claude hook  (timeout 30s)
+[reeflex-claude]   matcher: *
+[reeflex-claude]   command: /path/to/venv/bin/reeflex-claude hook  (timeout 30s)
 [reeflex-claude]   env: {"REEFLEX_CORE_URL": "http://127.0.0.1:8080", "REEFLEX_MODE": "enforce", ...}
 [reeflex-claude] Mode: ENFORCE (fail-closed) -- the safe default for a governance gate.
 [reeflex-claude] Now run: reeflex-claude check
@@ -107,13 +107,23 @@ resolvable on `PATH`, denies when core is unreachable), not your policy
 configuration (that is core's job, exercised by `demo/run_demo.py` or a real
 `/v1/decide` call). Exit code `0` = PASS, `1` = FAIL.
 
-**Why this structurally fixes the old fail-open bug:** once installed via
-pip, `reeflex-claude hook` is a console entry point resolved from `PATH` —
-there is no absolute path to get wrong and no cwd-dependent `python -m`
-import that fails with `No module named reeflex_claude` when Claude Code
-runs the hook from the project's working directory instead of
-`reeflex-claude/`. See "Development install" below for the git-clone path,
-where that failure mode remains possible if the hook command is misconfigured.
+**Why the wired command is an absolute path.** A PreToolUse hook that cannot
+start exits non-zero, and Claude Code then runs the tool anyway — a silent
+allow, with no audit record and no message on screen. Earlier releases wired
+the bare name `reeflex-claude hook`, which only moved that risk from the cwd
+to the `PATH`: install into a virtualenv, launch Claude Code from an ordinary
+shell, and the hook is `command not found`. `setup` therefore writes the
+absolute path of the installed entry point, and `check` verifies the command
+that is actually in your `settings.json`.
+
+**Why the matcher is `*`.** Claude Code treats `matcher` as an allowlist: a
+tool whose name does not match never reaches the hook at all. Listing tool
+names would silently exempt every `mcp__*` tool — a database, payments or
+cluster MCP server is exactly where an irreversible production action lives —
+along with `Task`, `SlashCommand`, `Skill`, and every tool added to Claude
+Code after the list was written. A governance gate cannot be enumerated in
+advance; unknown tools are classified conservatively instead (see
+`classify.py`). If you deliberately narrow the matcher, `check` will say so.
 
 **4. Restart Claude Code.** From the next tool call on, every action passes
 through the gate.
@@ -138,7 +148,7 @@ directory Claude Code runs from:
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|Write|Edit|MultiEdit|Read|Glob|Grep|LS|NotebookEdit|WebFetch|WebSearch",
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",
