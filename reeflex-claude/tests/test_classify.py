@@ -446,15 +446,27 @@ class TestRegressions(unittest.TestCase):
 
     def test_command_chaining_ls_rm(self):
         """
-        'ls; rm -rf /' -- leading token is 'ls' -> read (leading-token classification).
-        The rm part is not governed in this call; document this as a known limit of
-        single-token classification and assert it does not crash and is governed.
+        'ls; rm -rf /' -- the line is classified by the most dangerous command on
+        it, not by its leading token (RFX-144).
+
+        This test used to assert `verb in (read, delete, execute, emit)` and
+        `tier in (benign, moderate, destructive_broad, destructive_systemic)` --
+        every legal value of each field, so it could not fail -- under a
+        docstring that described leading-token classification as "a known limit".
+        A test that cannot fail is not evidence, and a docstring that calls the
+        defect intended behaviour is worse than no test: it tells the next reader
+        the fail-open was a decision. Found by dev-3 while fixing the same defect
+        in #98; credited here rather than left for the next person to re-find.
         """
         r = _c("Bash", {"command": "ls; rm -rf /"})
-        # Leading token ls -> read; the chained rm is not individually intercepted.
-        # This is a documented limitation; assert: no exception, result is governed.
-        self.assertIn(r["verb"], ("read", "delete", "execute", "emit"))
-        self.assertIn(r["classification_tier"], ("benign", "moderate", "destructive_broad", "destructive_systemic"))
+        self.assertEqual(r["verb"], "delete")
+        self.assertEqual(r["reversibility"], "irreversible")
+        self.assertEqual(r["blast_radius"], "systemic")
+        self.assertEqual(r["classification_tier"], "destructive_systemic")
+        self.assertEqual(r["danger_signature"], "rm_recursive_root")
+        # The operator must see what was actually submitted, not the fragment
+        # that won the severity comparison.
+        self.assertEqual(r["command_preview"], "ls; rm -rf /")
 
     def test_write_file_text_not_used_as_path(self):
         """
