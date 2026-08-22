@@ -43,15 +43,29 @@ Expiry is LAZY:
   states the real deadline plus how late the observation was, rather than
   back-dating the deadline to the observation (_append_expired_event).
 
-THREAD SAFETY: a single module-level lock protects both file I/O and the
-in-memory index.
+CONCURRENCY: two arms, and BOTH are load-bearing (RFX-207 / dev-1--040).
+  - `_lock`, a module-level threading.Lock, serialises this process's threads
+    over the file and the in-memory index.
+  - `appendlog.exclusive()`, an fcntl lock on a sidecar file, serialises
+    REPLICAS.  Every read-modify-write of a hold's status goes through
+    `_exclusive()`, which takes that lock and refreshes `_index` from the file
+    before the caller decides anything.
+
+  The second arm is what makes the single-use guarantee real.  With `_lock`
+  alone, `mark_consumed()`'s CAS was atomic per process and each replica
+  consulted its own boot-time fold of the file, so ONE human approval was
+  spendable ONCE PER WARM REPLICA — measured, not argued; see
+  `_refresh_index()`.
 
 IDIOMS: follows audit.py exactly — json.dumps(rec, separators=(",",":"))+"\n",
-lock on write, read-back proof after write.
+lock on write, read-back proof after write.  The read-back proves OUR bytes at
+OUR offset, not "the file's last line is mine" (appendlog.py explains why the
+latter was both weaker and wrong under two replicas).
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -60,6 +74,9 @@ import threading
 import time
 import uuid
 from typing import Any
+
+from . import appendlog
+from .appendlog import AppendVerifyError  # noqa: F401  (re-exported for callers)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -157,34 +174,82 @@ _index: dict[str, dict] = {}
 _lock = threading.Lock()
 _loaded = False  # True once _boot_load() has run
 
+# Byte offset in the holds file up to which _index has folded records.  This is
+# what makes the index correct when ANOTHER PROCESS is appending to the same
+# file: _refresh_index() tails from here rather than re-reading from the top.
+_read_offset = 0
+
 
 def _boot_load() -> None:
     """Fold all records from the JSONL file into the in-memory index.
 
     Called once, lazily, on first use.  Must be called under _lock.
     """
-    global _loaded
+    global _loaded, _read_offset
     path = _holds_path()
     _index.clear()
-    if not path.exists():
-        _loaded = True
-        return
+    _read_offset = 0
+    _loaded = True  # set first: a read error must not retry the whole file
+    _refresh_index()
 
-    try:
-        with open(path, encoding="utf-8") as fh:
-            for raw_line in fh:
-                raw_line = raw_line.strip()
-                if not raw_line:
-                    continue
-                try:
-                    rec = json.loads(raw_line)
-                except json.JSONDecodeError:
-                    continue  # skip corrupt line; never raises
-                _fold_record(rec)
-    except OSError:
-        pass  # file unreadable at boot -> start with empty index
 
-    _loaded = True
+def _refresh_index() -> None:
+    """Fold every record another process has appended since we last looked.
+
+    MUST be called under _lock, and — before any read-modify-write of a hold's
+    status — inside `appendlog.exclusive(_holds_path())`.
+
+    WHY THIS EXISTS: THE SINGLE-USE GUARANTEE WAS PER-PROCESS (dev-1--040).
+    `mark_consumed()` documents a CAS: it checks `status == "approved"` and
+    appends the flip to "consumed" under one `_lock`, so "exactly one racing
+    caller wins the consume".  That is true of one process and false of a pool.
+    `_index` was built ONCE by `_boot_load()` and never refreshed, so each
+    replica carried its own opinion of every hold's status, and one human
+    approval was spendable ONCE PER WARM REPLICA.
+
+    MEASURED, two replicas on one volume, at the shipped 0.2.0 strict default
+    with a real resolver-token map, no timing race required:
+
+        decide @A          -> require_approval, hold H
+        resolve @A         -> approved, decided_by_verified=true   (ONE human)
+        GET H @B           -> B folds H as approved
+        resubmit @A        -> allow / approved_resubmission
+        resubmit @B (H)    -> allow / approved_resubmission   <-- spent twice
+        resubmit @A again  -> deny  / reeflex_hold_consumed    (A's own guard)
+
+    Two `consumed` events on disk for one approval.  N warm replicas, N
+    executions of one irreversible production action, one approval.
+
+    WHY IT LOOKED SOUND FROM TWO OTHER ANGLES: `_boot_load()` is LAZY (first
+    use, not process start).  A replica that has not served a request has an
+    empty index and folds the whole file — including the consume — on its first
+    read, and correctly refuses.  So "start B late, then ask it" reads as
+    SECURE.  Only a replica that has already served traffic holds the stale
+    opinion, which is every replica in a load-balanced pool.
+    """
+    global _read_offset
+    lines, new_offset = appendlog.read_new_records(_holds_path(), _read_offset)
+    _read_offset = new_offset
+    for raw_line in lines:
+        try:
+            rec = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue  # skip corrupt line; never raises
+        _fold_record(rec)
+
+
+@contextlib.contextmanager
+def _exclusive():
+    """Cross-process exclusive access to the holds file, index refreshed.
+
+    Wraps every read-modify-write on a hold's status so the check and the
+    append that acts on it cannot be split by another replica.  On entry the
+    index is brought up to date with the file; on exit the lock is released.
+    """
+    path = _holds_path()
+    with appendlog.exclusive(path):
+        _ensure_loaded()
+        yield
 
 
 def _fold_record(rec: dict) -> None:
@@ -223,10 +288,18 @@ def _fold_record(rec: dict) -> None:
 
 
 def _ensure_loaded() -> None:
-    """Ensure the index has been loaded (no-op after first call)."""
+    """Ensure the index reflects everything on disk, including other replicas'.
+
+    Was "no-op after first call", which is why a warm replica could not see a
+    consume another replica had already written — see _refresh_index() for the
+    measurement.  The refresh is a tail-follow from a byte offset, so the
+    steady-state cost is one seek plus one read that returns nothing.
+    """
     global _loaded
     if not _loaded:
         _boot_load()
+        return
+    _refresh_index()
 
 
 # ---------------------------------------------------------------------------
@@ -354,8 +427,10 @@ def _append_expired_event(hold_id: str) -> None:
     path = _holds_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     observed_ts = _iso_now()
-    with _lock:
-        _ensure_loaded()
+    # Cross-process: without the file lock two replicas both observing the
+    # same overdue hold would each append an "expired" event for it, so the
+    # append-only stream would carry two timeouts for one deadline.
+    with _lock, _exclusive():
         if hold_id not in _index:
             return
         if _index[hold_id].get("status") != "pending":
@@ -372,12 +447,10 @@ def _append_expired_event(hold_id: str) -> None:
             "observed_ts": observed_ts,
             "ts": observed_ts,
         }
-        line = json.dumps(rec, separators=(",", ":")) + "\n"
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line)
-            fh.flush()
-            os.fsync(fh.fileno())
-        _fold_record(rec)
+        # Same offset-verified append as every other record on this stream:
+        # this used to write raw, so an expiry event was the one record with
+        # no landed-proof at all.
+        _append_and_readback(rec)
     # Fire webhook outside the lock
     hold = _index.get(hold_id, {})
     _fire_webhook("hold.expired", {
@@ -413,39 +486,31 @@ def _append_expired_event(hold_id: str) -> None:
 def _append_and_readback(rec: dict) -> dict:
     """Append one record to the JSONL file, update the index, read-back to verify.
 
-    Must be called UNDER _lock.
-    Raises OSError on I/O failure.
+    Must be called UNDER _lock AND inside `appendlog.exclusive(_holds_path())`
+    — see `_exclusive()` below, which every mutating public entry point uses.
+
+    Raises appendlog.AppendVerifyError (an OSError) if the record cannot be
+    proven to have landed; `.cause` distinguishes a genuine integrity failure
+    ("tampered") from an environmental one ("unavailable").
+
+    THE READ-BACK USED TO ASK THE WRONG QUESTION (RFX-207 / dev-1--040).  It
+    re-read the file's LAST line and required the id to be its own.  With two
+    replicas on one volume that line is often the other replica's, so a hold
+    that had been written perfectly raised — and `decide.py` turns any
+    exception here into `500 reeflex.core/hold_creation_failed`.  Measured: 9
+    of 100 concurrent decisions denied, every one of them leaving the valid
+    `pending` hold on disk with the caller never told its id.  We now prove our
+    own bytes at our own offset instead, which is immune to a neighbour's
+    append and is a stronger per-record check besides.
     """
     path = _holds_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-
     line = json.dumps(rec, separators=(",", ":")) + "\n"
-    with open(path, "a", encoding="utf-8") as fh:
-        fh.write(line)
-        fh.flush()
-        os.fsync(fh.fileno())
+    offset = appendlog.append_and_verify(path, line)
 
-    # Read-back proof — same pattern as audit.py
-    with open(path, "rb") as fh:
-        fh.seek(0, 2)
-        size = fh.tell()
-        if size == 0:
-            raise OSError("holds file empty immediately after write")
-        pos = size - 1
-        while pos > 0:
-            fh.seek(pos)
-            ch = fh.read(1)
-            if ch == b"\n" and pos < size - 1:
-                break
-            pos -= 1
-        fh.seek(max(pos, 0))
-        last_line = fh.read().decode("utf-8").strip()
-
-    written = json.loads(last_line)
-    if written.get("id") != rec.get("id"):
-        raise OSError(
-            f"holds read-back mismatch: wrote id={rec.get('id')!r}, read back id={written.get('id')!r}"
-        )
+    # Keep the read cursor past our own record so the next _refresh_index()
+    # does not re-fold it.
+    global _read_offset
+    _read_offset = max(_read_offset, offset + len(line.encode("utf-8")))
 
     # Update in-memory index
     _fold_record(rec)
@@ -495,8 +560,7 @@ def create_hold(envelope: dict, rule_id: str, *, decision_id: str = "") -> dict:
         "ts": now_iso,
     }
 
-    with _lock:
-        _ensure_loaded()
+    with _lock, _exclusive():
         _append_and_readback(rec)
 
     return rec
@@ -633,8 +697,10 @@ def resolve_hold(
         "ts": decided_ts,
     }
 
-    with _lock:
-        _ensure_loaded()
+    # Cross-process: the status check and the append that resolves the hold are
+    # one atomic step on the volume, so two replicas cannot both record a
+    # first resolution for the same hold.
+    with _lock, _exclusive():
         if hold_id not in _index:
             return None
         _append_and_readback(rec)
@@ -689,15 +755,20 @@ def mark_consumed(hold_id: str) -> dict | None:
         "ts": consumed_ts,
     }
 
-    with _lock:
-        _ensure_loaded()
+    with _lock, _exclusive():
         if hold_id not in _index:
             return None
         # CAS guard: only an "approved" hold may be consumed.  Checking this
         # status AND appending the consumed record both happen under the
-        # single module-level _lock, so no other thread can observe
-        # "approved" between this check and the append below -- exactly one
-        # racing caller wins the consume.
+        # single module-level _lock AND the cross-process file lock, with the
+        # index refreshed from the file on entry -- so no other thread AND no
+        # other REPLICA can observe "approved" between this check and the
+        # append below.  Exactly one caller anywhere on the volume wins.
+        #
+        # The file lock is what upgrades this from a per-process guard to a
+        # real one: without it each replica consulted its own stale fold of the
+        # file, and one human approval was spendable ONCE PER WARM REPLICA
+        # (measured -- see _refresh_index()).
         if _index[hold_id].get("status") != "approved":
             return None
         _append_and_readback(rec)
