@@ -10,7 +10,7 @@ Routes:
   GET  /v1/holds?status=&limit=&cursor=   -> JSON list (paged)             200/401
   GET  /v1/holds/{id}                -> full hold detail                   200/401/404
   POST /v1/holds/{id}/resolve        -> resolve a pending hold             200/401/403/404/409
-  GET  /healthz                      -> {"status":"ok"}                    200
+  GET  /healthz                      -> {"status":"ok","ledger":{...}}     200
 
 All other paths/methods -> HTTP 404 or 405.
 
@@ -248,7 +248,47 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
     def _do_GET_inner(self) -> None:
         # /healthz — always unauthenticated
         if self.path == "/healthz":
-            self._respond(200, {"status": "ok"})
+            # RFX-197: report whether this core can REMEMBER, not only whether
+            # it can answer.
+            #
+            # The defect RFX-197 filed was not that the session ledger was
+            # ephemeral -- it was that nothing said so. A core whose cumulative
+            # budgets reset on every restart, and a core whose budgets are
+            # shared with a second replica, were indistinguishable from outside:
+            # both answered {"status":"ok"}. An operator running two replicas
+            # behind a load balancer multiplied every session budget by two and
+            # had no way to see it.
+            #
+            # `ledger.durable` is that answer, and `ledger.path` is what makes
+            # the RESIDUAL checkable: two replicas share one budget only if they
+            # share this path AND the volume behind it. Comparing /healthz
+            # across replicas is now a real check an operator can run, where
+            # before there was nothing to compare. Unauthenticated like the rest
+            # of this route: it exposes a mode and a path, no session data, no
+            # spend, no identities.
+            _ledger_health: dict = {}
+            try:
+                from .ledger import ledger_epoch  # local: keep import cost off
+                _epoch = ledger_epoch()
+                _ledger_health = {
+                    "durable": bool(_epoch.get("durable")),
+                    "path": _epoch.get("path", ""),
+                    "epoch_id": _epoch.get("epoch_id", ""),
+                    "window_seconds": _epoch.get("window_seconds", 0),
+                    "restored_sessions": _epoch.get("restored_sessions", 0),
+                    "restored_entries": _epoch.get("restored_entries", 0),
+                    "scan_truncated": bool(_epoch.get("scan_truncated")),
+                }
+            except Exception:  # noqa: BLE001
+                # /healthz is a liveness probe first: the image's own HEALTHCHECK
+                # depends on it, so it must answer 200 even if the ledger cannot
+                # describe itself. An absent "ledger" key is honest about that;
+                # a fabricated durable:true would not be.
+                _ledger_health = {}
+            _health: dict = {"status": "ok"}
+            if _ledger_health:
+                _health["ledger"] = _ledger_health
+            self._respond(200, _health)
             return
 
         # All other GET routes require auth
