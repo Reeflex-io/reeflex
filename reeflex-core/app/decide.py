@@ -865,11 +865,46 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
                     "status": "pending",
                     "expires_ts": expires_ts,
                 })
-            except Exception:  # noqa: BLE001
-                # Fail-closed: hold creation failure -> deny
+            except Exception as exc:  # noqa: BLE001
+                # Fail-closed: hold creation failure -> deny.
+                #
+                # RFX-207: "if the append genuinely cannot be verified, the
+                # refusal must name that cause distinctly, not share a code
+                # with a tamper detection."  One rule id used to cover three
+                # very different operator situations, and the commonest of them
+                # was not a defect in the store at all -- it was a second
+                # replica appending to the same volume, which now cannot cause
+                # this branch to be taken (see appendlog.py).  What is left is
+                # worth telling apart:
+                #
+                #   hold_store_integrity     the record could not be proven to
+                #                            have landed intact.  Investigate
+                #                            the volume; the log may be torn or
+                #                            rewritten.  PAGE SOMEBODY.
+                #   hold_store_unavailable   core could not write/lock at all
+                #                            (disk full, volume read-only, lock
+                #                            file unopenable).  An availability
+                #                            problem; it says nothing about
+                #                            integrity.
+                #   hold_creation_failed     retained for anything else, so no
+                #                            existing consumer of this id
+                #                            breaks.
+                cause = getattr(exc, "cause", "")
                 denial = dict(_INTERNAL_ERROR_DECISION)
-                denial["reason"] = "hold creation failed - failing closed"
-                denial["rule"] = "reeflex.core/hold_creation_failed"
+                if cause == "tampered":
+                    denial["rule"] = "reeflex.core/hold_store_integrity"
+                    denial["reason"] = (
+                        "hold record could not be proven to have landed intact "
+                        "- failing closed"
+                    )
+                elif cause == "unavailable":
+                    denial["rule"] = "reeflex.core/hold_store_unavailable"
+                    denial["reason"] = (
+                        "hold store could not be written - failing closed"
+                    )
+                else:
+                    denial["rule"] = "reeflex.core/hold_creation_failed"
+                    denial["reason"] = "hold creation failed - failing closed"
                 denial["decision_id"] = decision_id
                 _try_audit(
                     session_id, envelope, cumulative, denial,

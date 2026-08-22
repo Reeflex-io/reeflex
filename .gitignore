@@ -43,6 +43,7 @@ opa.exe
 # (keep reeflex-core/audit/.gitkeep so the directory is tracked)
 # -----------------------------------------------------------------------------
 reeflex-core/audit/*.jsonl
+reeflex-core/audit/*.jsonl.lock
 reeflex-mock/*.jsonl
 *-audit.jsonl
 *.log
