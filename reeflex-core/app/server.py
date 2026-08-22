@@ -802,25 +802,33 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
 # customer artefact at main 1b80c8b, identical read envelopes, distinct
 # session_ids, one client host:
 #
-#     SEQUENTIAL      120 decisions:  6.1 s -> 19.8 decisions/sec  (120/120 answered)
-#     CONCURRENT(4)     4 decisions:  0.2 s -> 18.8 decisions/sec  (  4/4   answered)
-#     CONCURRENT(16)   16 decisions:  3.2 s ->  5.0 decisions/sec  ( 16/16  answered)
-#     CONCURRENT(120) 120 decisions:  7.7 s                        ( 38/120 answered)
+#     rung              wall  answered  dec/sec     p50     worst   >5s   >10s
+#     SEQUENTIAL  120    6.0s  120/120     19.9    50ms      66ms     0      0
+#     CONCURRENT    4    0.2s    4/4       18.9   123ms     209ms     0      0
+#     CONCURRENT   16    1.4s   16/16      11.3   448ms    1407ms     0      0
+#     CONCURRENT  120   53.8s  120/120      2.2  7393ms   53807ms    64     36
 #
-# Concurrency made the engine SLOWER than doing the same work one call at a
-# time, and past the backlog of five the kernel stopped completing handshakes:
-# 82 of 120 legitimate decisions came back `ECONNRESET`, never reaching the
-# policy engine at all.
+# Concurrency made the engine NINE TIMES SLOWER per decision than doing the
+# same work one call at a time.
+#
+# TWO EARLIER FIGURES IN THIS COMMENT WERE WRONG AND ARE CORRECTED ABOVE. A
+# first pass recorded "CONCURRENT(120) 7.7 s, 38/120 answered, 82 ECONNRESET".
+# Re-measured with a client patient enough to wait (120 s timeout), all 120 are
+# eventually answered — the resets were an artefact of the PROBE's timeout, not
+# a property of the server. The defect is real either way but its shape is
+# different, and the numbers above are the ones an instrument can defend.
 #
 # WHY THAT IS A SAFETY DEFECT AND NOT ONLY A PERFORMANCE ONE. Every adapter
-# fails CLOSED when core does not answer — reeflex-claude/enforce.py, the n8n
-# node's network catch, reeflex-mcp's scaffold. That default is correct. Its
-# consequence is that a saturated core does not wave work through, it REFUSES
-# it: those 82 resets are 82 legitimate agent actions denied by a socket, with
-# no policy involved and nothing in the audit log to say why. The operator's
-# only pressure-relief valve is to switch the adapter from enforce to observe,
-# which turns the product off. So an availability failure of the enforcement
-# plane converts, in one step, into no enforcement at all.
+# fails CLOSED when core does not answer — reeflex-claude 5 s, reeflex-wordpress
+# 5 s, reeflex-mcp 10 s, read out of the published packages. That default is
+# correct. Its consequence is that a saturated core does not wave work through,
+# it REFUSES: at width 120, 64 of 120 legitimate decisions came back slower than
+# the 5 s adapter deadline and 36 slower than the 10 s one — refusals with no
+# policy consulted and no audit line saying why. A less patient client sees the
+# same load as hard connection resets instead. Either way the operator's only
+# pressure-relief valve is to switch the adapter from enforce to observe, which
+# turns the product off. So an availability failure of the enforcement plane
+# converts, in one step, into no enforcement at all.
 #
 # WHY THIS COULD NOT BE FIXED BEFORE RFX-197 (the ordering qa--030 flagged).
 # R5's cumulative budget is a read-decide-write: compute_cumulative() -> OPA
