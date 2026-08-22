@@ -8,9 +8,17 @@ Subcommands:
             Claude Code's settings.json invokes.
   setup  -- writes/merges the PreToolUse hook entry into Claude Code
             settings.json (project or global), fail-CLOSED by default.
-  check  -- the F12 self-test as a first-class command: proves the hook
-            fails closed (deny + exit 0) on an unreachable core, and warns
-            if settings.json is not wired up.
+  check  -- the installation self-test, in two stages:
+            (1) the F12 fail-closed probe -- proves the hook denies + exits 0
+                on an unreachable core, and warns if settings.json is not
+                wired up;
+            (2) the GATE probe (RFX-147) -- sends a small named set of
+                destructive payloads through the operator's REAL configured
+                core and exits non-zero on an unexpected allow.
+            Stage 1 alone printed "PASS -- fail-closed verified" on an
+            installation where `kubectl delete namespace production` was
+            allowed with no human (RFX-144), so its exit code was a statement
+            about the network and not about the gate. See gate_probe.py.
 
 STRUCTURAL FIX (code-reports/cold-start-doc-fidelity-friction-log-dev-2-
 20260701.md, finding F12): once pip-installed, `reeflex-claude` is a console
@@ -33,6 +41,7 @@ import subprocess
 import sys
 from typing import List, Optional, Tuple
 
+from . import gate_probe
 from .enforce import _DEFAULT_CORE_URL as DEFAULT_CORE_URL
 from .setup_settings import (
     DEFAULT_MATCHER,
@@ -126,9 +135,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_check = sub.add_parser(
         "check",
-        help="Verify the fail-closed hook installation (deny-scenario self-test).",
+        help="Verify the installation: fail-closed plumbing, then whether the "
+             "configured gate actually stops a production destruction.",
     )
     _add_target_flags(p_check)
+    p_check.add_argument(
+        "--skip-gate", action="store_true",
+        help="Run only the fail-closed plumbing probe. The check then makes NO "
+             "statement about whether your gate stops anything.",
+    )
+    p_check.add_argument(
+        "--require-gate", action="store_true",
+        help="Exit non-zero unless the gate probe actually produced policy verdicts. "
+             "Use in CI: without it, an unreachable core or observe mode leaves the "
+             "gate unverified and still exits 0.",
+    )
 
     return parser
 
@@ -384,46 +405,156 @@ def run_deny_probe(hook_cmd: List[str], timeout: float = _PROBE_TIMEOUT_SECONDS)
     return True, f"hook denied the probe and exited 0 (fail-closed verified). stdout={proc.stdout.strip()}"
 
 
+def _gate_stage(
+    hook_cmd: List[str],
+    settings: Optional[dict],
+) -> Tuple[str, str, List[gate_probe.ProbeResult]]:
+    """
+    Stage 2: send the destructive corpus through the operator's REAL core.
+
+    Returns (verdict, headline, results) where verdict is one of
+    "pass" | "fail" | "unverified". Never raises.
+    """
+    overlay = gate_probe.settings_env_overlay(settings or {})
+    env = gate_probe.build_probe_env(overlay)
+    mode = gate_probe.effective_mode(env)
+    environment = gate_probe.effective_environment(env)
+    core_url = gate_probe.effective_core_url(env)
+
+    print()
+    print("[reeflex-claude] gate probe -- the configuration the HOOK will run under:")
+    print(f"    core url    : {core_url}")
+    print(f"    mode        : {mode}")
+    print(f"    environment : {environment}")
+    if overlay:
+        print(f"    (from settings.json env: {', '.join(sorted(overlay))})")
+    print(f"[reeflex-claude] sending {len(gate_probe.GATE_PROBES)} probes. "
+          "Nothing is executed -- the hook only classifies and answers.")
+
+    results = gate_probe.run_gate_probes(
+        hook_cmd, env=env, environment=environment, timeout=_PROBE_TIMEOUT_SECONDS,
+    )
+
+    # Per-probe verdict, printed either way -- this is the point of the stage.
+    print()
+    for r in results:
+        decision = r.decision if r.decision is not None else "-"
+        rule = r.rule if r.rule is not None else "-"
+        print(f"  [{r.outcome:>16}] {r.probe.name:<30} {decision:<6} {rule}")
+        print(f"                     $ {r.probe.command}")
+        print(f"                     {r.detail}")
+
+    allowed = [r for r in results if r.outcome == gate_probe.OUTCOME_UNEXPECTED_ALLOW]
+    errored = [r for r in results if r.outcome == gate_probe.OUTCOME_ERROR]
+    evidence = [r for r in results if r.is_gate_evidence]
+    gated = [r for r in results
+             if r.outcome == gate_probe.OUTCOME_PASS and r.probe.expect == gate_probe.EXPECT_GATED]
+    expected_gated = [r for r in results if r.probe.expect == gate_probe.EXPECT_GATED]
+
+    if allowed:
+        return "fail", (
+            f"FAIL -- the gate ALLOWED {len(allowed)} of {len(expected_gated)} irreversible "
+            "production destructions with no human"
+        ), results
+    if errored:
+        return "fail", (
+            f"FAIL -- {len(errored)} probe(s) did not get a usable answer from the hook"
+        ), results
+    if not evidence:
+        return "unverified", (
+            "GATE NOT VERIFIED -- no policy verdict was obtained, so this run says "
+            "nothing about whether your gate stops anything"
+        ), results
+    if len(gated) < len(expected_gated):
+        return "unverified", (
+            f"GATE PARTIALLY VERIFIED -- {len(gated)} of {len(expected_gated)} destructive "
+            "probes produced a policy verdict; the rest were not asserted"
+        ), results
+    return "pass", (
+        f"PASS -- gate verified: {len(gated)} of {len(expected_gated)} production "
+        "destructions routed to a human or refused"
+    ), results
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     hook_cmd = resolve_hook_command()
     print(f"[reeflex-claude] probing hook command: {hook_cmd}")
     passed, detail = run_deny_probe(hook_cmd)
+    print(f"[reeflex-claude] fail-closed probe: {detail}")
 
-    print("=" * 70)
-    if passed:
-        print("PASS -- fail-closed verified")
-    else:
-        print("FAIL -- fail-closed NOT verified")
-    print("=" * 70)
-    print(detail)
-    if not passed:
-        print(
-            "Remediation: reinstall with 'pip install --force-reinstall reeflex-claude', "
-            "confirm 'reeflex-claude hook' resolves on PATH, then re-run 'reeflex-claude check'."
-        )
-
-    # Advisory settings check -- does not affect PASS/FAIL exit code.
+    # Read settings BEFORE the gate stage: its env block is what Claude Code
+    # will apply to the hook, so it is what the gate probe must run under.
     path = resolve_settings_path(args.target)
+    settings: Optional[dict] = None
+    settings_note: str
     if path.exists():
         try:
             settings = load_settings(path)
         except SettingsError as exc:
-            print(f"[reeflex-claude] WARNING: could not check {path}: {exc}")
+            settings_note = f"[reeflex-claude] WARNING: could not check {path}: {exc}"
         else:
             if has_hook_entry(settings):
-                print(f"[reeflex-claude] settings OK: {path} contains the reeflex-claude PreToolUse hook.")
+                settings_note = (
+                    f"[reeflex-claude] settings OK: {path} contains the reeflex-claude PreToolUse hook."
+                )
             else:
-                print(
+                settings_note = (
                     f"[reeflex-claude] WARNING: {path} exists but does not contain a "
                     "reeflex-claude PreToolUse hook entry. Run 'reeflex-claude setup' to wire it in."
                 )
     else:
-        print(
+        settings_note = (
             f"[reeflex-claude] NOTE: {path} not found. The hook works standalone, but "
             "Claude Code will not call it until you run 'reeflex-claude setup'."
         )
 
-    return 0 if passed else 1
+    # Stage 2 needs working plumbing; if stage 1 failed there is nothing to ask
+    # the gate about and the probes would only add noise.
+    gate_verdict = "skipped"
+    gate_headline = (
+        "GATE NOT CHECKED -- --skip-gate was passed, so this run makes no statement "
+        "about whether your gate stops anything"
+    )
+    if not passed:
+        gate_headline = "GATE NOT CHECKED -- the fail-closed probe failed first"
+    elif not args.skip_gate:
+        gate_verdict, gate_headline, _ = _gate_stage(hook_cmd, settings)
+
+    print()
+    print("=" * 70)
+    print("PASS -- fail-closed verified" if passed else "FAIL -- fail-closed NOT verified")
+    print(gate_headline)
+    print("=" * 70)
+
+    if not passed:
+        print(detail)
+        print(
+            "Remediation: reinstall with 'pip install --force-reinstall reeflex-claude', "
+            "confirm 'reeflex-claude hook' resolves on PATH, then re-run 'reeflex-claude check'."
+        )
+    if gate_verdict == "fail":
+        print(
+            "Remediation: the hook is installed correctly and your core is answering -- "
+            "the POLICY let a production destruction through. Do not treat this "
+            "installation as governed. Check the environment recorded on your actions "
+            "(REEFLEX_CLAUDE_ENVIRONMENT), then the policy pack your core is running."
+        )
+    if gate_verdict in ("unverified", "skipped"):
+        print(
+            "To make the exit code a statement about the gate, point REEFLEX_CORE_URL at "
+            "a reachable core in enforce mode and re-run. Add --require-gate to fail "
+            "instead of passing when the gate cannot be verified."
+        )
+
+    print(settings_note)
+
+    if not passed:
+        return 1
+    if gate_verdict == "fail":
+        return 1
+    if gate_verdict != "pass" and args.require_gate:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

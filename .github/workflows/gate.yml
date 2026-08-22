@@ -134,6 +134,80 @@ jobs:
         if: always()
         run: cat /tmp/gate-core.log || true
 
+  # RFX-147 — the customer's own verification, run against a real core.
+  #
+  # `reeflex-claude check` used to probe one thing: an unreachable core, assert
+  # the hook denies. That printed "PASS -- fail-closed verified" on an
+  # installation where `kubectl delete namespace production` was ALLOWED with no
+  # human (RFX-144, measured live on the published wheel). Stage 2 of `check`
+  # now sends destructive payloads through a REACHABLE core and exits non-zero
+  # on an unexpected allow — so this job is the two commands we tell a customer
+  # to run, run by us, against the tree under review.
+  #
+  # WHY A SEPARATE JOB, NOT A STEP IN preflight-gate.
+  # On main today this job is RED, correctly: the classifier's first-token verb
+  # rule lets 5 of the 6 destructive probes through (RFX-144/RFX-146, fix in
+  # flight). Folding it into preflight-gate would block every unrelated PR in
+  # the repo on someone else's fix. As its own job it is loudly red and blocks
+  # nothing until the owner chooses to mark it a required check — which is the
+  # right call to put in front of a human rather than take here.
+  claude-gate-probe:
+    name: reeflex-claude gate probe (RFX-147 — red until RFX-144 lands)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install OPA (the policy pack needs it to decide anything)
+        run: |
+          curl -fsSL -o /usr/local/bin/opa \
+            https://github.com/open-policy-agent/opa/releases/download/v1.18.0/opa_linux_amd64_static
+          chmod +x /usr/local/bin/opa
+          opa version
+
+      - name: Start a local reeflex-core from THIS tree
+        working-directory: reeflex-core
+        env:
+          REEFLEX_PORT: "8098"
+          REEFLEX_POLICY_DIR: policy
+          REEFLEX_AUDIT_LOG: /tmp/claude-gate-core-audit.jsonl
+        run: |
+          nohup python main.py > /tmp/claude-gate-core.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8098/healthz; then
+              echo "reeflex-core is up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error title=reeflex-core did not start::the gate probe cannot run without it"
+          cat /tmp/claude-gate-core.log
+          exit 1
+
+      - name: Install reeflex-claude the way a customer does
+        run: pip install ./reeflex-claude
+
+      # --require-gate is what makes the exit code a statement about the gate:
+      # without it, an unreachable core would leave the gate unverified and
+      # still exit 0. Nothing is executed by the probes — the hook only
+      # classifies a proposed tool call and returns a verdict.
+      - name: reeflex-claude check --require-gate
+        env:
+          REEFLEX_CORE_URL: http://127.0.0.1:8098
+          REEFLEX_MODE: enforce
+          REEFLEX_CLAUDE_ENVIRONMENT: production
+        run: reeflex-claude check --project --require-gate
+
+      - name: reeflex-core decisions (always — this is what the probes decided)
+        if: always()
+        run: |
+          cat /tmp/claude-gate-core.log || true
+          cat /tmp/claude-gate-core-audit.jsonl || true
+
   smoke-pypi:
     name: fresh-install-from-PyPI smoke
     # DoD(4) by INVOCATION, not reimplementation (§22.6 collision guard).

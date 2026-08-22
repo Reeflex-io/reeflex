@@ -260,13 +260,23 @@ class TestCliSetup(unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 # check -- end-to-end subprocess tests
+#
+# These cover the fail-closed probe and the settings-wiring advisory. Since
+# RFX-147 `check` also probes the CONFIGURED core, so every one of them pins
+# REEFLEX_CORE_URL to an address nothing listens on -- otherwise the result
+# depends on whatever core the developer's shell happens to point at, and the
+# suite goes red for a reason that is the environment's, not the tree's. The
+# gate stage has its own tests in test_gate_probe.py.
 # ---------------------------------------------------------------------------
+
+_NO_CORE = {"REEFLEX_CORE_URL": "http://127.0.0.1:1"}
+
 
 class TestCliCheck(unittest.TestCase):
 
     def test_check_passes_on_healthy_install_no_settings_file(self):
         with tempfile.TemporaryDirectory() as d:
-            stdout, stderr, code = _run_cli(["check", "--project"], cwd=d)
+            stdout, stderr, code = _run_cli(["check", "--project"], cwd=d, extra_env=_NO_CORE)
             self.assertEqual(code, 0, f"stdout={stdout}\nstderr={stderr}")
             self.assertIn("PASS -- fail-closed verified", stdout)
             self.assertIn("not found", stdout)  # NOTE about missing settings.json
@@ -274,7 +284,7 @@ class TestCliCheck(unittest.TestCase):
     def test_check_passes_and_confirms_settings_after_setup(self):
         with tempfile.TemporaryDirectory() as d:
             _run_cli(["setup", "--project"], cwd=d)
-            stdout, stderr, code = _run_cli(["check", "--project"], cwd=d)
+            stdout, stderr, code = _run_cli(["check", "--project"], cwd=d, extra_env=_NO_CORE)
             self.assertEqual(code, 0, f"stdout={stdout}\nstderr={stderr}")
             self.assertIn("PASS -- fail-closed verified", stdout)
             self.assertIn("settings OK", stdout)
@@ -285,7 +295,7 @@ class TestCliCheck(unittest.TestCase):
             claude_dir.mkdir(parents=True)
             (claude_dir / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": []}}),
                                                         encoding="utf-8")
-            stdout, stderr, code = _run_cli(["check", "--project"], cwd=d)
+            stdout, stderr, code = _run_cli(["check", "--project"], cwd=d, extra_env=_NO_CORE)
             self.assertEqual(code, 0, f"stdout={stdout}\nstderr={stderr}")
             self.assertIn("PASS -- fail-closed verified", stdout)
             self.assertIn("does not contain a reeflex-claude PreToolUse hook entry", stdout)

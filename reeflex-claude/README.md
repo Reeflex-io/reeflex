@@ -51,7 +51,7 @@ or point at an existing deployment.
 
 ```bash
 reeflex-claude setup   # writes the fail-closed PreToolUse hook into .claude/settings.json
-reeflex-claude check   # verifies the deny path: fails closed if core is unreachable
+reeflex-claude check   # verifies the deny path AND whether your gate stops a production destruction
 ```
 
 `setup` targets the current project's `./.claude/settings.json` by default
@@ -89,23 +89,69 @@ Expected `reeflex-claude setup` output (abridged):
 [reeflex-claude] Now run: reeflex-claude check
 ```
 
+`check` runs **two stages**, and prints a verdict for each.
+
+**Stage 1 — fail-closed plumbing.** Forces the probe's own
+`REEFLEX_MODE=enforce` and points it at an unreachable core address regardless
+of your real configuration, then asserts the hook denies and exits `0`. This
+tests the **adapter**: installed correctly, resolvable on `PATH`, denies when
+core cannot be reached.
+
+**Stage 2 — the gate.** Sends a small named set of destructive payloads
+(`kubectl delete namespace production`, `terraform destroy -auto-approve`,
+`cd /srv/prod && rm -rf data`, …) through the hook to **your real configured
+core**, and asserts each is denied or routed to a human. **An unexpected
+`allow` exits non-zero.** Nothing is executed — a PreToolUse hook only
+classifies a proposed tool call and returns a verdict. One benign probe
+(`ls -la /srv/prod`) is expected to be *allowed*, so a gate that denied
+everything cannot pass by accident.
+
+Stage 2 probes the configuration **the hook will actually run under**: the
+`env` block in your `settings.json` is applied on top of your shell
+environment, exactly as Claude Code does it, and the effective core URL, mode
+and environment are printed before the probes run.
+
 Expected `reeflex-claude check` output (PASS):
 
 ```
 [reeflex-claude] probing hook command: ['/path/to/venv/Scripts/reeflex-claude', 'hook']
+[reeflex-claude] fail-closed probe: hook denied the probe and exited 0 ...
+
+[reeflex-claude] gate probe -- the configuration the HOOK will run under:
+    core url    : http://127.0.0.1:8080
+    mode        : enforce
+    environment : production
+[reeflex-claude] sending 7 probes. Nothing is executed -- the hook only classifies and answers.
+
+  [            PASS] rm-recursive-prod-dir          ask    reeflex.policy/irreversible_broad_prod
+                     $ rm -rf /srv/prod/data
+                     routed to a human or refused.
+  ...
+  [            PASS] benign-list-directory          allow  reeflex.policy/read_only_internal
+
 ======================================================================
 PASS -- fail-closed verified
+PASS -- gate verified: 6 of 6 production destructions routed to a human or refused
 ======================================================================
-hook denied the probe and exited 0 (fail-closed verified). stdout=...
 [reeflex-claude] settings OK: /path/to/.claude/settings.json contains the reeflex-claude PreToolUse hook.
 ```
 
-`check` forces the probe's own `REEFLEX_MODE=enforce` and points it at an
-unreachable core address regardless of your real configuration — it is
-testing the **adapter's** fail-closed plumbing (installed correctly,
-resolvable on `PATH`, denies when core is unreachable), not your policy
-configuration (that is core's job, exercised by `demo/run_demo.py` or a real
-`/v1/decide` call). Exit code `0` = PASS, `1` = FAIL.
+| Flag             | Effect                                                                                 |
+|------------------|----------------------------------------------------------------------------------------|
+| `--require-gate` | Exit non-zero unless stage 2 obtained real policy verdicts. **Use this in CI.**         |
+| `--skip-gate`    | Run stage 1 only. The check then makes no statement about whether your gate stops anything. |
+
+Exit code `0` = PASS, `1` = FAIL.
+
+**A deny is not automatically a pass.** An unreachable core denies
+*everything*, which looks identical to a working gate. Stage 2 therefore reads
+the **rule** on each verdict: only `reeflex.policy/...` is a decision your
+policy pack made. A deny carrying `reeflex.core/fail_closed` is reported
+`NOT-EXERCISED`, and the headline says `GATE NOT VERIFIED`. Same for
+`REEFLEX_MODE=observe`, which allows everything by design: those verdicts are
+`NOT-ENFORCED`, never a pass. Without `--require-gate` those cases still exit
+`0` — the gate being unverified is not the same as the gate being broken — but
+`check` never prints a bare `PASS` that implies more than it measured.
 
 **Why this structurally fixes the old fail-open bug:** once installed via
 pip, `reeflex-claude hook` is a console entry point resolved from `PATH` —
@@ -247,10 +293,14 @@ needed here: `api-dev.reeflex.io` carries a valid, publicly-trusted
 certificate. Starting with `--mode observe` lets you watch decisions land in
 the audit log without the adapter enforcing them, so a policy
 misconfiguration or connectivity issue can't block your Claude Code session.
-Note that `reeflex-claude check` always probes with an intentionally
-unreachable core address regardless of `--core-url` — it verifies the
-adapter's fail-closed plumbing, not connectivity to api-dev itself; use the
-demo or a manual `curl .../v1/decide` to confirm the endpoint responds.
+Note that `check`'s **stage 1** always probes with an intentionally unreachable
+core address regardless of `--core-url` — it verifies the adapter's fail-closed
+plumbing, not connectivity to api-dev. **Stage 2** does use `--core-url`, so it
+confirms the endpoint responds *and* what it decides. With `--mode observe`,
+though, the hook allows everything by design: stage 2 reports every probe as
+`NOT-ENFORCED` and the headline says the gate was not verified. Re-run with
+`--mode enforce` once you have watched the audit log and are ready for the gate
+to actually hold.
 
 For the git-clone / manual-export path, the equivalent is:
 
@@ -291,7 +341,10 @@ tests spin a local stub server). `test_setup_settings.py` and `test_cli.py`
 cover `setup`'s merge semantics (fresh write, merge-preserving, corrupt-JSON
 refusal) and `check`'s deny-scenario probe (healthy install, missing binary,
 non-zero exit, malformed output, wrong decision) without touching your real
-`~/.claude` or `./.claude` directories.
+`~/.claude` or `./.claude` directories. `test_gate_probe.py` covers stage 2 —
+the outcome table (including that a `reeflex.core/fail_closed` deny is *not*
+counted as a working gate) and the exit codes, via an injected stub hook, so
+no core and no network are needed.
 
 ## Limits / upgrade paths
 
