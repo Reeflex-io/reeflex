@@ -14,6 +14,9 @@ Record fields (one per decision):
   verb               string (SPEC §3)
   ability            string (e.g. "claude-code/Bash")
   environment        string (production|staging|dev)
+  target_ref         string|null -- WHICH resource (RFX-206); redacted and
+                     length-capped by classify.py, never credential material
+  magnitude_count    int -- how many entities the action affects
   axes               {reversibility, blast_radius, externality}
   classification_tier string
   danger_signature   string
@@ -131,6 +134,12 @@ def _build_record(
         "verb":               action.get("verb"),
         "ability":            action.get("ability"),
         "environment":        target.get("environment"),
+        # RFX-206: WHICH resource. Without it the local record says only that
+        # "a delete was held in production", which is not something a human can
+        # answer or an auditor can check. Already redacted and length-capped by
+        # classify.py -- see _unknown_target_ref.
+        "target_ref":         target.get("ref"),
+        "magnitude_count":    (envelope.get("magnitude") or {}).get("count"),
         "axes":               axes,
         "classification_tier": context.get("classification_tier"),
         "danger_signature":   context.get("danger_signature"),
