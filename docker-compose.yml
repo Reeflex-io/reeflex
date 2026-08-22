@@ -35,6 +35,27 @@ services:
       # REEFLEX_SYSLOG_FORMAT: "json"        # json | cef        (default: json)
       # REEFLEX_SYSLOG_FACILITY: "local0"    # syslog facility   (default: local0)
       # REEFLEX_SYSLOG_TLS_VERIFY: "true"    # tls only: verify CA (default: true)
+    # -------------------------------------------------------------------------
+    # STATE THAT MUST OUTLIVE THE CONTAINER (RFX-197).
+    #
+    # /app/audit holds two things, and until RFX-197 this file mounted NEITHER:
+    #
+    #   decisions.jsonl  the append-only audit log — the Art.14 evidence trail.
+    #   ledger.jsonl     the per-session cumulative ledger — the thing R5's
+    #                    budgets are enforced against, i.e. the substance of the
+    #                    "fragmentation buys nothing" guarantee.
+    #
+    # With no volume both live in the container's writable layer, so
+    # `docker compose up --force-recreate`, an image upgrade, or any orchestrator
+    # that replaces the container starts every session's spend again from zero.
+    # Measured before this change: replay the same session_id after a recreate
+    # and the full delete budget is available again, with no human, no privilege
+    # and nothing in the audit log saying it happened.
+    #
+    # A NAMED VOLUME IS THE ENFORCEMENT BOUNDARY, NOT A CONVENIENCE. Remove it
+    # and the product silently returns to the RFX-197 behaviour.
+    volumes:
+      - reeflex-state:/app/audit
     ports:
       - "${REEFLEX_HOST_PORT:-8080}:8080"
     healthcheck:
@@ -44,3 +65,22 @@ services:
       retries: 3
       start_period: 5s
     restart: unless-stopped
+
+# -----------------------------------------------------------------------------
+# RFX-197 — SCALING THIS STACK OUT NEEDS ONE MORE THING THAN A `deploy.replicas`.
+#
+# The named volume below makes ONE core remember across restarts, and it makes
+# several cores SHARE one budget only if they all mount THE SAME volume and that
+# volume is genuinely shared. That holds for replicas on one host, which is what
+# this file describes. It does NOT hold for replicas on separate hosts, or for a
+# ReadWriteOnce PVC per pod: each then keeps its own ledger and each therefore
+# grants a full session budget, so N replicas multiply every cumulative budget
+# by N. A file cannot fix that; the shared-store upgrade (docs/roadmap.md, the
+# Postgres-backed ledger) can.
+#
+# Until it lands, this is checkable rather than assumed: GET /healthz reports
+# `ledger.durable` and `ledger.path`, and every core writes a `ledger_epoch`
+# event to the audit stream at boot saying what it restored. Replicas that do
+# not agree are visible, not silent.
+volumes:
+  reeflex-state:

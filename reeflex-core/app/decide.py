@@ -107,11 +107,18 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 import uuid
 
 from .envelope import validate_and_fill_defaults, ValidationError
-from .ledger import compute_cumulative, append_entry
+from .ledger import (
+    compute_cumulative,
+    append_entry,
+    session_guard,
+    ledger_epoch,
+    LedgerWriteError,
+)
 from .opa import evaluate, OpaEvalError
 from .audit import record
 from .telemetry import get_emitter
@@ -191,8 +198,24 @@ _INTERNAL_ERROR_DECISION: dict = {
 # Stores the last-seen freeze state so we can detect flips.
 # None = not yet read (first request).  True/False = last known state.
 _last_freeze_state: bool | None = None
-_freeze_lock = None  # we use module-level state + GIL; no explicit lock needed
-                     # (Python bool assignment is atomic under the GIL)
+
+# RFX-198 — this used to read:
+#
+#     _freeze_lock = None  # we use module-level state + GIL; no explicit lock
+#                          # needed (Python bool assignment is atomic under
+#                          # the GIL)
+#
+# The assignment is indeed atomic. The COMPARE-THEN-ASSIGN in
+# _check_freeze_flip() is not, and it was written when app/server.py served
+# one request at a time, so no two callers could ever be inside it together.
+# RFX-198 makes the request path concurrent, which makes this a real
+# read-modify-write: two threads that both observe (stored=False,
+# current=True) both assign and both fire, so the operator's kill switch --
+# the ONE event the module docstring says must reach the webhook, the audit
+# log and the SIEM -- is reported twice for one flip. Detection noise on the
+# kill switch, not a wrong decision, but the fix is three lines and the
+# alternative is a comment that is no longer true.
+_freeze_lock = threading.Lock()
 
 
 def _read_freeze() -> bool:
@@ -209,13 +232,19 @@ def _check_freeze_flip(current: bool) -> None:
     exception here is swallowed rather than blocking the request.
     """
     global _last_freeze_state
-    if _last_freeze_state is None:
+    # The compare and the assign are ONE critical section (RFX-198): under a
+    # concurrent request path, two threads seeing the same stale value would
+    # otherwise both fire for a single flip. The fire itself is deliberately
+    # OUTSIDE the lock -- it does network I/O (webhook) and must not serialise
+    # decisions behind a slow SIEM.
+    with _freeze_lock:
+        if _last_freeze_state is None:
+            _last_freeze_state = current
+            return
+        if current == _last_freeze_state:
+            return
+        # State changed
         _last_freeze_state = current
-        return
-    if current == _last_freeze_state:
-        return
-    # State changed
-    _last_freeze_state = current
     _try_fire_freeze_flipped(current)
 
 
@@ -759,7 +788,46 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
             }
             if parent_decision_id:
                 allow_decision["parent_decision_id"] = parent_decision_id
-            append_entry(session_id, envelope)
+
+            # RFX-197 — THE SECOND WRITER INTO THE LEDGER.
+            #
+            # This path allows an action WITHOUT consulting OPA (the human
+            # already approved it), but it still spends session budget, so it
+            # still has to be recorded or the next call under-counts. Held under
+            # the same per-session guard as Step 5-10 below, so an approved
+            # resubmission and an ordinary decision on one session cannot
+            # interleave their read-decide-write cycles either.
+            #
+            # On a write failure this DENIES, and the hold is already consumed
+            # by mark_consumed() above -- the human's approval is spent and the
+            # action refused. That is the deliberate direction to fail: the
+            # alternative is executing an approved irreversible action that the
+            # ledger has no record of, which is exactly what must not happen.
+            # The caller can ask for a new approval; it cannot un-execute.
+            try:
+                with session_guard(session_id):
+                    append_entry(session_id, envelope)
+            except LedgerWriteError as exc:
+                print(
+                    f"[reeflex-core] ERROR: session ledger write failed on an "
+                    f"approved resubmission, failing closed: {exc}",
+                    file=sys.stderr,
+                )
+                denial = _deny_response(
+                    "session ledger write failed - failing closed rather than "
+                    "executing an approved action the ledger cannot record",
+                    "reeflex.core/ledger_write_failed",
+                )
+                denial["decision_id"] = decision_id
+                _try_audit(
+                    session_id, envelope, {}, denial,
+                    decision_id=decision_id, hold_id=hold_id,
+                    envelope_hash=envelope_hash,
+                    parent_decision_id=parent_decision_id,
+                    traceparent=traceparent,
+                )
+                return 200, denial
+
             _try_audit(
                 session_id, envelope, {}, allow_decision,
                 decision_id=decision_id, hold_id=hold_id, envelope_hash=envelope_hash,
@@ -784,102 +852,161 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
             )
             return 200, allow_decision
 
-        # Step 5: Compute cumulative state from PRIOR ledger entries
-        cumulative = compute_cumulative(session_id, _WINDOW_SECONDS)
-
-        # Step 6: Build OPA input = envelope + injected cumulative
-        opa_input = dict(envelope)
-
-        # `cumulative` is CORE-COMPUTED and unconditionally overwritten here,
-        # so a caller that puts its own `cumulative` object in the envelope
-        # cannot pre-load the ledger with a fabricated history.  Stated
-        # explicitly because the assignment is what makes that true.
-        opa_input["cumulative"] = cumulative
-
-        # RFX-127 (belt): `input.approval.present` is a VERIFIED fact in the
-        # OPA input, never the caller's assertion.
+        # RFX-197: THE READ-DECIDE-WRITE CYCLE IS ONE ATOMIC UNIT.
         #
-        # By construction every path that reaches this line has approval
-        # present=false — Step 4 above now routes EVERY present=true envelope
-        # into the six-check validation chain, which either returns a deny or
-        # returns allow without consulting OPA at all.  This assignment makes
-        # that an ENFORCED property rather than an emergent one: if a future
-        # change re-introduces a path where an unvalidated approval reaches
-        # eval, the budget rule still sees present=false and still fires.  A
-        # rule may only be switched off by an approval core has verified.
-        _opa_approval = dict(envelope.get("approval") or {})
-        _opa_approval["present"] = False
-        opa_input["approval"] = _opa_approval
+        # Steps 5-10 read the session's prior spend, decide against it, and
+        # write this action into it. Held apart, two calls on ONE session can
+        # both read the same prior cumulative, both compare (prior + current)
+        # against the same limit, and both be allowed -- the budget is then
+        # enforced once per concurrent caller instead of once per session.
+        #
+        # This guard is not claiming the race was ever observed on a shipped
+        # image. Until RFX-198 it could not be: app/server.py built
+        # http.server.HTTPServer, which serialises requests, so the window was
+        # never interleaved (measured under RFX-197: 6 barrier-released
+        # simultaneous calls let exactly the budget through). But that was an
+        # accident of a dev-server choice, not a designed property, and RFX-198
+        # has now removed it -- the request path runs on a bounded worker pool
+        # (server.py: PooledHTTPServer; NOT ThreadingHTTPServer, because every
+        # decision forks an `opa eval`). So the window is real now, and this
+        # guard is the only thing closing it. A budget's correctness must not
+        # depend on the server class either way, which is why the guard was
+        # written before the server changed rather than alongside it.
+        #
+        # session_guard takes a per-stripe thread lock AND a POSIX record lock, so
+        # the cycle is atomic across threads and across processes (two replicas
+        # sharing the volume). Striped by session, so unrelated sessions do not
+        # serialise. Never raises: if the lock file is unavailable it degrades to
+        # in-process exclusion and says so once on stderr.
+        with session_guard(session_id):
+            # Step 5: Compute cumulative state from PRIOR ledger entries
+            cumulative = compute_cumulative(session_id, _WINDOW_SECONDS)
 
-        # Step 7: Evaluate via OPA — measure wall-clock latency for telemetry.
-        # perf_counter is used for latency only; NOT injected into OPA input
-        # (determinism invariant holds).
-        _t0 = time.perf_counter()
-        try:
-            opa_result = evaluate(opa_input)
-        except OpaEvalError:
-            # FAIL-CLOSED: deny on any OPA failure — do NOT silently allow.
-            decision_response = dict(_FAIL_CLOSED_DECISION)
-            decision_response["decision_id"] = decision_id
-            _try_audit(
-                session_id, envelope, cumulative, decision_response,
-                decision_id=decision_id, envelope_hash=envelope_hash,
-                traceparent=traceparent,
-            )
-            return 500, decision_response
-        _decision_latency_ms = int((time.perf_counter() - _t0) * 1000)
+            # Step 6: Build OPA input = envelope + injected cumulative
+            opa_input = dict(envelope)
 
-        # Step 8: Build the full Decision response (SPEC §5)
-        decision_response: dict = {
-            "decision": opa_result["decision"],
-            "reason": opa_result["reason"],
-            "rule": opa_result["rule"],
-            "obligations": opa_result.get("obligations", []),
-            "modulation": None,  # reserved (SPEC §5)
-            "decision_id": decision_id,
-        }
+            # `cumulative` is CORE-COMPUTED and unconditionally overwritten here,
+            # so a caller that puts its own `cumulative` object in the envelope
+            # cannot pre-load the ledger with a fabricated history.  Stated
+            # explicitly because the assignment is what makes that true.
+            opa_input["cumulative"] = cumulative
 
-        # Step 9: HIL hold creation (T2b) — when verdict is require_approval
-        # and there is NO valid approval already (normal first submission)
-        if (
-            decision_response["decision"] == "require_approval"
-            and not approval_present
-        ):
-            hold_id = None
-            expires_ts = None
+            # RFX-127 (belt): `input.approval.present` is a VERIFIED fact in the
+            # OPA input, never the caller's assertion.
+            #
+            # By construction every path that reaches this line has approval
+            # present=false — Step 4 above now routes EVERY present=true envelope
+            # into the six-check validation chain, which either returns a deny or
+            # returns allow without consulting OPA at all.  This assignment makes
+            # that an ENFORCED property rather than an emergent one: if a future
+            # change re-introduces a path where an unvalidated approval reaches
+            # eval, the budget rule still sees present=false and still fires.  A
+            # rule may only be switched off by an approval core has verified.
+            _opa_approval = dict(envelope.get("approval") or {})
+            _opa_approval["present"] = False
+            opa_input["approval"] = _opa_approval
+
+            # Step 7: Evaluate via OPA — measure wall-clock latency for telemetry.
+            # perf_counter is used for latency only; NOT injected into OPA input
+            # (determinism invariant holds).
+            _t0 = time.perf_counter()
             try:
-                from .holds import create_hold  # type: ignore[import]
-                from .webhook import fire as wh_fire  # type: ignore[import]
-                hold_rec = create_hold(
-                    envelope, decision_response["rule"], decision_id=decision_id,
-                )
-                hold_id = hold_rec["id"]
-                expires_ts = hold_rec["expires_ts"]
-                # Annotate the response with hold info
-                decision_response["hold_id"] = hold_id
-                decision_response["expires_ts"] = expires_ts
-                # Fire hold.created webhook (non-blocking, fail-open)
-                wh_fire("hold.created", {
-                    "hold_id": hold_id,
-                    "rule_id": decision_response["rule"],
-                    "status": "pending",
-                    "expires_ts": expires_ts,
-                })
-            except Exception:  # noqa: BLE001
-                # Fail-closed: hold creation failure -> deny
-                denial = dict(_INTERNAL_ERROR_DECISION)
-                denial["reason"] = "hold creation failed - failing closed"
-                denial["rule"] = "reeflex.core/hold_creation_failed"
-                denial["decision_id"] = decision_id
+                opa_result = evaluate(opa_input)
+            except OpaEvalError:
+                # FAIL-CLOSED: deny on any OPA failure — do NOT silently allow.
+                decision_response = dict(_FAIL_CLOSED_DECISION)
+                decision_response["decision_id"] = decision_id
                 _try_audit(
-                    session_id, envelope, cumulative, denial,
+                    session_id, envelope, cumulative, decision_response,
                     decision_id=decision_id, envelope_hash=envelope_hash,
                     traceparent=traceparent,
                 )
-                return 500, denial
+                return 500, decision_response
+            _decision_latency_ms = int((time.perf_counter() - _t0) * 1000)
 
-        # Step 10: Append to session ledger AFTER eval
-        append_entry(session_id, envelope)
+            # Step 8: Build the full Decision response (SPEC §5)
+            decision_response: dict = {
+                "decision": opa_result["decision"],
+                "reason": opa_result["reason"],
+                "rule": opa_result["rule"],
+                "obligations": opa_result.get("obligations", []),
+                "modulation": None,  # reserved (SPEC §5)
+                "decision_id": decision_id,
+            }
+
+            # Step 9: HIL hold creation (T2b) — when verdict is require_approval
+            # and there is NO valid approval already (normal first submission)
+            if (
+                decision_response["decision"] == "require_approval"
+                and not approval_present
+            ):
+                hold_id = None
+                expires_ts = None
+                try:
+                    from .holds import create_hold  # type: ignore[import]
+                    from .webhook import fire as wh_fire  # type: ignore[import]
+                    hold_rec = create_hold(
+                        envelope, decision_response["rule"], decision_id=decision_id,
+                    )
+                    hold_id = hold_rec["id"]
+                    expires_ts = hold_rec["expires_ts"]
+                    # Annotate the response with hold info
+                    decision_response["hold_id"] = hold_id
+                    decision_response["expires_ts"] = expires_ts
+                    # Fire hold.created webhook (non-blocking, fail-open)
+                    wh_fire("hold.created", {
+                        "hold_id": hold_id,
+                        "rule_id": decision_response["rule"],
+                        "status": "pending",
+                        "expires_ts": expires_ts,
+                    })
+                except Exception:  # noqa: BLE001
+                    # Fail-closed: hold creation failure -> deny
+                    denial = dict(_INTERNAL_ERROR_DECISION)
+                    denial["reason"] = "hold creation failed - failing closed"
+                    denial["rule"] = "reeflex.core/hold_creation_failed"
+                    denial["decision_id"] = decision_id
+                    _try_audit(
+                        session_id, envelope, cumulative, denial,
+                        decision_id=decision_id, envelope_hash=envelope_hash,
+                        traceparent=traceparent,
+                    )
+                    return 500, denial
+
+            # Step 10: Append to session ledger AFTER eval
+            #
+            # RFX-197 — AN ENFORCEMENT POINT THAT CANNOT REMEMBER MUST REFUSE.
+            #
+            # This is deliberately asymmetric with Step 11 four lines below.
+            # Audit is EVIDENCE and is best-effort: _try_audit swallows its own
+            # failure because a lost evidence line must not change a decision.
+            # The ledger is ENFORCEMENT: an action that is allowed but NOT
+            # recorded means the NEXT call in this session compares its spend
+            # against a total that is missing this one, so the budget silently
+            # grants more than its limit. That is the same fail-open RFX-197 is
+            # about, arrived at from a full disk instead of a restart.
+            #
+            # So a ledger write failure DENIES. The exception to that is a
+            # decision that was already a denial: the action is refused either
+            # way, and the original rule is the more informative thing for the
+            # auditor to see, so it is preserved rather than overwritten.
+            try:
+                append_entry(session_id, envelope)
+            except LedgerWriteError as exc:
+                print(
+                    f"[reeflex-core] ERROR: session ledger write failed, failing "
+                    f"closed: {exc}",
+                    file=sys.stderr,
+                )
+                if decision_response["decision"] != "deny":
+                    _original_rule = decision_response.get("rule", "")
+                    decision_response = _deny_response(
+                        "session ledger write failed - failing closed so the next "
+                        "call in this session cannot be decided against an "
+                        f"under-counted budget (would have been: {_original_rule})",
+                        "reeflex.core/ledger_write_failed",
+                    )
+                    decision_response["decision_id"] = decision_id
 
         # Step 11: Audit (best-effort; audit failure does not change the decision)
         # hold_id is carried through only when a hold was just created above
@@ -949,7 +1076,19 @@ def _try_audit(
 
     The keyword-only traceability fields are additive (default "") so any
     existing/older call site keeps working unmodified.
+
+    RFX-197: the ledger epoch is stamped HERE rather than at each call site,
+    because this function is the single funnel every decision record passes
+    through -- so no path can produce an audit row whose `cumulative_injected`
+    cannot be joined to the ledger continuity boundary it was computed under.
+    ledger_epoch() cannot raise into the decision path in practice, but this
+    whole body is already best-effort, so a failure costs an audit row and
+    never a decision.
     """
+    try:
+        _epoch_id = ledger_epoch().get("epoch_id", "")
+    except Exception:  # noqa: BLE001
+        _epoch_id = ""
     try:
         record(
             session_id, envelope, cumulative, decision_response,
@@ -959,6 +1098,7 @@ def _try_audit(
             envelope_hash=envelope_hash,
             parent_decision_id=parent_decision_id,
             traceparent=traceparent,
+            ledger_epoch=_epoch_id,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[reeflex-core] WARN: audit write failed: {exc}", file=sys.stderr)
