@@ -6,7 +6,7 @@ Records are immutable once written: we append, never update or delete.
 
 Log path: env REEFLEX_AUDIT_LOG (default: <repo>/reeflex-core/audit/decisions.jsonl).
 
-Two record shapes share this SAME append-only stream (one ordered, tamper-
+Three record shapes share this SAME append-only stream (one ordered, tamper-
 evident log; same lock, same fsync, same read-back-after-write discipline):
 
   1. DECISION records (record(), no "event" key on the historical shape —
@@ -16,12 +16,33 @@ evident log; same lock, same fsync, same read-back-after-write discipline):
      the AI Act Art.14 human-oversight evidence trail: it captures WHO decided
      and WHEN, keyed to the decision_id of the transit the resolution enabled
      (see record_hold_resolution() docstring for exact emission points).
+  3. LEDGER_EPOCH events (record_ledger_epoch(), "event": "ledger_epoch") —
+     one per process boot, saying what cumulative session state this core
+     restored and whether it can remember at all (RFX-197).
 
-Both shapes are distinguished by the "event" key (absent/omitted on legacy
+WHY (3) IS ON THIS STREAM AND NOT ONLY IN A LOG LINE (RFX-197).  The decision
+records above carry `cumulative_injected`, which is the counter R5's budgets
+are enforced against.  Before RFX-197 that counter lived in a process-local
+dict, so a restart silently reset it — and the reset was invisible HERE, on the
+one stream an auditor actually reads.  Two consecutive rows for one session,
+eleven seconds apart, both asserting `window_seconds: 3600`, carried
+`count_by_verb.delete` 20 then 0: a monotonic counter moving backwards inside
+its own declared window.  The contradiction was machine-detectable and nothing
+detected it, because `grep -icE 'start|boot|restart|ledger|reset|epoch'` over
+the whole file returned 0 — there was no event that could explain it.
+
+So a counter that falls now has a named cause on the same append-only stream
+that carries the contradiction: every boot writes one ledger_epoch event, and
+every decision record carries the `ledger_epoch` it was decided under.  A
+consumer diffing two rows of one session can distinguish "spend was forgotten
+because this core restarted" (epoch changed, and an event says so) from "spend
+was forgotten and nobody knows why" (epoch identical — a real defect).
+
+The shapes are distinguished by the "event" key (absent/omitted on legacy
 decision records for backward compatibility with existing consumers that
-never looked for it; present and equal to "hold_resolution" on resolution
-events). A consumer that only understands decision records can keep
-filtering on `"decision" in record` / ignoring unknown "event" values.
+never looked for it; present and equal to "hold_resolution" / "ledger_epoch"
+on the event shapes). A consumer that only understands decision records can
+keep filtering on `"decision" in record` / ignoring unknown "event" values.
 
 SKELETON SHORTCUTS (upgrade path documented):
   - Signing: TODO — sign each record with an ed25519 key (Vault-backed) so
@@ -117,6 +138,7 @@ def record(
     envelope_hash: str = "",
     parent_decision_id: str = "",
     traceparent: str = "",
+    ledger_epoch: str = "",
 ) -> dict:
     """
     Append one audit record and immediately read it back to prove it landed.
@@ -177,6 +199,20 @@ def record(
                             agent.session_id, and to compare NORMALIZED
                             values, so it is no longer a single verbatim
                             field). Empty string if absent.
+
+    Ledger continuity (additive, RFX-197):
+      ledger_epoch          keyword-only, default "" (key omitted when empty).
+                            The epoch_id of the ledger state that
+                            `cumulative_injected` was computed against, stamped
+                            for every decision record by decide._try_audit().
+                            This is what makes a cumulative counter that FELL
+                            inside its own declared window diagnosable rather
+                            than merely visible: the same epoch_id on both rows
+                            means the spend was lost with no explanation (a real
+                            defect), a different epoch_id means this core
+                            rebooted -- and the matching "ledger_epoch" event on
+                            this same stream says what it restored, from where,
+                            and whether it is durable at all.
     """
     rec: dict = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -206,6 +242,14 @@ def record(
         rec["parent_decision_id"] = parent_decision_id
     if traceparent:
         rec["traceparent"] = traceparent
+    # RFX-197: which ledger continuity boundary was `cumulative_injected`
+    # computed under. Two rows of one session whose counter went DOWN are a
+    # defect if this value is identical on both, and an explained restart if it
+    # is not -- and the "ledger_epoch" event on this same stream says which.
+    # Omitted (key absent) when unknown, matching every other additive field
+    # above, so a consumer that never looked for it is unaffected.
+    if ledger_epoch:
+        rec["ledger_epoch"] = ledger_epoch
 
     return _append_and_readback(
         rec,
@@ -312,5 +356,66 @@ def record_hold_resolution(
             "event": rec["event"],
             "hold_id": rec["hold_id"],
             "resolution": rec["resolution"],
+        },
+    )
+
+
+def record_ledger_epoch(epoch: dict) -> dict:
+    """Append one "ledger_epoch" event: what cumulative state this boot restored.
+
+    RFX-197.  Called once per process, from ledger._mint_epoch(), the first
+    time the session ledger is folded.  The point is not the log line — it is
+    that the ONE stream carrying `cumulative_injected` also carries the only
+    event that can legitimately explain a cumulative counter which fell inside
+    its own declared window.
+
+    Fields (all sourced from ledger.ledger_epoch(), none caller-supplied):
+      epoch_id           uuid4 hex naming this continuity boundary.  Every
+                         decision record carries the epoch_id it was decided
+                         under, so a consumer can join a counter reset to the
+                         boot that caused it.
+      durable            False means REEFLEX_LEDGER_PERSIST is explicitly off,
+                         i.e. this core is back to the RFX-197 behaviour: every
+                         session budget resets on restart and is shared with no
+                         other replica.  An operator who turned persistence off
+                         has said so in the evidence, which is the difference
+                         between a documented choice and a silent regression.
+      path               the ledger file this core reads and writes.  Two
+                         replicas showing the SAME path share one budget; two
+                         showing different paths (or different volumes behind
+                         the same path) do not — the residual this fix cannot
+                         close, made visible instead of assumed.
+      window_seconds     the rolling window the restored spend is counted over.
+      restored_sessions  how many sessions had live spend at boot.
+      restored_entries   how many entries were folded.  0 with durable=true on
+                         a core that has served traffic before is itself a
+                         finding: the volume is not the one it was writing to.
+      scan_truncated     True if the bounded boot scan hit its byte cap while
+                         still inside the window, so the restored spend may
+                         UNDER-count.  Visible rather than silent.
+
+    Raises OSError on write/read-back failure, exactly like record() and
+    record_hold_resolution().  The caller (ledger._mint_epoch) treats that as
+    best-effort: a missing marker must not stop the engine deciding, and it
+    already prints to stderr.  This is the same asymmetry the module documents
+    — audit is evidence, the ledger itself is enforcement.
+    """
+    rec: dict = {
+        "ts": epoch.get("ts") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "event": "ledger_epoch",
+        "epoch_id": epoch.get("epoch_id", ""),
+        "durable": bool(epoch.get("durable")),
+        "path": epoch.get("path", ""),
+        "window_seconds": int(epoch.get("window_seconds") or 0),
+        "restored_sessions": int(epoch.get("restored_sessions") or 0),
+        "restored_entries": int(epoch.get("restored_entries") or 0),
+        "scan_truncated": bool(epoch.get("scan_truncated")),
+    }
+
+    return _append_and_readback(
+        rec,
+        verify={
+            "event": rec["event"],
+            "epoch_id": rec["epoch_id"],
         },
     )
