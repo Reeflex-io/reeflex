@@ -28,7 +28,7 @@ each demo running against api-dev is embedded at the bottom of this page.
 
 - n8n with community nodes support (Node.js >= 20.15 for the node itself).
 - The `n8n-nodes-reeflex` package installed — it **is published on npm**
-  (`n8n-nodes-reeflex@0.1.0`). Two ways to get it:
+  (latest on npm; `npm view n8n-nodes-reeflex version` for the current one). Two ways to get it:
   - **From the n8n UI (standard path):** **Settings → Community Nodes →
     Install**, enter `n8n-nodes-reeflex`, confirm. Full walkthrough in the
     [community node install flow](https://docs.n8n.io/integrations/community-nodes/installation-and-management/).

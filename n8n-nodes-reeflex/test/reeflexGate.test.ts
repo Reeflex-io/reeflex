@@ -467,4 +467,116 @@ it('processes multiple items independently, one call to core per item', async ()
 	assertEqual((calls[1].options.body as IDataObject & { agent: IDataObject }).agent.session_id, 'sess-b');
 });
 
+// ---------------------------------------------------------------------------
+// params / the money budget (the one budget over a quantity WITH A UNIT).
+// Before this behavior existed the node sent `params: {}` unconditionally, and
+// 12 irreversible outbound production payouts of unbounded value in one session
+// all came back `reeflex.policy/default_allow` from a real core - measured, not
+// assumed. The count budgets stop the 51st call; nothing ever stops the amount.
+// ---------------------------------------------------------------------------
+
+it('money > sends params.amount and params.currency when the operator declares them', async () => {
+	const { ctx, calls } = makeMockExecuteFunctions({
+		params: [
+			{
+				...DEFAULT_PARAMS,
+				verb: 'transact',
+				ability: 'stripe/create-payout',
+				additionalFields: { amount: 2500, currency: 'eur' },
+			},
+		],
+		httpImpl: async () =>
+			fullResponse(200, { decision: 'allow', reason: 'ok', rule: 'x', obligations: [], modulation: null }),
+	});
+
+	await runExecute(ctx);
+
+	const params = (calls[0].options.body as IDataObject).params as IDataObject;
+	assertEqual(params.amount, 2500);
+	// upper-cased so it matches budgets.rego's per-currency table rather than
+	// silently falling through to the stricter "unknown currency" limit
+	assertEqual(params.currency, 'EUR');
+});
+
+it('money > leaves params empty for a non-money action, so nothing else changes', async () => {
+	const { ctx, calls } = makeMockExecuteFunctions({
+		httpImpl: async () =>
+			fullResponse(200, { decision: 'allow', reason: 'ok', rule: 'x', obligations: [], modulation: null }),
+	});
+
+	await runExecute(ctx);
+
+	assertEqual(Object.keys((calls[0].options.body as IDataObject).params as IDataObject).length, 0);
+});
+
+it('money > routes a transact with NO declared Amount to Denied and never calls core', async () => {
+	const { ctx, calls } = makeMockExecuteFunctions({
+		params: [{ ...DEFAULT_PARAMS, verb: 'transact', ability: 'stripe/create-payout' }],
+		httpImpl: async () => {
+			throw new Error('core must not be called for an unpriceable money move');
+		},
+	});
+
+	const [allowed, held, denied] = await runExecute(ctx);
+
+	assertEqual(allowed.length, 0);
+	assertEqual(held.length, 0);
+	assertEqual(denied.length, 1);
+	assertEqual(calls.length, 0, 'an unpriceable transact must not reach core at all');
+	const reeflex = (denied[0].json as IDataObject).reeflex as IDataObject;
+	assertEqual(reeflex.decision, 'deny');
+	assertEqual(reeflex.rule, 'n8n-nodes-reeflex/fail_closed');
+	assertMatch(reeflex.reason, /moves money but no Amount was declared/);
+});
+
+it('money > a declared Amount with no Currency is a configuration error, not a silent send', async () => {
+	const { ctx } = makeMockExecuteFunctions({
+		params: [
+			{ ...DEFAULT_PARAMS, verb: 'transact', additionalFields: { amount: 2500, currency: '' } },
+		],
+		httpImpl: async () => {
+			throw new Error('should not be called');
+		},
+	});
+
+	await assertRejects(() => runExecute(ctx), /Currency is required/);
+});
+
+it('money > a non-transact verb may still declare an amount (obligations, refunds via update)', async () => {
+	const { ctx, calls } = makeMockExecuteFunctions({
+		params: [{ ...DEFAULT_PARAMS, verb: 'update', additionalFields: { amount: 40, currency: 'USD' } }],
+		httpImpl: async () =>
+			fullResponse(200, { decision: 'allow', reason: 'ok', rule: 'x', obligations: [], modulation: null }),
+	});
+
+	await runExecute(ctx);
+
+	const params = (calls[0].options.body as IDataObject).params as IDataObject;
+	assertEqual(params.amount, 40);
+	assertEqual(params.currency, 'USD');
+});
+
+// ---------------------------------------------------------------------------
+// Session scope. reeflex-core keys EVERY cumulative budget on
+// agent.session_id (decide.py resolve_session_identity), so the default this
+// field ships with decides whether fragmentation resistance survives across
+// workflow runs. Measured against a real core: 10 deletes of count=5 under one
+// session id held from the 5th; the same 10 under a per-run id put 50 of 50
+// through.
+// ---------------------------------------------------------------------------
+
+it('sessions > the Session ID default is workflow-scoped, not execution-scoped', () => {
+	const node = new ReeflexGate();
+	const sessionProp = node.description.properties.find((p) => p.name === 'sessionId');
+	if (!sessionProp) {
+		throw new Error('sessionId property not found');
+	}
+	assertEqual(sessionProp.default, '={{$workflow.id}}');
+	assertMatch(
+		sessionProp.description,
+		/WORKFLOW ID/,
+		'the description must say WHY it is not the execution id',
+	);
+});
+
 void main();

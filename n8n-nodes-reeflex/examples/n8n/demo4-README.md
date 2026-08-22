@@ -71,7 +71,7 @@ gets filmed at T7 against a local core**, not against api-dev.
 
 ## GIF (filmed at T7)
 
-*(placeholder — no GIF yet)*
+![demo4](./img/demo4-nothing-gets-through.gif)
 
 **This demo needs a local core to fully film (see above).** Plan:
 

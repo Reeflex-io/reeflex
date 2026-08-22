@@ -42,7 +42,7 @@
         "externality": "={{$json.externality}}",
         "count": "={{$json.count}}",
         "targetSystem": "={{$json.table}}",
-        "sessionId": "={{$execution.id}}",
+        "sessionId": "={{$workflow.id}}",
         "agentId": "agent:n8n-demo4-nothing-gets-through",
         "additionalFields": {}
       },
