@@ -127,6 +127,11 @@ SKIP_REGISTRY = {
         "needs a live reeflex-core and a php CLI. NOTE (RFX-105): CI now STARTS a "
         "core and passes --core-url, so this allowance is no longer used there — "
         "it remains for local runs on a box with no php.",
+    "wp-spec-conformance":
+        "needs a php CLI and NOTHING else — no core, no network (RFX-164). It is "
+        "registered here only for a box with no php at all; if php exists this "
+        "component has no reason to skip, which is why it is not folded into "
+        "wp-conformance's live-core allowance.",
     "migration-heads":
         "validates the PRIVATE reeflex-app repo's alembic graph, which is never "
         "checked out on this public repo's runner. reeflex-app's own ci.yml runs "
@@ -640,6 +645,44 @@ class Gate:
             self.component(key, "PASS", "%d harnesses vs %s (%s)"
                            % (len(self.WP_HARNESSES), self.args.core_url, "; ".join(details)))
 
+    # -- SPEC conformance vectors, no live core ------------------------------
+
+    # RFX-164: these harnesses assert the SPEC's normative axis derivations
+    # against the shared vector files in reeflex-spec/conformance/. They resolve
+    # entirely inside the normalizer — no /v1/decide call, no network — so they
+    # must NOT sit behind --core-url. Filed as their own component precisely
+    # because inheriting wp-conformance's live-core prerequisite would SKIP them
+    # for a reason that does not apply to them, and a suite skipped for the wrong
+    # reason is the RFX-105 defect with a different label.
+    #
+    # MERGE NOTE: dev-1's open PR #94 (RFX-131) introduces this same component
+    # for the blast_radius vectors. The two changes are a one-line union of
+    # WP_SPEC_HARNESSES — keep ONE component and BOTH list entries.
+    WP_SPEC_HARNESSES = [
+        ("conformance-reversibility.php", "SPEC §2 axes.reversibility"),
+    ]
+
+    def run_wp_spec(self):
+        key = "wp-spec-conformance"
+        if not self.php:
+            self.component(key, "SKIPPED", "php CLI not found")
+            return
+        failures, details = [], []
+        for script, what in self.WP_SPEC_HARNESSES:
+            code, out = self.run_cmd([self.php, "tests/%s" % script],
+                                     cwd=os.path.join(REPO_ROOT, "reeflex-wordpress"))
+            self.emit("  -- %s (%s)" % (script, what))
+            self.show(out, full=code != 0, tail=20)
+            if code == 0:
+                details.append("%s: exit 0" % script)
+            else:
+                failures.append("%s: exit %d" % (script, code))
+        if failures:
+            self.component(key, "FAIL", "; ".join(failures))
+        else:
+            self.component(key, "PASS", "%d spec harness(es), no live core needed (%s)"
+                           % (len(self.WP_SPEC_HARNESSES), "; ".join(details)))
+
     # -- drift check ----------------------------------------------------------
 
     def run_drift(self):
@@ -741,6 +784,7 @@ class Gate:
             ("entrypoints     build wheels from tree + invoke every entry point", self.run_entrypoints),
             ("pypi-smoke      fresh install of the PUBLISHED packages", self.run_pypi_smoke),
             ("wp-conformance  WordPress live-core harness", self.run_wp),
+            ("wp-spec-conformance  SPEC axis vectors, no core needed", self.run_wp_spec),
             ("migration-heads-selftest  scripts/tests: check_migration_heads correctness", self.run_migration_heads_selftest),
             ("migration-heads  static alembic graph (reeflex-app, if checked out) — single head, no DB", self.run_migration_heads),
             ("test-census     every enumerated test file must YIELD TESTS (RFX-87)", self.run_test_census),

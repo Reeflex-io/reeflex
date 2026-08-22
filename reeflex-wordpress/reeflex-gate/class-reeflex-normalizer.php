@@ -27,8 +27,15 @@
  *
  *   reversibility:
  *     force/permanent/hard-delete/bypass-trash  -> irreversible
- *     soft-delete / trash                       -> recoverable
  *     bulk delete (count ≥ 20)                  -> irreversible (mirrors adapter.py)
+ *     delete of a TRASHABLE kind (post, page,
+ *       revision, comment; media only when
+ *       MEDIA_TRASH is on)                      -> recoverable
+ *     ...but broad/systemic                     -> irreversible (an action cannot
+ *                                                  be site-wide AND undoable)
+ *     delete of any other kind (user, term,
+ *       option, meta, plugin, theme, table)     -> irreversible (WordPress has
+ *                                                  no undo for these)
  *     simple update / create                    -> recoverable
  *     emit (publish/email/webhook to public)    -> irreversible
  *     read                                      -> reversible
@@ -142,6 +149,64 @@ final class Reeflex_Normalizer {
 		'bulk', 'batch', 'mass', 'every', 'all',
 	);
 
+	/**
+	 * Object kinds for which WordPress genuinely provides an undo.
+	 *
+	 * This is the ONLY set for which a plain `delete` is `recoverable`. The
+	 * previous rule was "delete verb -> recoverable (WP trash default)", which
+	 * is true of post-type objects and comments and FALSE of everything else:
+	 *
+	 *   posts / pages / revisions   wp_trash_post()      -> trash EXISTS
+	 *   comments                    wp_trash_comment()   -> trash EXISTS
+	 *   users                       wp_delete_user()     -> NO user trash
+	 *   terms                       wp_delete_term()     -> NO term trash
+	 *   options / meta              delete_option()      -> no prior value kept
+	 *   plugins / themes            delete_plugins()     -> files removed
+	 *   tables                      $wpdb DROP/TRUNCATE  -> no WP layer at all
+	 *
+	 * Attachments are deliberately NOT in this list: wp_delete_attachment()
+	 * only trashes when MEDIA_TRASH is defined true, and that is OFF by
+	 * default, so by default the original file and every generated size are
+	 * unlinked from disk. is_trashable_kind() reads the constant so a site that
+	 * has opted in still gets `recoverable`.
+	 *
+	 * @var array<int,string>
+	 */
+	private const TRASHABLE_SEGMENTS = array(
+		'post', 'posts', 'page', 'pages', 'revision', 'revisions',
+		'comment', 'comments',
+	);
+
+	/**
+	 * Object kinds that are trashable ONLY when MEDIA_TRASH is enabled.
+	 *
+	 * @var array<int,string>
+	 */
+	private const MEDIA_SEGMENTS = array(
+		'attachment', 'attachments', 'media', 'upload', 'uploads', 'image', 'images',
+	);
+
+	/**
+	 * Object kinds WordPress cannot restore. Checked BEFORE TRASHABLE_SEGMENTS
+	 * so that the non-trashable kind wins when an ability names both:
+	 * `meta/delete-post-meta` deletes META, not a post, and must not be called
+	 * recoverable because the word "post" appears in it.
+	 *
+	 * @var array<int,string>
+	 */
+	private const NON_TRASHABLE_SEGMENTS = array(
+		'user', 'users', 'usermeta',
+		'term', 'terms', 'category', 'categories', 'tag', 'tags', 'taxonomy',
+		'option', 'options', 'settings', 'setting',
+		'meta', 'postmeta', 'commentmeta', 'termmeta',
+		'plugin', 'plugins', 'theme', 'themes',
+		'table', 'tables', 'db', 'database', 'schema',
+		'role', 'roles', 'capability', 'capabilities',
+		'site', 'sites', 'network', 'blog',
+		'menu', 'menus', 'widget', 'widgets',
+		'transient', 'transients', 'cache',
+	);
+
 	// ------------------------------------------------------------------
 	// Public entry point
 	// ------------------------------------------------------------------
@@ -233,8 +298,11 @@ final class Reeflex_Normalizer {
 		$count = self::resolve_count( $input );
 
 		// -- AXES ---------------------------------------------------------
-		$reversibility = self::resolve_reversibility( $ability_lower, $ability_segments, $verb, $input, $count );
+		// blast_radius is resolved FIRST because reversibility now cross-checks
+		// it: an action this same normalizer prices `broad` or `systemic` must
+		// never simultaneously be called `recoverable` (see below).
 		$blast_radius  = self::resolve_blast_radius( $ability_lower, $ability_segments, $input, $count );
+		$reversibility = self::resolve_reversibility( $ability_lower, $ability_segments, $verb, $input, $count, $blast_radius );
 		$externality   = self::resolve_externality( $ability_segments, $verb );
 
 		// -- TARGET -------------------------------------------------------
@@ -481,9 +549,15 @@ final class Reeflex_Normalizer {
 	 * Decision tree:
 	 *   1. Emit verb → irreversible (message sent, data public).
 	 *   2. Explicit hard-delete signals in ability name or input → irreversible.
-	 *   3. Trash in ability name → recoverable.
-	 *   4. Delete verb with count ≥ 20 → irreversible (mirrors adapter.py large-bulk rule).
-	 *   5. Delete verb (all other cases) → recoverable (WP trash default).
+	 *   3. Delete verb with count ≥ 20 → irreversible (mirrors adapter.py large-bulk rule).
+	 *   4. Delete verb, and WordPress HAS an undo for this object kind
+	 *      (TRASHABLE_SEGMENTS; media only when MEDIA_TRASH is on) →
+	 *      recoverable, UNLESS blast_radius is broad/systemic, in which case
+	 *      irreversible (an action cannot be both site-wide and undoable).
+	 *   5. Delete verb, object kind has no undo or is unrecognised →
+	 *      irreversible (SPEC §2 conservative default). This replaces the old
+	 *      "delete → recoverable (WP trash default)", which was true only of
+	 *      post-type objects and comments.
 	 *   6. Read → reversible.
 	 *   7. Create/update → recoverable.
 	 *   8. Transact/execute → irreversible.
@@ -501,7 +575,8 @@ final class Reeflex_Normalizer {
 		array $ability_segments,
 		string $verb,
 		array $input,
-		int $count
+		int $count,
+		string $blast_radius = 'single'
 	): string {
 		// 1. Emits always reach the outside world: irreversible once sent/published.
 		if ( 'emit' === $verb ) {
@@ -532,17 +607,41 @@ final class Reeflex_Normalizer {
 				return 'recoverable';
 
 			case 'delete':
-				// Soft-delete / trash is recoverable.
-				if ( false !== strpos( $ability_lower, 'trash' ) ) {
-					return 'recoverable';
-				}
 				// Large bulk delete treated as irreversible (mirrors adapter.py:
 				// "bulk delete >= 20 -> irreversible (treat large bulk as unrecoverable)").
 				if ( $count >= 20 ) {
 					return 'irreversible';
 				}
-				// Generic delete without hard signals and small count -> recoverable.
-				return 'recoverable';
+
+				// A delete is only `recoverable` when WordPress actually HAS an
+				// undo for the KIND of object being deleted (see
+				// TRASHABLE_SEGMENTS). The previous rule returned `recoverable`
+				// for every small delete on the strength of a "WP trash
+				// default" that does not exist for users, terms, options, meta,
+				// plugins, themes or tables.
+				//
+				// This is not cosmetic: `reversibility` is a hard precondition
+				// of BOTH R2 (irreversible+broad+prod -> require_approval) and
+				// R3 (irreversible+systemic+prod -> deny), so a wrong
+				// `recoverable` here is the difference between a human seeing
+				// the action and not.
+				if ( self::is_trashable_kind( $ability_lower, $ability_segments ) ) {
+					// SELF-CONTRADICTION GUARD. Restoring 20 posts one at a
+					// time out of the trash is not what "recoverable" is
+					// offering the reader of a decision, and an action this
+					// same normalizer prices `broad`/`systemic` cannot honestly
+					// be called undoable. Without this, the two axes that R2
+					// and R3 conjoin can contradict each other inside one
+					// envelope.
+					if ( in_array( $blast_radius, array( 'broad', 'systemic' ), true ) ) {
+						return 'irreversible';
+					}
+					return 'recoverable';
+				}
+
+				// SPEC §2: when the object kind offers no undo — or we do not
+				// recognise it — the conservative answer is irreversible.
+				return 'irreversible';
 
 			case 'transact':
 			case 'execute':
@@ -553,6 +652,45 @@ final class Reeflex_Normalizer {
 				// SPEC §2: unknown reversibility → irreversible.
 				return 'irreversible';
 		}
+	}
+
+	/**
+	 * Does WordPress provide an undo for the object kind this ability names?
+	 *
+	 * An explicit `trash` segment counts only when the underlying kind is
+	 * itself trashable — `users/empty-trash` is not a recoverable operation
+	 * just because the word "trash" appears in it.
+	 *
+	 * @param string            $ability_lower
+	 * @param array<int,string> $ability_segments
+	 * @return bool
+	 */
+	private static function is_trashable_kind( string $ability_lower, array $ability_segments ): bool {
+		// A non-trashable kind named anywhere in the ability wins: an ability
+		// that touches users or meta is not made recoverable by also saying
+		// "post" (e.g. `meta/delete-post-meta`).
+		foreach ( self::NON_TRASHABLE_SEGMENTS as $seg ) {
+			if ( in_array( $seg, $ability_segments, true ) ) {
+				return false;
+			}
+		}
+
+		foreach ( self::MEDIA_SEGMENTS as $seg ) {
+			if ( in_array( $seg, $ability_segments, true ) ) {
+				return defined( 'MEDIA_TRASH' ) && MEDIA_TRASH;
+			}
+		}
+
+		foreach ( self::TRASHABLE_SEGMENTS as $seg ) {
+			if ( in_array( $seg, $ability_segments, true ) ) {
+				return true;
+			}
+		}
+
+		// Emptying the trash SPENDS the undo; it is never itself recoverable.
+		// (Handled here rather than by the 'trash' substring, which used to
+		// make `core/empty-trash` look recoverable.)
+		return false;
 	}
 
 	// ------------------------------------------------------------------
