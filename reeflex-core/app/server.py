@@ -10,9 +10,26 @@ Routes:
   GET  /v1/holds?status=&limit=&cursor=   -> JSON list (paged)             200/401
   GET  /v1/holds/{id}                -> full hold detail                   200/401/404
   POST /v1/holds/{id}/resolve        -> resolve a pending hold             200/401/403/404/409
-  GET  /healthz                      -> {"status":"ok","ledger":{...}}     200
+  GET  /healthz            -> {"status":"ok","ledger":{...},"server":{...}} 200
 
 All other paths/methods -> HTTP 404 or 405.
+
+Concurrency (RFX-198 — see the block above run() for the measurement and for
+why this could not land before RFX-197):
+  Requests are served on a BOUNDED pool of worker threads, because each
+  decision forks an `opa eval` subprocess and an unbounded thread-per-request
+  server would fork the box to death under the same burst that used to be
+  refused at the socket.
+  REEFLEX_MAX_WORKERS      concurrent decisions (default: 2 x CPU, clamped 4..32)
+  REEFLEX_MAX_PENDING      submitted-but-unfinished before shedding 503
+                           (default: workers x 8)
+  REEFLEX_LISTEN_BACKLOG   listen(2) backlog (default 128; the stdlib default
+                           of 5 is what turned a 120-request burst into 82
+                           connection resets)
+  REEFLEX_REQUEST_TIMEOUT  seconds a client may hold a worker (default 30)
+  Overload is refused with HTTP 503 {"error":"overloaded"} and Retry-After,
+  never with a silent reset; /healthz.server.shed_total counts those refusals
+  so "denied for load" is distinguishable from "denied by policy".
 
 Content-Type for all responses: application/json; charset=utf-8.
 
@@ -86,11 +103,13 @@ systemic is a terminal deny and should never be a hold, but we guard anyway.
 
 from __future__ import annotations
 
+import concurrent.futures
 import hmac
 import http.server
 import json
 import os
 import sys
+import threading
 import urllib.parse
 
 from .decide import process
@@ -285,9 +304,24 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
                 # describe itself. An absent "ledger" key is honest about that;
                 # a fabricated durable:true would not be.
                 _ledger_health = {}
+            # RFX-198: report how many decisions this core can serve at once,
+            # and how many it has REFUSED for load rather than for policy.
+            # Same argument as the ledger block above -- a single-threaded core
+            # and a 32-worker core both answered {"status":"ok"}, and a
+            # decision refused because the accept queue was full looked, from
+            # every surface, exactly like a network fault.
+            _server_health: dict = {}
+            try:
+                _srv = getattr(self, "server", None)
+                if isinstance(_srv, PooledHTTPServer):
+                    _server_health = _srv.health()
+            except Exception:  # noqa: BLE001
+                _server_health = {}
             _health: dict = {"status": "ok"}
             if _ledger_health:
                 _health["ledger"] = _ledger_health
+            if _server_health:
+                _health["server"] = _server_health
             self._respond(200, _health)
             return
 
@@ -754,12 +788,396 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
+# ===========================================================================
+# RFX-198 — THE REQUEST PATH SERVES MORE THAN ONE DECISION AT A TIME
+# ===========================================================================
+#
+# Until RFX-198 this module ended with
+#
+#     server = http.server.HTTPServer((host, port), _DecideHandler)
+#
+# `http.server.HTTPServer` — NOT `ThreadingHTTPServer` — so exactly one
+# request was served at a time; and `request_queue_size` was never set, so the
+# listen backlog was socketserver.TCPServer's default of FIVE. Measured on the
+# customer artefact at main 1b80c8b, identical read envelopes, distinct
+# session_ids, one client host:
+#
+#     SEQUENTIAL      120 decisions:  6.1 s -> 19.8 decisions/sec  (120/120 answered)
+#     CONCURRENT(4)     4 decisions:  0.2 s -> 18.8 decisions/sec  (  4/4   answered)
+#     CONCURRENT(16)   16 decisions:  3.2 s ->  5.0 decisions/sec  ( 16/16  answered)
+#     CONCURRENT(120) 120 decisions:  7.7 s                        ( 38/120 answered)
+#
+# Concurrency made the engine SLOWER than doing the same work one call at a
+# time, and past the backlog of five the kernel stopped completing handshakes:
+# 82 of 120 legitimate decisions came back `ECONNRESET`, never reaching the
+# policy engine at all.
+#
+# WHY THAT IS A SAFETY DEFECT AND NOT ONLY A PERFORMANCE ONE. Every adapter
+# fails CLOSED when core does not answer — reeflex-claude/enforce.py, the n8n
+# node's network catch, reeflex-mcp's scaffold. That default is correct. Its
+# consequence is that a saturated core does not wave work through, it REFUSES
+# it: those 82 resets are 82 legitimate agent actions denied by a socket, with
+# no policy involved and nothing in the audit log to say why. The operator's
+# only pressure-relief valve is to switch the adapter from enforce to observe,
+# which turns the product off. So an availability failure of the enforcement
+# plane converts, in one step, into no enforcement at all.
+#
+# WHY THIS COULD NOT BE FIXED BEFORE RFX-197 (the ordering qa--030 flagged).
+# R5's cumulative budget is a read-decide-write: compute_cumulative() -> OPA
+# eval -> append_entry(). qa--030 built two images differing in ONE line of
+# this file and measured, on six simultaneous same-session deletes against the
+# shipped limit of 20:
+#
+#     as shipped (HTTPServer)      : 20 through, held at 20
+#     ThreadingHTTPServer only     : 30 through, ZERO holds   <- DEFEATED
+#
+# So the anti-fragmentation guarantee held for exactly one reason: this server
+# was single-threaded and requests never overlapped. That was an accident of a
+# dev-server choice, not a designed guard, and making core concurrent would
+# have removed it silently with every test still green. RFX-197 put the real
+# guard in — ledger.session_guard(session_id), striped over 64 stripes, held
+# across all three steps — so same-session calls now serialise on the LEDGER
+# and unrelated sessions run in parallel. THAT is the prerequisite, and it is
+# why this block may exist.
+#
+# THREE CHOICES HERE, AND WHY EACH IS NOT THE OBVIOUS ONE.
+#
+# 1. A BOUNDED POOL, not ThreadingHTTPServer. ThreadingMixIn spawns one thread
+#    per connection, unbounded, and every decision forks an `opa eval`
+#    subprocess (app/opa.py:93, ~54 ms). Unbounded threads therefore mean
+#    unbounded concurrent subprocesses: a burst that used to be refused at the
+#    socket would instead fork the box to death, which is the same denial with
+#    a worse blast radius. The pool size is the real resource being bounded —
+#    concurrent policy evaluations.
+#
+# 2. LOAD IS SHED WITH AN ANSWER, not with a reset. Past `max_pending` the
+#    server writes a 503 naming `overloaded` and closes, instead of letting
+#    the connection sit until the client's timeout. Both outcomes are a
+#    fail-closed refusal at the adapter — that part is unchanged and correct —
+#    but one of them tells the operator WHICH failure it was. `shed_total` on
+#    /healthz is the count of decisions refused for load rather than for
+#    policy, which is a number nobody could obtain before.
+#
+# 3. A REQUEST TIMEOUT, which a bounded pool now REQUIRES. The handler had no
+#    `timeout`, so a client that opened a connection and never finished its
+#    request line held its worker forever. Under the old single-threaded
+#    server that was already fatal, so it changed nothing; under a pool of N
+#    it is a way to occupy all N cheaply. Bounding the pool without bounding
+#    how long a worker can be held would trade a throughput bug for an
+#    availability one.
+#
+# WHAT THIS DOES NOT FIX, stated here rather than only in the roadmap: every
+# decision still forks `opa eval`. That fork is now the throughput ceiling
+# (~54 ms of mostly process startup and policy compile, per decision, per
+# worker). app/opa.py's own header already names the fix — a long-running
+# `opa run --server` sidecar behind REEFLEX_OPA_MODE=server. This change makes
+# core use the cores it has; it does not make a single decision cheaper.
+
+# Listen backlog. The old default of 5 (inherited from TCPServer) is what
+# turned the 120-concurrent burst into 82 connection resets.
+_LISTEN_BACKLOG = int(os.environ.get("REEFLEX_LISTEN_BACKLOG", "128"))
+
+# Request read timeout, in seconds — how long a worker may be held by a client
+# that has not finished sending its request. A decision costs ~54 ms and the
+# OPA subprocess timeout is 10 s (REEFLEX_OPA_TIMEOUT), so 30 s is generous
+# for any honest client and finite for a dishonest one.
+_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("REEFLEX_REQUEST_TIMEOUT", "30"))
+
+# Workers dedicated to answering shed connections, and how long one may wait
+# for a shed client's request to arrive before giving up on delivering the 503.
+# Answering a shed costs an RTT, not an OPA eval, so a handful of workers
+# serve thousands per second.
+_SHED_WORKERS = max(1, int(os.environ.get("REEFLEX_SHED_WORKERS", "4")))
+_SHED_WAIT_SECONDS = float(os.environ.get("REEFLEX_SHED_WAIT", "0.25"))
+
+
+def _max_workers() -> int:
+    """Concurrent policy evaluations permitted. REEFLEX_MAX_WORKERS overrides.
+
+    Each worker may hold one `opa eval` subprocess, so this is a bound on
+    processes, not just threads. Default: two per CPU (decisions are dominated
+    by waiting on that subprocess, not by this process's own CPU), clamped to
+    [4, 32] so a 1-core box still serves a burst and a 128-core box does not
+    fork 256 OPA processes at once.
+    """
+    raw = os.environ.get("REEFLEX_MAX_WORKERS", "").strip()
+    if raw:
+        try:
+            n = int(raw)
+        except ValueError:
+            n = 0
+        if n > 0:
+            return n
+    return max(4, min(32, (os.cpu_count() or 1) * 2))
+
+
+def _max_pending(workers: int) -> int:
+    """Submitted-but-not-finished requests permitted before shedding."""
+    raw = os.environ.get("REEFLEX_MAX_PENDING", "").strip()
+    if raw:
+        try:
+            n = int(raw)
+        except ValueError:
+            n = 0
+        if n > 0:
+            return n
+    return workers * 8
+
+
+def _overloaded_wire() -> bytes:
+    """The shed response, pre-rendered.
+
+    Written straight to the socket because shedding happens in the accept
+    loop, BEFORE a handler instance exists — the whole point is not to spend a
+    worker on it. Kept byte-identical in shape to _respond(): same
+    Content-Type, same nosniff/no-store headers, JSON body with an `error`
+    key, so an adapter parses it the same way it parses every other refusal.
+    """
+    body = json.dumps(
+        {
+            "error": "overloaded",
+            "reason": "core is at its concurrent-decision limit; retry",
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    head = (
+        "HTTP/1.0 503 Service Unavailable\r\n"
+        "Server: reeflex-core\r\n"
+        "Content-Type: application/json; charset=utf-8\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "X-Content-Type-Options: nosniff\r\n"
+        "Cache-Control: no-store\r\n"
+        "Retry-After: 1\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+    ).encode("utf-8")
+    return head + body
+
+
+_OVERLOADED_WIRE = _overloaded_wire()
+
+
+class PooledHTTPServer(http.server.HTTPServer):
+    """HTTPServer that serves requests on a BOUNDED pool of worker threads.
+
+    Mirrors socketserver.ThreadingMixIn's flow (finish_request ->
+    shutdown_request, errors to handle_error) but hands each connection to a
+    fixed-size ThreadPoolExecutor instead of spawning an unbounded thread per
+    connection. See the RFX-198 block above for why bounded.
+    """
+
+    # Workers must not outlive the process on shutdown.
+    daemon_threads = True
+
+    def __init__(
+        self,
+        server_address,
+        RequestHandlerClass,  # noqa: N803 — stdlib's own parameter name
+        *,
+        workers: int,
+        backlog: int,
+        max_pending: int,
+    ) -> None:
+        # MUST be set before super().__init__: TCPServer.server_activate()
+        # calls socket.listen(self.request_queue_size) during construction, so
+        # assigning it afterwards would listen with the old default of 5 and
+        # silently change nothing.
+        self.request_queue_size = backlog
+
+        self.workers = workers
+        self.max_pending = max_pending
+        self._pending = 0
+        self._pending_lock = threading.Lock()
+        self.shed_total = 0
+        self.shed_undelivered = 0
+        self._shed_pending = 0
+        self._shed_capacity = _SHED_WORKERS * 16
+        self._pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="reeflex-decide",
+        )
+        # A separate, tiny pool: a shed connection must not queue behind the
+        # decisions that caused the shed, and answering one costs an RTT, not
+        # an OPA eval.
+        self._shed_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=_SHED_WORKERS,
+            thread_name_prefix="reeflex-shed",
+        )
+        super().__init__(server_address, RequestHandlerClass)
+
+    # -- accept loop ------------------------------------------------------
+
+    def process_request(self, request, client_address) -> None:
+        """Called on the accept thread. Must not block or the backlog fills."""
+        with self._pending_lock:
+            if self._pending >= self.max_pending:
+                self.shed_total += 1
+                shed = True
+            else:
+                self._pending += 1
+                shed = False
+
+        if shed:
+            self._shed(request)
+            return
+
+        try:
+            self._pool.submit(self._run_request, request, client_address)
+        except RuntimeError:
+            # Pool already shut down (server_close raced an inbound
+            # connection). Close the socket rather than leaking it, and
+            # release the slot we just took.
+            with self._pending_lock:
+                self._pending -= 1
+            self.shutdown_request(request)
+
+    def _run_request(self, request, client_address) -> None:
+        try:
+            self.finish_request(request, client_address)
+        except Exception:  # noqa: BLE001
+            self.handle_error(request, client_address)
+        finally:
+            self.shutdown_request(request)
+            with self._pending_lock:
+                self._pending -= 1
+
+    def _shed(self, request) -> None:
+        """Hand a shed connection to the shed pool, or close it outright.
+
+        Shedding is NOT done on the accept thread. Delivering the 503 means
+        waiting for the client's request to arrive first (see _shed_conn), and
+        a blocking wait on the accept thread is exactly the backlog
+        starvation this whole change removes.
+        """
+        with self._pending_lock:
+            if self._shed_pending >= self._shed_capacity:
+                # The shed path itself is saturated. Close without answering
+                # and COUNT it, so /healthz never implies we told the caller
+                # something we did not.
+                self.shed_undelivered += 1
+                self.shutdown_request(request)
+                return
+            self._shed_pending += 1
+        try:
+            self._shed_pool.submit(self._shed_conn, request)
+        except RuntimeError:            # pool shut down (server closing)
+            with self._pending_lock:
+                self._shed_pending -= 1
+                self.shed_undelivered += 1
+            self.shutdown_request(request)
+
+    def _shed_conn(self, request) -> None:
+        """Answer 503 on a shed worker, then close.
+
+        TWO MEASURED REASONS THIS IS NOT JUST sendall()+close().
+
+        1. A client mid-write. With 120 simultaneous callers, most have not
+           finished sending when we accept them. Closing first makes their
+           send() fail, so they raise BrokenPipe and never read the response
+           at all — measured on the first cut of this method: of 118 shed
+           connections, 104 clients raised BrokenPipe and 14 read the 503. So
+           we wait for the request to ARRIVE before answering. That wait costs
+           one RTT in the normal case (the request is already in flight), not
+           the timeout; the timeout is only paid by a client that connects and
+           says nothing, which is not waiting on a response anyway.
+
+        2. Unread inbound data at close sends an RST, which discards the bytes
+           we just wrote. So the rest of the request is drained too, without
+           blocking, once the first segment has landed.
+
+        The entire argument for shedding is that the caller learns WHICH
+        refusal this was. A shed the caller cannot read is worth no more than
+        the reset it replaced, so this method is the feature, not a courtesy
+        around it.
+        """
+        delivered = False
+        try:
+            request.settimeout(_SHED_WAIT_SECONDS)
+            first = request.recv(65536)          # returns as soon as data lands
+            if first:
+                # Drain whatever else is already queued, non-blocking.
+                request.setblocking(False)
+                drained = len(first)
+                while drained < _MAX_BODY_BYTES:
+                    try:
+                        chunk = request.recv(65536)
+                    except (BlockingIOError, InterruptedError, OSError):
+                        break
+                    if not chunk:
+                        break
+                    drained += len(chunk)
+                request.settimeout(_SHED_WAIT_SECONDS)
+            request.sendall(_OVERLOADED_WIRE)
+            delivered = True
+        except Exception:  # noqa: BLE001
+            # Client gone, or socket unwritable. Never raises: this runs on a
+            # pool worker whose only job is to close this connection.
+            pass
+        finally:
+            self.shutdown_request(request)
+            with self._pending_lock:
+                self._shed_pending -= 1
+                if not delivered:
+                    self.shed_undelivered += 1
+
+    # -- introspection ----------------------------------------------------
+
+    def health(self) -> dict:
+        """The concurrency model, for /healthz.
+
+        RFX-197 put the ledger's mode on /healthz because a core that could
+        not remember was indistinguishable from one that could. Same argument
+        here: a core that serves one decision at a time and a core that serves
+        thirty-two answered identically, and `shed_total` is the only place a
+        refusal-for-load is ever counted.
+        """
+        with self._pending_lock:
+            pending = self._pending
+            shed = self.shed_total
+            undelivered = self.shed_undelivered
+        return {
+            "concurrency": "pool",
+            "workers": self.workers,
+            "listen_backlog": self.request_queue_size,
+            "max_pending": self.max_pending,
+            "pending": pending,
+            "shed_total": shed,
+            # Of those, the ones we could not even tell. Reported separately
+            # rather than folded in, because "refused and told why" and
+            # "refused silently" are different facts about the same outage.
+            "shed_undelivered": undelivered,
+        }
+
+    def server_close(self) -> None:
+        super().server_close()
+        # wait=False: the listening socket is already closed, so no new work
+        # can arrive; in-flight decisions finish on their own threads.
+        self._pool.shutdown(wait=False)
+        self._shed_pool.shutdown(wait=False)
+
+
 def run() -> None:
     host = os.environ.get("REEFLEX_HOST", "127.0.0.1")
     port = int(os.environ.get("REEFLEX_PORT", "8080"))
 
-    server = http.server.HTTPServer((host, port), _DecideHandler)
+    workers = _max_workers()
+    max_pending = _max_pending(workers)
+    _DecideHandler.timeout = _REQUEST_TIMEOUT_SECONDS
+
+    server = PooledHTTPServer(
+        (host, port),
+        _DecideHandler,
+        workers=workers,
+        backlog=_LISTEN_BACKLOG,
+        max_pending=max_pending,
+    )
     print(f"[reeflex-core] listening on http://{host}:{port}/v1/decide", file=sys.stderr)
+    print(
+        f"[reeflex-core] concurrency: {workers} workers, "
+        f"listen backlog {_LISTEN_BACKLOG}, shed above {max_pending} pending, "
+        f"request timeout {_REQUEST_TIMEOUT_SECONDS:g}s",
+        file=sys.stderr,
+    )
 
     # Start webhook emitter
     from .webhook import start as webhook_start  # type: ignore[import]
