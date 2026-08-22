@@ -66,9 +66,20 @@ api-dev endpoint. The random session-id suffix is not cosmetic — it is what
 lets many people run this same demo concurrently against one shared core
 without polluting each other's budget.
 
+**Read the title precisely: fragmentation doesn't work _within a session_.**
+This demo splits the delete across ten calls in **one** execution, under one
+session id — the topology where the guarantee holds. Budgets accumulate per
+`agent.session_id` and share nothing across two different ids, so the same ten
+deletes spread over ten **executions** with an execution-scoped session id all
+come back `allow`: measured, 50 of 50 deletions through, no hold. That is why
+the Reeflex Gate node defaults Session ID to `={{$workflow.id}}` and not
+`={{$execution.id}}` — see the node README's
+[Usage](../../README.md#usage) section. If you set a session id that changes
+per run, you have turned this demo's guarantee off.
+
 ## GIF (filmed at T7)
 
-*(placeholder — no GIF yet)*
+![demo2](./img/demo2-fragmentation-doesnt-work.gif)
 
 **How to film:** import into a local n8n (Docker), attach the credential,
 click "Execute workflow" once, and let the loop run to completion (it will

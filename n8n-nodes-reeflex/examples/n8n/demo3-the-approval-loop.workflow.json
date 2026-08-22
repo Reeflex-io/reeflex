@@ -42,7 +42,7 @@
         "externality": "={{$json.externality}}",
         "count": "={{$json.count}}",
         "targetSystem": "={{$json.table}}",
-        "sessionId": "={{$execution.id}}",
+        "sessionId": "={{$workflow.id}}",
         "agentId": "agent:n8n-demo3-approval-loop",
         "additionalFields": {}
       },
@@ -82,7 +82,7 @@
         }
       },
       "id": "d3000003-0005-4003-8003-000000000005",
-      "name": "Resolve hold (human principal)",
+      "name": "Resolve hold - DEMO ONLY, NO HUMAN (delete before production)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [900, 400],
@@ -180,11 +180,11 @@
     "Reeflex Gate": {
       "main": [
         [{ "node": "Unexpected direct allow", "type": "main", "index": 0 }],
-        [{ "node": "Resolve hold (human principal)", "type": "main", "index": 0 }],
+        [{ "node": "Resolve hold - DEMO ONLY, NO HUMAN (delete before production)", "type": "main", "index": 0 }],
         [{ "node": "Unexpected deny (direct)", "type": "main", "index": 0 }]
       ]
     },
-    "Resolve hold (human principal)": {
+    "Resolve hold - DEMO ONLY, NO HUMAN (delete before production)": {
       "main": [[{ "node": "Resubmit to /v1/decide (same envelope + approval)", "type": "main", "index": 0 }]]
     },
     "Resubmit to /v1/decide (same envelope + approval)": {
