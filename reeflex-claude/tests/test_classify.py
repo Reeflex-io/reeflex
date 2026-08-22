@@ -446,15 +446,21 @@ class TestRegressions(unittest.TestCase):
 
     def test_command_chaining_ls_rm(self):
         """
-        'ls; rm -rf /' -- leading token is 'ls' -> read (leading-token classification).
-        The rm part is not governed in this call; document this as a known limit of
-        single-token classification and assert it does not crash and is governed.
+        'ls; rm -rf /' -- the chain is decomposed and the MOST DANGEROUS segment
+        decides (RFX-144).
+
+        This test used to assert only that the result was one of the four legal
+        verbs and one of the four legal tiers, on the grounds that leading-token
+        classification was a documented limitation. That assertion could not
+        fail: it pinned nothing, and the behaviour it documented was the
+        fail-open RFX-144 measured (24 of 27 irreversible production
+        destructions allowed). It now asserts the outcome.
         """
         r = _c("Bash", {"command": "ls; rm -rf /"})
-        # Leading token ls -> read; the chained rm is not individually intercepted.
-        # This is a documented limitation; assert: no exception, result is governed.
-        self.assertIn(r["verb"], ("read", "delete", "execute", "emit"))
-        self.assertIn(r["classification_tier"], ("benign", "moderate", "destructive_broad", "destructive_systemic"))
+        self.assertEqual("delete", r["verb"])
+        self.assertEqual("irreversible", r["reversibility"])
+        self.assertEqual("systemic", r["blast_radius"])
+        self.assertEqual("destructive_systemic", r["classification_tier"])
 
     def test_write_file_text_not_used_as_path(self):
         """

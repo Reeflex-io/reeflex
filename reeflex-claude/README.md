@@ -8,6 +8,21 @@ four contract responsibilities (SPEC §6): INTERCEPT → NORMALIZE → ENFORCE �
 **What it is NOT:** It does not decide anything.  The decision is made deterministically
 by `reeflex-core` (OPA/Rego).  Zero LLM anywhere near the decision path.
 
+**What "on its impact" means, precisely.** The impact is DERIVED HERE, in this
+process, from the tool call — core does not observe the action and cannot
+independently price it (SPEC §6; RFX-9 is the open question of what would).  So
+the axes core decides on are this adapter's reading of the call, and the quality
+of the gate is the quality of that reading.  Two consequences worth stating
+before you rely on it:
+
+* an action this adapter reads WRONG is decided wrong, and no rule in core can
+  see that it happened — which is why `classify.py` treats a command it cannot
+  identify as irreversible and broad, and sends it to a human rather than
+  guessing that it is safe (RFX-144);
+* an agent that can set this process's environment or edit its own hook
+  configuration is upstream of the gate entirely. This adapter governs the tool
+  calls Claude Code routes through it; it is not a sandbox.
+
 ## How it works
 
 Claude Code fires a `PreToolUse` hook before every tool call.  This adapter:
@@ -295,13 +310,32 @@ non-zero exit, malformed output, wrong decision) without touching your real
 
 ## Limits / upgrade paths
 
-- **Bash classification** is heuristic (regex on the command string).  A
-  full parse tree would be more accurate.  UPGRADE: replace `_bash_verb` with
-  a shell-AST parser once tooling stabilises.
+- **Bash classification** decomposes the command line structurally (quote-aware
+  split on `;` `&&` `||` `|` `&` and newline, prefix wrappers stripped,
+  `sh -c '<string>'` unwrapped) and classifies every segment, most dangerous
+  first.  What it does NOT have is a real shell grammar: command substitution
+  (`$(...)`), process substitution, `eval` of a constructed string and here-docs
+  are not expanded, so a destruction assembled at runtime lands in the
+  UNRESOLVED class rather than being read.  That is the intended failure
+  direction — unresolved means a human is asked — but it is a failure to
+  *identify*, not a defence, and an operator should know the difference.
+  UPGRADE: a real shell parser (`bashlex`/`tree-sitter-bash`) once a
+  dependency-free option exists; this module is deliberately stdlib-only.
+- **The safe list, not the danger list, is what keeps this quiet.** A command the
+  adapter does not recognise is `irreversible` + `broad` and reaches a human
+  (RFX-144).  `_DEV_SAFE` in `classify.py` is the list of recognised
+  non-destructive developer operations; a tool that is missing from it costs you
+  a prompt, and you should send us the name.  The inverse arrangement — a list
+  of dangerous commands, everything else allowed — is what let
+  `kubectl delete namespace production` through.
 - **Stub signing**: `meta.signature = "ed25519:stub:..."`.  UPGRADE: Vault-backed
   ed25519 signing once the key management path is implemented (SPEC §6 note).
 - **REEFLEX_CLAUDE_STRICT**: unset by default so coding agents are not blocked on
-  every `npm install`.  UPGRADE: use a per-command allow-list in policy instead.
+  every `npm install`.  Setting it raises the UNRESOLVED class from `broad` to
+  `systemic`, i.e. an unrecognised command is refused (R3) rather than escalated
+  to a human (R2).  It also marks recognised developer operations
+  `irreversible`, which on the stock policy pack changes no verdict on its own
+  (their `blast_radius` stays `scoped`, and R2 requires `broad`).
 - **approval re-submission**: the hook sets `approval.present = false` at
   interception.  Re-submission with `approval.present = true` after human
   approval is the caller's responsibility (Claude Code surfaces the `ask` dialog;
