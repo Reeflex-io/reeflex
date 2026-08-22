@@ -423,6 +423,19 @@ class Gateway:
         # rather than silently reusing another connection's identity.
         return f"mcp-http:unmapped:{uuid.uuid4().hex}", "agent:mcp-client", None
 
+    def _trust_annotations(self, upstream_name: str) -> bool:
+        """RFX-173: is THIS upstream allowed to classify its own tools?
+
+        False for an upstream the config does not name (and for one that did
+        not set the flag) -- fail closed, per-upstream, never global: an
+        operator who audited their own filesystem server must not thereby
+        trust a third-party server added later.
+        """
+        for spec in self.gw_config.upstreams:
+            if spec.name == upstream_name:
+                return bool(getattr(spec, "trust_annotations", False))
+        return False
+
     # -- the decide hook (Track 2 acceptance) ---------------------------
 
     async def _decide(self, envelope: dict) -> tuple[dict | None, str | None]:
@@ -663,8 +676,11 @@ class Gateway:
         # BUG 2 fix (option B): the upstream's own MCP-declared annotations
         # for this tool, read from the already-cached tools/list result (no
         # new network call) -- see normalize.py's annotation tier, tried
-        # only when no declarative mapping matched this tool.
+        # only when no declarative mapping matched this tool AND only when
+        # the operator opted this upstream in with `trust_annotations: true`
+        # (RFX-173 -- the annotation is declared by the governed party).
         annotations = self.upstreams.tool_annotations(upstream_name, tool_name)
+        trust_annotations = self._trust_annotations(upstream_name)
 
         try:
             envelope = normalize.build_envelope(
@@ -678,6 +694,7 @@ class Gateway:
                 arguments=arguments,
                 mapping_registry=self.mappings,
                 annotations=annotations,
+                trust_annotations=trust_annotations,
             )
         except Exception as exc:  # noqa: BLE001 -- fail closed on a broken envelope, never dispatch blind
             return _error_result(f"reeflex-mcp: failed to normalize action: {exc}")

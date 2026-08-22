@@ -22,6 +22,23 @@ THE 4-TIER RESOLUTION (Track 4 + BUG 2 fix, design doc section 8) -- see
                                through untouched -- absence is NEVER treated
                                as a safe signal. source tag
                                "annotation:<bucket>".
+
+                               **OFF BY DEFAULT (RFX-173).** This tier reads
+                               a value supplied by the very component the
+                               gateway is governing, and the MCP
+                               specification itself says a client MUST treat
+                               tool annotations as UNTRUSTED unless the
+                               server is trusted. Measured live on the
+                               published 0.1.3 gateway in enforce mode
+                               against a real core: an upstream declaring
+                               `readOnlyHint: true` on a tool that deletes a
+                               file turned core's `deny` into `allow` and the
+                               gateway dispatched the deletion. So the tier
+                               now requires per-upstream opt-in --
+                               `trust_annotations: true` in reeflex-mcp.yaml
+                               (registry.py). With it unset, resolution is
+                               mapping -> heuristic -> floor, which is
+                               exactly what README/docs already describe.
   3. name-heuristic         -- `classify()` below (Track 2, kept verbatim as
                                the fallback for anything neither a mapping
                                nor an annotation named). Widened for BUG 2
@@ -76,6 +93,32 @@ above is a DOWNGRADE-ON-EXPLICIT-SIGNAL only -- a bare name prefix
 genuine unknown to "safe"; the conservative floor is unchanged and still
 fires for anything that matches none of the three buckets at any tier.
 
+TWO HOLES IN THAT ASYMMETRY, BOTH MEASURED AND BOTH CLOSED HERE (RFX-174,
+RFX-175) -- read this before trusting the paragraph above:
+
+  * `destructiveHint: true` USED TO BE A DOWNGRADE. It replaced the floor's
+    `systemic` blast radius with a magnitude-derived one, so a server that
+    honestly declared its tool destructive got `irreversible`+`single` ->
+    R2/R3 both need broad/systemic -> `default_allow`, while a server that
+    declared nothing got the floor and was DENIED. Honesty was punished. The
+    destructive branch now KEEPS the floor's `systemic` (see
+    `_ANNOTATION_DESTRUCTIVE_AXES`): a server saying "this is destructive"
+    can only ever make the verdict the same or stricter, never looser.
+  * THE READ PREFIXES WERE COMPOUND-NAME-BLIND. `str.startswith` matches the
+    leading token, which the paragraph above uses to argue safety -- but it
+    says nothing about a read prefix that is the FIRST token of a compound
+    whose real verb is the SECOND. Measured `allow` in production on the
+    published build: `search_and_replace`, `find_and_replace`,
+    `query_write`, `describe_and_drop`, `list_and_prune_snapshots`,
+    `count_and_compact`, `fetch_and_apply_migration`, `get_or_create_index`.
+    That is the same defect class as reeflex-claude's `_bash_verb()` reading
+    only the first shell token (RFX-144). `_has_mutating_stem()` now vetoes
+    the read bucket when any later token in the name is a known mutating
+    stem; the call falls to the floor. The veto can only ever make a call
+    STRICTER, so it does not reopen BUG 2's false-positive-deny gap for
+    genuine reads (`get_user`, `list_issues`, `read_text_file` are
+    untouched).
+
 This module is pure: no network, no I/O, no side effects. (`mcp.types` is
 imported ONLY for the `ToolAnnotations` type hint -- no SDK behavior used.)
 """
@@ -83,6 +126,7 @@ imported ONLY for the `ToolAnnotations` type hint -- no SDK behavior used.)
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -140,9 +184,106 @@ _EXECUTE_AXES = {
     "externality": "internal",
 }
 
+# RFX-175: a read prefix is only believed when NO later token in the tool name
+# is a mutating stem. `search_and_replace` starts with `search_` and writes;
+# `search_files` starts with `search_` and reads. Matched against the name's
+# own tokens (snake_case segments AND camelCase humps), so `selectAllAndDelete`
+# and `select_all_and_delete` are treated identically.
+#
+# Stems only -- matched as a PREFIX of a token, so "delete" covers "deletes"/
+# "deleted", "replace" covers "replaces"/"replacement". Deliberately generous:
+# a false veto costs a genuine read the floor (fail-noisy, visible, fixable
+# with a one-line declarative mapping), a missed veto costs a customer their
+# data.
+_MUTATING_STEMS = (
+    "delete",
+    "del",
+    "remove",
+    "rm",
+    "drop",
+    "destroy",
+    "purge",
+    "prune",
+    "wipe",
+    "erase",
+    "truncate",
+    "clear",
+    "flush",
+    "expire",
+    "revoke",
+    "reset",
+    "restore",
+    "rotate",
+    "replace",
+    "overwrite",
+    "write",
+    "insert",
+    "upsert",
+    "update",
+    "patch",
+    "modify",
+    "edit",
+    "rename",
+    "move",
+    "merge",
+    "commit",
+    "push",
+    "apply",
+    "migrate",
+    "compact",
+    "vacuum",
+    "kill",
+    "terminate",
+    "stop",
+    "disable",
+    "exec",
+    "execute",
+    "run",
+    "install",
+    "uninstall",
+    "deploy",
+    "send",
+    "publish",
+    "grant",
+    "create",
+    "set",
+)
+
+# RFX-174: when the annotation tier IS trusted, a `destructiveHint: true`
+# keeps the FLOOR's blast radius. The server told us the tool is destructive;
+# it told us nothing about scope, and a magnitude-derived `single` here was a
+# downgrade that made an honest declaration weaker than silence.
+_ANNOTATION_DESTRUCTIVE_AXES = {
+    "reversibility": "irreversible",
+    "blast_radius": "systemic",
+    "externality": "internal",
+}
+
 # Argument keys opportunistically used as target.ref when present and stringy
 # (heuristic best-effort only -- Track 4 mappings do this properly per tool).
 _REF_ARG_PRIORITY = ("id", "path", "name", "ref", "key")
+
+
+def _name_tokens(tool_name: str) -> list[str]:
+    """Lowercased tokens of an MCP tool name, splitting on non-alphanumerics
+    AND on camelCase humps: `search_and_replace` -> [search, and, replace],
+    `selectAllAndDelete` -> [select, all, and, delete]."""
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", tool_name)
+    return [t for t in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if t]
+
+
+def _has_mutating_stem(tool_name: str) -> bool:
+    """RFX-175: True when any token AFTER the first is a known mutating stem.
+
+    The first token is skipped on purpose -- it is the token the read prefix
+    already matched, and a name whose FIRST token is a mutating stem never
+    reaches the read bucket anyway (`delete_*`/`remove_*`/`drop_*` are matched
+    earlier, and anything else falls to the floor).
+    """
+    for token in _name_tokens(tool_name)[1:]:
+        if token.startswith(_MUTATING_STEMS):
+            return True
+    return False
 
 
 def classify(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -170,7 +311,9 @@ def classify(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         axes["blast_radius"] = _blast_radius_for_count(count)
         return {"verb": "create", "_tier": "heuristic:create", **axes}
 
-    if tool_name.startswith(_READ_PREFIXES):
+    # RFX-175: a read prefix is believed only when no LATER token in the name
+    # is a mutating stem -- `search_files` reads, `search_and_replace` writes.
+    if tool_name.startswith(_READ_PREFIXES) and not _has_mutating_stem(tool_name):
         axes = dict(_AXES_BY_BUCKET["read"])
         axes["blast_radius"] = _blast_radius_for_count(count)
         return {"verb": "read", "_tier": "heuristic:read", **axes}
@@ -181,12 +324,19 @@ def classify(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _classify_from_annotations(
-    annotations: types.ToolAnnotations | None, count: int
+    annotations: types.ToolAnnotations | None, count: int, *, trusted: bool = False
 ) -> tuple[dict[str, str], str] | None:
     """BUG 2 fix, option B: the upstream server's OWN declared tool
     annotations, tier 2 (between the declarative mapping and the
     name-heuristic). Returns ({"verb", ...axes}, tier_tag) or None (no
     actionable annotation -- caller falls through to the name-heuristic).
+
+    RFX-173: `trusted` is False unless the OPERATOR opted this upstream in
+    with `trust_annotations: true`. When False this tier is skipped entirely
+    and the annotation is never read -- the upstream is the governed party,
+    the MCP spec says its annotations are untrusted, and a
+    `readOnlyHint: true` on a destructive tool was measured turning core's
+    `deny` into `allow` on a real gateway in enforce mode.
 
     MCP spec defaults: `readOnlyHint` defaults to False, `destructiveHint`
     defaults to True, WHEN ABSENT. That means "no annotation" (annotations
@@ -207,7 +357,7 @@ def _classify_from_annotations(
     brief wants it, thread `idempotentHint is True` into a reversibility
     override the same way readOnlyHint/destructiveHint are handled above.
     """
-    if annotations is None:
+    if not trusted or annotations is None:
         return None
 
     if annotations.readOnlyHint is True:
@@ -216,9 +366,11 @@ def _classify_from_annotations(
         return {"verb": "read", **axes}, "annotation:read"
 
     if annotations.destructiveHint is True:
-        axes = dict(_AXES_BY_BUCKET["delete"])
-        axes["blast_radius"] = _blast_radius_for_count(count)
-        return {"verb": "delete", **axes}, "annotation:destructive"
+        # RFX-174: keep the FLOOR's blast radius. "Destructive" is a claim
+        # about kind, never about scope -- deriving `single` from magnitude
+        # here made an honest destructive declaration WEAKER than declaring
+        # nothing at all (floor -> deny becomes default_allow).
+        return {"verb": "delete", **_ANNOTATION_DESTRUCTIVE_AXES}, "annotation:destructive"
 
     # Neither hint is explicitly True (both None, or destructiveHint
     # explicitly False with readOnlyHint not True) -- no actionable signal;
@@ -232,6 +384,7 @@ def classify_call(
     tool_name: str,
     arguments: dict[str, Any],
     annotations: types.ToolAnnotations | None = None,
+    trust_annotations: bool = False,
 ) -> tuple[dict[str, str], int, str]:
     """The 4-tier resolution (design doc section 8 + BUG 2 fix). Returns
     (classification, magnitude_count, source_tag).
@@ -253,7 +406,7 @@ def classify_call(
             return cls, count, "mapping"
 
     count = magnitude_count(arguments)
-    annotated = _classify_from_annotations(annotations, count)
+    annotated = _classify_from_annotations(annotations, count, trusted=trust_annotations)
     if annotated is not None:
         cls, tier = annotated
         return cls, count, tier
@@ -309,6 +462,7 @@ def build_envelope(
     arguments: dict[str, Any],
     mapping_registry: MappingRegistry | None = None,
     annotations: types.ToolAnnotations | None = None,
+    trust_annotations: bool = False,
 ) -> dict[str, Any]:
     """Build a signed Action Envelope (SPEC section 2) for one `tools/call`.
 
@@ -328,15 +482,21 @@ def build_envelope(
     `types.ToolAnnotations` for this exact tool (see
     upstream.py's `UpstreamRegistry.tool_annotations()` -- the caller,
     gateway.py, looks this up from the already-cached tool list). Consulted
-    ONLY when no declarative mapping matched; an explicit `readOnlyHint`/
-    `destructiveHint` here outranks the name-heuristic. Omitted/None falls
-    through to the name-heuristic exactly like Track 2.
+    ONLY when no declarative mapping matched AND only when the operator set
+    `trust_annotations: true` for this upstream (RFX-173 -- default False,
+    because the annotation comes from the governed party). Omitted/None, or
+    untrusted, falls through to the name-heuristic exactly like Track 2.
     """
     if not session_id:
         raise ValueError("session_id is required (SPEC section 4.1/7) -- fail-closed")
 
     cls, count, classification_source = classify_call(
-        mapping_registry, target_system, tool_name, arguments, annotations
+        mapping_registry,
+        target_system,
+        tool_name,
+        arguments,
+        annotations,
+        trust_annotations=trust_annotations,
     )
 
     agent = {
