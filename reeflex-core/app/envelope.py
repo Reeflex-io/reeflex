@@ -37,6 +37,7 @@ SKELETON SHORTCUTS (upgrade path documented):
 from __future__ import annotations
 
 import math
+import posixpath
 import threading
 import unicodedata
 from typing import Any
@@ -509,6 +510,95 @@ def is_money_amount(raw: Any) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# F8: target.ref is now READ BY A RULE (SPEC §2) — RFX-153
+#
+# R6 (policy/protected.rego) compares target.ref against the operator's
+# declared production assets by PREFIX.  That makes ref the sixth
+# caller-supplied value a rule reads, and the module docstring above already
+# said what has to happen next: "If a future rule exact-matches a NEW
+# caller-supplied field, canonicalize it here first — that is the whole lesson
+# of #89 and RFX-CORE-3."  Shipping the prefix comparison without this
+# function would have re-opened the RFX-86 hole one field over —
+# `/srv/prod/../prod/db.sqlite`, `//srv/prod/db.sqlite`, a trailing newline
+# and a zero-width character are all the same file and none of them starts
+# with "/srv/".
+#
+# THE TREATMENT IS DIFFERENT IN KIND FROM F1/F5/F6/F7, AND THE DIFFERENCE
+# MATTERS.  Those four fold a value into a CLOSED ENUM, so an unrecognised
+# input can be coerced to the most-guarded member.  A ref is an open-valued
+# identifier — there is no "most-guarded path" to coerce to — so this
+# canonicalisation is IDENTITY-PRESERVING ONLY: every step below rewrites a
+# path into a different spelling of THE SAME path, and nothing here can turn
+# one file into another.  What guards the unknown case is the posture switch
+# in protected.rego (`default_protected`), not a coercion here.
+#
+# WHAT IS DELIBERATELY *NOT* DONE: case is NOT folded.  On Linux
+# /srv/Prod/db and /srv/prod/db are two different files, and this value is
+# written into the audit record and into the envelope_hash preimage — folding
+# it would make the evidence name a file that was never touched.  The
+# case-insensitive comparison R6 needs is done in protected.rego, on a
+# lowercased copy, and is documented there as deliberate over-protection.
+# ---------------------------------------------------------------------------
+
+
+def canonicalize_target_ref(raw: Any) -> Any:
+    """Fold a caller-supplied target.ref to a stable comparison spelling.
+
+    Returns None for an absent/null ref (SPEC §2: ref is nullable for bulk
+    actions).  Raises ValidationError for a list or dict, which is neither an
+    identifier nor coercible to one: admitting it would let
+    `{"ref": ["/srv/prod/db.sqlite"]}` match no prefix and so evade R6, and
+    silently dropping it to None would do the same.  A bool/int/float is
+    stringified — an adapter that numbers its entities (`ref: 1481`) is using
+    the field as SPEC §2 intends.
+
+    Two shapes, because one normalisation would corrupt the other:
+
+    PATH-SHAPED refs (no "://") get lexical path normalisation, which
+    collapses duplicate separators and resolves "." and ".." segments.  A ".."
+    that walks OUT of a protected prefix is honestly no longer protected —
+    `/srv/prod/../../etc/hosts` is `/etc/hosts` and is not a declared asset.
+
+    URI-SHAPED refs (containing "://" — the `s3://bucket/key` and
+    `k8s://ns/pod` forms other adapters emit) get token normalisation ONLY.
+    posixpath.normpath would rewrite `s3://b/k` to `s3:/b/k`, mangling the
+    identifier in the audit record to save a comparison nobody asked for.
+    STATED LIMIT: a URI ref is therefore compared as written apart from
+    Unicode/whitespace folding, so `s3://b//k` and `s3://b/k` are two keys.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, (list, dict)):
+        raise ValidationError(
+            "envelope.target.ref must be a string or null, got %s"
+            % type(raw).__name__
+        )
+    if not isinstance(raw, str):
+        raw = str(raw)
+
+    # NFKC + drop control/format chars + trim.  Shared with every other canon
+    # in this module, minus the casefold — see the section comment above.
+    folded = unicodedata.normalize("NFKC", raw)
+    cleaned = "".join(
+        ch for ch in folded if unicodedata.category(ch) not in ("Cc", "Cf")
+    ).strip()
+
+    if not cleaned:
+        return ""
+    if "://" in cleaned:
+        return cleaned
+    # normpath("") is ".", which is why the empty case returned above.
+    normalized = posixpath.normpath(cleaned)
+    # normpath collapses a leading "//" to "//" (POSIX permits an
+    # implementation-defined meaning for exactly two leading slashes); no
+    # deployment relies on that and leaving it in would make "//srv/..." miss
+    # the "/srv/" prefix, which is the E2 evasion.
+    while normalized.startswith("//"):
+        normalized = normalized[1:]
+    return normalized
+
+
+# ---------------------------------------------------------------------------
 # Nonce store — in-memory replay protection (skeleton; see upgrade TODO above)
 # ---------------------------------------------------------------------------
 
@@ -611,6 +701,13 @@ def validate_and_fill_defaults(raw: Any) -> dict:
     # "production".  target is copied first so the caller's dict is untouched.
     _norm_target = dict(target)
     _norm_target["environment"] = _canonicalize_environment(environment)
+    # -- F8: canonicalize target.ref — read by R6 via protected.rego (RFX-153).
+    # Identity-preserving only; see canonicalize_target_ref() for why this one
+    # is not a closed-enum coercion like the four above it.  `ref` is absent
+    # from most envelopes, and absent stays absent: adding a null key would
+    # change the canonical_hash preimage for every envelope that never had one.
+    if "ref" in _norm_target:
+        _norm_target["ref"] = canonicalize_target_ref(_norm_target["ref"])
     envelope["target"] = _norm_target
 
     # -- params: free passthrough; must be a dict for ledger to iterate safely.

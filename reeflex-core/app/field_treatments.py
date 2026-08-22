@@ -247,6 +247,47 @@ TREATMENTS: dict[str, Treatment] = {
              "unverifiable axes-like fields.",
     ),
 
+    # -- target.ref (SPEC §2) -- RFX-153, this PR ---------------------------
+    # THE SIXTH FIELD, AND THE FIRST ONE THAT ARRIVED BY THE FRONT DOOR.  The
+    # other five were found after a defect had shipped through them.  This one
+    # is declared in the same commit that gives a rule its first read of the
+    # field, because the module docstring in envelope.py said to: "If a future
+    # rule exact-matches a NEW caller-supplied field, canonicalize it here
+    # first."  R6 compares ref against protected_assets by prefix, so without
+    # F8 the RFX-86 hole would have reopened one field over.
+    "target.ref": Treatment(
+        CANONICALISE, "envelope.canonicalize_target_ref (F8)",
+        closed_set=frozenset(),  # open-valued: an adapter names its own entities
+        conservative_default="",  # none exists — see the note
+        unverifiable_assertion=True,
+        note="Read by R6 (protected.rego) as a PREFIX against the operator's "
+             "declared production assets. THE ONE CANONICALISE ENTRY WITH NO "
+             "CONSERVATIVE DEFAULT, and the distinction is load-bearing: a "
+             "closed enum can coerce an unrecognised value to its most-guarded "
+             "member, but there is no most-guarded PATH to coerce to, so F8 is "
+             "identity-preserving only (NFKC, drop Cc/Cf, trim, lexical path "
+             "normalisation) and cannot turn one file into another. The unknown "
+             "case is handled by policy posture (protected.rego "
+             "`default_protected`), not by a coercion here. Case is NOT folded "
+             "— this value lands in the audit record and the envelope_hash "
+             "preimage, and /srv/Prod is a different file from /srv/prod; the "
+             "case-insensitive compare R6 needs happens on a lowercased copy "
+             "in the Rego. A list/dict ref is a 400 rather than a silent None, "
+             "because a ref that matches no prefix is an R6 evasion. "
+             "APPROVAL BINDING: target is inside canonical_hash()'s "
+             "{action, axes, magnitude, target} projection, so check 5 already "
+             "binds this field and the declaration below is BIND_HASH. That "
+             "was written here as a cross-PR prediction while RFX-138 (PR #96) "
+             "was still open; #96 landed first, and on the rebase its own gate "
+             "test failed this entry for the undeclared binding exactly as "
+             "predicted rather than letting it through. Recorded because the "
+             "prediction being CHECKED is the point: an approval of "
+             "`rm /srv/prod/db.sqlite` must not be spendable on "
+             "`rm /srv/prod/other.sqlite`, and BIND_HASH is what makes R6's "
+             "new read of the field non-transferable between assets.",
+        approval_binding=BIND_HASH,
+    ),
+
     # -- action.verb (SPEC §3) -- RFX-85 / PR #90 ---------------------------
     "action.verb": Treatment(
         CANONICALISE, "envelope._canonicalize_verb (F6)",

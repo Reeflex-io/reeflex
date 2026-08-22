@@ -27,17 +27,28 @@ Nothing in this guide requires touching `reeflex-core`'s Python. The engine
 ## 1. How it works (short version)
 
 Every request to `POST /v1/decide` carries an Action Envelope (3 risk axes +
-verb + target + magnitude + cumulative state). The base policy evaluates five
-rules (R1–R5) against those fields and returns exactly one `decision` object:
+verb + target + magnitude + cumulative state). The base policy evaluates six
+rules (R1–R6) against those fields and returns exactly one `decision` object:
 `allow`, `deny`, or `require_approval`. Precedence is explicit and total —
 **deny > require_approval > allow** — so for any input exactly one Rego block
 matches and no two rules can disagree.
 
-> **Environment matters.** R2 and R3 are gated on `production`. In `dev`,
+> **Environment matters.** R2, R3 and R6 are gated on `production`. In `dev`,
 > `staging`, or any other environment, an irreversible / broad / systemic
-> action is **not** held or denied by R2/R3 — only R1 (read allow), R5 (delete
-> budget), and R4 (default allow) apply. Set `target.environment` accordingly;
-> the stricter behavior is intentional for production only.
+> action is **not** held or denied by R2/R3/R6 — only R1 (read allow), R5
+> (cumulative budgets), and R4 (default allow) apply. Set
+> `target.environment` accordingly; the stricter behavior is intentional for
+> production only.
+>
+> **R6 also needs a declaration.** It holds an irreversible production action
+> on a *declared production asset* at any cardinality (SPEC §4.3) — which is
+> what closes the `rm /srv/prod/db.sqlite` hole R2's `broad` requirement left
+> open. The assets are listed in `reeflex-core/policy/protected.rego`, and the
+> shipped list is a **floor derived from the FHS**, not a description of your
+> estate. If your production data lives somewhere else — `/home/app/data`, an
+> unconventional Postgres data directory, a bucket name — R6 does not know
+> about it until you add it there. See LEVEL 1 below: this is a one-line data
+> edit, and it is the highest-value one in the pack — see LEVEL 1b.
 >
 > You can also define your **own** environments: the policy matches
 > `target.environment` as a plain string, so you can gate rules on any names
@@ -200,10 +211,80 @@ is the whole workflow for a threshold change.
 
 ---
 
+## 2b. LEVEL 1b — declare your production assets (the highest-value edit)
+
+`reeflex-core/policy/protected.rego` is the other file that is pure data, and
+editing it is the single change that most changes what the pack protects.
+
+R6 (SPEC §4.3) holds an irreversible production action on a **declared
+production asset** at any cardinality. It exists because `blast_radius` is a
+*cardinality* axis: R2 requires `broad`, so before R6 an irreversible
+production destruction that named exactly one entity —
+`rm /srv/prod/db.sqlite` — matched no rule and R4 allowed it.
+
+The shipped list is a **floor**, and it is worth being precise about what that
+means. Its entries are the locations the Filesystem Hierarchy Standard
+designates for durable service state (`/srv`, `/var/lib`, `/var/opt`,
+`/var/spool`, `/var/backups`) plus the common container mount points. That is
+a defensible default and it is **not a description of your estate**: if your
+production data lives under `/home/app/data`, or in a Postgres initialised
+somewhere unconventional, or behind a bucket name, R6 does not know until you
+say so.
+
+```rego
+protected_assets := [
+	"/srv/",
+	"/var/lib/",
+	# ... the shipped floor, then yours:
+	"/home/app/data/",
+	"s3://acme-prod-",
+]
+```
+
+Prefix matching, case-insensitive, against the `target.ref` core has already
+canonicalized (SPEC §4.3) — so `..` segments, doubled separators, a trailing
+newline and a zero-width character cannot spell a declared asset into an
+undeclared one. Declaring `"/srv/"` also protects `/srv` itself.
+
+### The posture switch, if a floor is not enough
+
+```rego
+default_protected := true
+```
+
+Flips the question from "is this declared production state?" to "is this
+declared *ephemeral*?" — every irreversible production action is then held
+unless its ref matches `ephemeral_assets`, and an action with **no** ref is
+held too (an adapter that cannot name what it is destroying is the case a
+human should see).
+
+This is the posture that removes the floor's coverage limit, and it is off by
+default for a reason worth stating plainly: it will hold deletes of paths you
+have not classified yet. A control an operator switches off on day two
+protects less than a smaller one they keep. Turn it on when your
+`ephemeral_assets` list reflects your build and scratch locations.
+
+Both lists and the switch are covered by
+`reeflex-core/policy/protected_test.rego` and, end to end through core, by
+`reeflex-core/tests/test_protected_asset_rfx153.py` — including one test that
+copies the policy dir, flips the switch, and shows one unchanged envelope
+answering `allow` under one posture and `require_approval` under the other,
+with zero Python changes.
+
+---
+
 ## 3. LEVEL 2 — add a rule end-to-end (the mass-read guard)
 
 This is the crux of the guide: adding a genuinely new rule without breaking
 precedence, proven with `opa test` rather than asserted.
+
+> **The example rule below is numbered R7, not R6.** It used to be R6, and it
+> was renumbered when the base pack gained a real R6 (the declared-production-
+> asset rule, SPEC §4.3). Leaving it as R6 would have had you add a second
+> rule under a number the shipped pack already uses — a name collision with a
+> genuine precedence bug behind it, which is exactly the class of mistake this
+> section is about avoiding. The rule *id* string
+> (`reeflex.policy/mass_read_guard`) never depended on the number.
 
 ### The honest problem this rule solves
 
@@ -259,12 +340,12 @@ mass_read_budget := 1000
 Add the predicate, right after `r5_require_approval_budget`:
 
 ```rego
-# R6 (custom): mass-read guard. R5 has NO verb guard — it adds
+# R7 (custom): mass-read guard. R5 has NO verb guard — it adds
 # input.magnitude.count for ANY verb, so a large-count `read` already trips
 # r5_require_approval_budget under the misleading reason "session delete
-# budget exceeded". R6 gives mass reads their own honest rule id and reason;
-# precedence below makes R6 win over R5 for reads.
-r6_mass_read_guard if {
+# budget exceeded". R7 gives mass reads their own honest rule id and reason;
+# precedence below makes R7 win over R5 for reads.
+r7_mass_read_guard if {
 	input.action.verb == "read"
 	input.magnitude.count > mass_read_budget
 	not input.approval.present
@@ -273,33 +354,33 @@ r6_mass_read_guard if {
 
 ### The decision block, and the precedence fix
 
-Add a new `require_approval` block for R6, placed **between R2 and R5** in
-file order (R3 deny > R2 > R6 > R5 > R1 > R4):
+Add a new `require_approval` block for R7, placed **between R2 and R5** in
+file order (R3 deny > R2 > R7 > R5 > R1 > R4):
 
 ```rego
-# require_approval (R6) — mass-read guard; fires when R3 and R2 do not, and
-# takes precedence over R5 for reads (see r6_mass_read_guard comment above).
+# require_approval (R7) — mass-read guard; fires when R3 and R2 do not, and
+# takes precedence over R5 for reads (see r7_mass_read_guard comment above).
 decision := {
 	"decision": "require_approval",
 	"reason": "mass read exceeds session read budget (exfiltration guard)",
 	"rule": "reeflex.policy/mass_read_guard",
 } if {
-	r6_mass_read_guard
+	r7_mass_read_guard
 	not r3_deny
 	not r2_require_approval
 }
 ```
 
 Now the part that is easy to get wrong. R5's existing block did **not** know
-about R6, so a read with `count = 5000` satisfied *both* the new R6 block
+about R7, so a read with `count = 5000` satisfied *both* the new R7 block
 above *and* the existing R5 block below — two candidate values for the same
 complete rule. I proved this is a real failure, not a hypothetical, by
 running the *unguarded* version through `opa test`:
 
 ```
-data.reeflex.policy_test.test_r6_mass_read_gets_its_own_rule_not_session_delete_budget: ERROR (1ms)
+data.reeflex.policy_test.test_r7_mass_read_gets_its_own_rule_not_session_delete_budget: ERROR (1ms)
   reeflex.rego:113: eval_conflict_error: complete rules must not produce multiple outputs
-data.reeflex.policy_test.test_r6_boundary_one_over_triggers_mass_read_guard: ERROR (0s)
+data.reeflex.policy_test.test_r7_boundary_one_over_triggers_mass_read_guard: ERROR (0s)
   reeflex.rego:113: eval_conflict_error: complete rules must not produce multiple outputs
 --------------------------------------------------------------------------------
 PASS: 14/16
@@ -313,7 +394,7 @@ silent widen: `reeflex-core`'s `app/opa.py` treats any non-zero OPA exit or
 malformed result as `OpaEvalError` and the caller denies — fail-closed holds
 even here. But a hard deny on every mass read, with no clear reason, is not
 the outcome you want either.) The fix is the one-line precedence guard the
-brief specified — add `not r6_mass_read_guard` to the R5 block:
+brief specified — add `not r7_mass_read_guard` to the R5 block:
 
 ```diff
  decision := {
@@ -324,15 +405,15 @@ brief specified — add `not r6_mass_read_guard` to the R5 block:
  	r5_require_approval_budget
  	not r3_deny
  	not r2_require_approval
-+	not r6_mass_read_guard
++	not r7_mass_read_guard
  }
 ```
 
 And, for full correctness regardless of how the two constants are tuned
 relative to each other, the same guard on **both allow blocks** (R1 and R4).
 Without it, a deployment that (mis)configures `mass_read_budget` *below*
-`delete_session_budget` could hit a read that trips R6 but not R5, which
-would otherwise fall through to an allow block that has no idea R6 exists —
+`delete_session_budget` could hit a read that trips R7 but not R5, which
+would otherwise fall through to an allow block that has no idea R7 exists —
 the same kind of two-candidate conflict, just reachable from a different
 angle:
 
@@ -346,7 +427,7 @@ angle:
  	not r2_require_approval
  	not r3_deny
  	not r5_require_approval_budget
-+	not r6_mass_read_guard
++	not r7_mass_read_guard
  }
 ```
 
@@ -360,11 +441,11 @@ angle:
  	not r2_require_approval
  	not r3_deny
  	not r5_require_approval_budget
-+	not r6_mass_read_guard
++	not r7_mass_read_guard
  }
 ```
 
-Total precedence is now `R3 (deny) > R2 > R6 > R5 > R1 > R4`, still total —
+Total precedence is now `R3 (deny) > R2 > R7 > R5 > R1 > R4`, still total —
 every predicate combination lands in exactly one block.
 
 ### Tests — precedence proven, not asserted
@@ -372,8 +453,8 @@ every predicate combination lands in exactly one block.
 ```rego
 # THE CRUX: a mass read (count=5000, internal, no prior deletes) used to
 # surface as "session delete budget exceeded" — an honest decision, a
-# misleading reason. R6 now gives it its own rule id.
-test_r6_mass_read_gets_its_own_rule_not_session_delete_budget if {
+# misleading reason. R7 now gives it its own rule id.
+test_r7_mass_read_gets_its_own_rule_not_session_delete_budget if {
 	envelope := {
 		"action": {"verb": "read"},
 		"target": {"environment": "production"},
@@ -386,11 +467,11 @@ test_r6_mass_read_gets_its_own_rule_not_session_delete_budget if {
 	got.rule == "reeflex.policy/mass_read_guard"
 }
 
-# BOUNDARY at mass_read_budget itself (1000): not strictly greater, so R6
+# BOUNDARY at mass_read_budget itself (1000): not strictly greater, so R7
 # does NOT fire — but 1000 is still > delete_session_budget (20), so R5's
 # verb-agnostic count check still fires. Honest limit of the fix: reads
 # between the two thresholds still carry the older, less precise reason.
-test_r6_boundary_at_budget_falls_back_to_r5 if {
+test_r7_boundary_at_budget_falls_back_to_r5 if {
 	envelope := {
 		"action": {"verb": "read"},
 		"target": {"environment": "production"},
@@ -403,8 +484,8 @@ test_r6_boundary_at_budget_falls_back_to_r5 if {
 	got.rule == "reeflex.policy/session_delete_budget"
 }
 
-# One count over the boundary (1001) DOES fire R6.
-test_r6_boundary_one_over_triggers_mass_read_guard if {
+# One count over the boundary (1001) DOES fire R7.
+test_r7_boundary_one_over_triggers_mass_read_guard if {
 	envelope := {
 		"action": {"verb": "read"},
 		"target": {"environment": "production"},
@@ -418,7 +499,7 @@ test_r6_boundary_one_over_triggers_mass_read_guard if {
 }
 
 # Approval clears BOTH r5 and r6 -> falls through to R1 (read-only) -> allow.
-test_r6_mass_read_with_approval_allows if {
+test_r7_mass_read_with_approval_allows if {
 	envelope := {
 		"action": {"verb": "read"},
 		"target": {"environment": "production"},
@@ -431,8 +512,8 @@ test_r6_mass_read_with_approval_allows if {
 	got.rule == "reeflex.policy/read_only_internal"
 }
 
-# PRECEDENCE: R2 still outranks R6 for a read that also matches R2's axes.
-test_r2_outranks_r6_for_qualifying_read if {
+# PRECEDENCE: R2 still outranks R7 for a read that also matches R2's axes.
+test_r2_outranks_r7_for_qualifying_read if {
 	envelope := {
 		"action": {"verb": "read"},
 		"target": {"environment": "production"},
@@ -445,8 +526,8 @@ test_r2_outranks_r6_for_qualifying_read if {
 	got.rule == "reeflex.policy/irreversible_broad_prod"
 }
 
-# PRECEDENCE: R3 (deny) still outranks R6.
-test_r3_outranks_r6_for_qualifying_read if {
+# PRECEDENCE: R3 (deny) still outranks R7.
+test_r3_outranks_r7_for_qualifying_read if {
 	envelope := {
 		"action": {"verb": "read"},
 		"target": {"environment": "production"},
@@ -459,8 +540,8 @@ test_r3_outranks_r6_for_qualifying_read if {
 	got.rule == "reeflex.policy/irreversible_systemic_prod"
 }
 
-# NON-READ verbs are unaffected: R6 checks verb == "read" explicitly.
-test_r6_does_not_fire_for_non_read_verbs if {
+# NON-READ verbs are unaffected: R7 checks verb == "read" explicitly.
+test_r7_does_not_fire_for_non_read_verbs if {
 	envelope := {
 		"action": {"verb": "delete"},
 		"target": {"environment": "staging"},
@@ -475,32 +556,32 @@ test_r6_does_not_fire_for_non_read_verbs if {
 ```
 
 Raw `opa test -v` output, verified in a scratch copy, all 9 original tests
-plus 7 new R6 tests, no conflicts:
+plus 7 new R7 tests, no conflicts:
 
 ```
 data.reeflex.policy_test.test_r3_irreversible_systemic_prod_deny: PASS (1.1707ms)
 data.reeflex.policy_test.test_r5_budget_exceeded_but_approved_allows: PASS (526.7µs)
 data.reeflex.policy_test.test_r5_under_budget_allows: PASS (526.7µs)
 data.reeflex.policy_test.test_r5_budget_exceeded_triggers_require_approval: PASS (1.6895ms)
-data.reeflex.policy_test.test_r6_does_not_fire_for_non_read_verbs: PASS (1.6895ms)
+data.reeflex.policy_test.test_r7_does_not_fire_for_non_read_verbs: PASS (1.6895ms)
 data.reeflex.policy_test.test_r2_irreversible_broad_prod_require_approval: PASS (1.6451ms)
-data.reeflex.policy_test.test_r2_outranks_r6_for_qualifying_read: PASS (2.1718ms)
+data.reeflex.policy_test.test_r2_outranks_r7_for_qualifying_read: PASS (2.1718ms)
 data.reeflex.policy_test.test_r1_read_internal_allow: PASS (2.1501ms)
 data.reeflex.policy_test.test_r5_absent_cumulative_does_not_crash: PASS (1.6313ms)
-data.reeflex.policy_test.test_r6_mass_read_with_approval_allows: PASS (2.6768ms)
-data.reeflex.policy_test.test_r6_boundary_at_budget_falls_back_to_r5: PASS (2.814ms)
+data.reeflex.policy_test.test_r7_mass_read_with_approval_allows: PASS (2.6768ms)
+data.reeflex.policy_test.test_r7_boundary_at_budget_falls_back_to_r5: PASS (2.814ms)
 data.reeflex.policy_test.test_r4_default_allow: PASS (1.1729ms)
-data.reeflex.policy_test.test_r6_boundary_one_over_triggers_mass_read_guard: PASS (1.7685ms)
+data.reeflex.policy_test.test_r7_boundary_one_over_triggers_mass_read_guard: PASS (1.7685ms)
 data.reeflex.policy_test.test_precedence_deny_over_require_approval: PASS (1.1462ms)
-data.reeflex.policy_test.test_r6_mass_read_gets_its_own_rule_not_session_delete_budget: PASS (1.1462ms)
-data.reeflex.policy_test.test_r3_outranks_r6_for_qualifying_read: PASS (711.2µs)
+data.reeflex.policy_test.test_r7_mass_read_gets_its_own_rule_not_session_delete_budget: PASS (1.1462ms)
+data.reeflex.policy_test.test_r3_outranks_r7_for_qualifying_read: PASS (711.2µs)
 --------------------------------------------------------------------------------
 PASS: 16/16
 ```
 
 **What this example does NOT claim**: mass reads between `delete_session_budget`
 (20) and `mass_read_budget` (1000) still surface under the older
-`session_delete_budget` rule id — `test_r6_boundary_at_budget_falls_back_to_r5`
+`session_delete_budget` rule id — `test_r7_boundary_at_budget_falls_back_to_r5`
 proves that boundary rather than hiding it. Pick your own `mass_read_budget`
 deliberately; this guide's `1000` is illustrative, not a recommendation.
 
@@ -567,14 +648,15 @@ needs):
 
 | Field | Type | Used by |
 |---|---|---|
-| `input.action.verb` | string (`read`/`create`/`update`/`delete`/`execute`/`transact`/`emit`) | R1, R6 |
-| `input.axes.reversibility` | `reversible`/`recoverable`/`irreversible` | R2, R3 |
+| `input.action.verb` | string (`read`/`create`/`update`/`delete`/`execute`/`transact`/`emit`) | R1, R7 |
+| `input.axes.reversibility` | `reversible`/`recoverable`/`irreversible` | R2, R3, R6 |
 | `input.axes.blast_radius` | `single`/`scoped`/`broad`/`systemic` | R2, R3 |
 | `input.axes.externality` | `internal`/`outbound`/`physical` | R1 |
-| `input.target.environment` | `production`/`staging`/`dev` | R2, R3 |
-| `input.magnitude.count` | integer | R5, R6 |
+| `input.target.environment` | `production`/`staging`/`dev` | R2, R3, R6 |
+| `input.target.ref` | string or `null`; canonicalized by core (SPEC §4.3) | R6 |
+| `input.magnitude.count` | integer | R5, R7 |
 | `input.cumulative.count_by_verb.*` | object, injected by core before eval (SPEC §4.1) | R5 (`.delete`) |
-| `input.approval.present` | boolean | R5, R6 |
+| `input.approval.present` | boolean | R5, R7 |
 
 Full envelope shape, including `agent`, `target.kind`, `params`, `context`,
 and `meta`: [`reeflex-spec/SPEC.md`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-spec/SPEC.md) §2. The
