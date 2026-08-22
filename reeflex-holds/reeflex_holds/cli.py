@@ -13,10 +13,25 @@ error, and exit non-zero on failure -- never silently.
 
 Subcommands: list, approve, reject. Same 4-eyes and REEFLEX_PRINCIPAL rules
 as every other surface (see server.py, client.py): the resolving identity is
-never a CLI argument, only ever the server's own REEFLEX_PRINCIPAL env var,
-so a resolution made from this CLI is indistinguishable in core's evidence
-from one made through the MCP tool or the dashboard -- same endpoint, same
-principal plumbing, same reeflex-core validation chain.
+never a CLI argument, only ever the server's own REEFLEX_PRINCIPAL env var
+-- same endpoint, same principal plumbing, same reeflex-core validation
+chain as the MCP tool and the dashboard.
+
+RFX-149: what that plumbing CANNOT promise is that the identity was
+verified. Since core gained `decided_by_verified` / `principal_source`
+(RFX-84), a resolution is recorded as either
+  principal_source "credential"  -> the approver came from the bearer token
+                                    it is BOUND to (REEFLEX_RESOLVER_TOKENS)
+  principal_source "asserted"    -> the approver is whatever REEFLEX_PRINCIPAL
+                                    said, unverified; core warns on ITS OWN
+                                    stderr, which the operator never sees
+and core's whole point in adding those fields was that "an unverified claim
+is no longer indistinguishable from a real human decision". This module used
+to print one identical success sentence for both, so at the only surface a
+human actually reads, it stayed exactly indistinguishable. Every human-
+readable line that names a decider now names how that decider was
+established, on the resolve path AND on `list` (where a reviewer looking at
+an already-approved hold previously saw no approver at all).
 """
 
 from __future__ import annotations
@@ -36,6 +51,32 @@ EXIT_REJECTED = 1
 EXIT_SETUP_ERROR = 2
 
 
+def _provenance(hold: dict[str, Any]) -> str:
+    """Render how the approver on this hold record was established.
+
+    Reads core's additive RFX-84 fields. Three cases, all of which a human
+    reading a decision needs told apart:
+
+      credential  -> the approver came from the bearer token it is bound to.
+      asserted    -> the approver is an unverified claim. Said plainly, in
+                     the same breath as the identity, because the operator
+                     has no other way to find out: core's warning goes to
+                     core's stderr, on the other side of the wire.
+      absent      -> a core too old to carry the fields (pre-RFX-84). Not
+                     reported as verified and not reported as unverified --
+                     this build cannot tell us, and saying either would be
+                     inventing evidence.
+    """
+    if "decided_by_verified" not in hold and "principal_source" not in hold:
+        return "verification not reported by this core"
+    if hold.get("decided_by_verified") is True:
+        return f"VERIFIED via {hold.get('principal_source') or 'credential'}"
+    return (
+        f"UNVERIFIED ({hold.get('principal_source') or 'asserted'}) -- core accepted "
+        "this identity as claimed and did not confirm it"
+    )
+
+
 def _print_hold_line(hold: dict[str, Any]) -> None:
     envelope = hold.get("envelope") or {}
     action = envelope.get("action") or {}
@@ -49,6 +90,14 @@ def _print_hold_line(hold: dict[str, Any]) -> None:
     print(
         f"    created {hold.get('created_ts', '?')}  expires {hold.get('expires_ts', '?')}"
     )
+    # A hold someone already decided is the one a reviewer most needs the
+    # decider for; printing only id/rule/timestamps made `list --status
+    # approved` a list of approvals with no approver (RFX-149).
+    if hold.get("decided_by"):
+        print(
+            f"    decided {hold.get('decided_ts', '?')} by {hold['decided_by']} "
+            f"[{_provenance(hold)}]"
+        )
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -99,6 +148,13 @@ def _resolve(args: argparse.Namespace, decision: str) -> int:
             f"Hold {result.get('id', args.id)} is now {result.get('status', '?')} "
             f"(decided_by={result.get('decided_by', '?')}, decided_ts={result.get('decided_ts', '?')})."
         )
+        # The identity above is only as good as the way core established it,
+        # and the operator who just typed `approve` is the last person who
+        # can still act on that (RFX-149). stderr, not stdout: the success
+        # line is the result, this is the caveat on it, and a caller piping
+        # stdout should not have its output shape changed by a config it
+        # does not control.
+        print(f"  approver: {_provenance(result)}", file=sys.stderr)
     return EXIT_OK
 
 

@@ -45,9 +45,16 @@ reeflex-holds = "reeflex_holds.server:main"
 [tool.setuptools.packages.find]
 include = ["reeflex_holds*"]
 
-# NOTE: this package is NOT yet published to PyPI, and the name "reeflex-holds"
-# is not yet reserved there (only reeflex / reeflex-core / reeflex-claude are).
-# This file makes it pip-installable from source (`pip install -e .`) so
-# `python -m reeflex_holds` and the `reeflex-holds` console script resolve
-# once installed. Publishing to PyPI is a GATE (human GO required) -- not
-# performed by this change.
+# NOTE: this package IS published to PyPI -- https://pypi.org/project/reeflex-holds/
+# -- and has been since 2026-07-04. The note that used to sit here said the
+# opposite ("NOT yet published ... the name is not yet reserved"), and it was
+# still saying it 22 hours after RFX-42 shipped the CLI to main, which is part
+# of why nobody noticed that no released wheel contains that CLI (RFX-149):
+# the packaging file itself said no customer could pip-install this.
+#
+# So: `version` above is the version this source tree WILL publish, not the
+# one PyPI currently serves. They are routinely different, and each release
+# is still an owner-gated human GO (docs/RELEASING.md) -- check
+# https://pypi.org/project/reeflex-holds/#history for what users actually
+# have. `pip install -e .` from this directory installs the tree, console
+# script and `python -m reeflex_holds` entry point included.
