@@ -134,6 +134,46 @@ Every action is priced on three axes. This is what makes coverage intrinsic inst
 
 Policy reasons in these axes. A rule like *"irreversible + broad + production → require human approval"* protects Postgres, S3, and WordPress identically.
 
+### 4.0 When the adapter cannot price the action (RFX-132)
+
+An axis value core does not recognise — absent, misspelled, or a member of no
+closed enum — coerces to the **most-guarded** member (§7's fail-closed bias).
+Core also **records that it did so**, per field, in a core-computed
+`provenance.undeclared` list on the envelope it evaluates.
+
+That list is what lets a rule distinguish two things the coerced values look
+identical for:
+
+| | what the envelope says | what the canon does |
+|---|---|---|
+| **declared** | the adapter measured this action and it *is* irreversible + systemic + production | R3 — a terminal deny no human may clear |
+| **guessed** | the adapter could not price this action, and core filled the gaps | **R0 — a hold**, `reeflex.policy/unclassified_action` |
+
+**Rationale.** DENY makes the product brittle at the moment it is least
+certain, and a gate that refuses the unfamiliar gets switched off — a
+fail-open with extra steps. ALLOW is the defect class the canon exists to
+prevent. HOLD is the third state, and *"I do not know what this is, ask a
+human"* is the most honest thing the product can say about an input it cannot
+verify.
+
+**Bounds, so the rule cannot be read as more than it is.**
+- R0 only ever converts a **refusal**: it fires when R2 or R3 would, never on
+  an allow. An unaliased verb on a declared, reversible, non-production action
+  is still R4.
+- Only the three inputs R2 and R3 read — `axes.reversibility`,
+  `axes.blast_radius`, `target.environment` — can trigger it. Guessing a field
+  no rule reads cannot soften a verdict.
+- "Declared" is judged on the **folded** token, so `Systemic` is a declaration
+  of `systemic`. Judged on the raw exact match, a caller would downgrade a
+  terminal deny to a resolvable hold by capitalising one letter.
+- `provenance` is **core-computed and overwritten unconditionally**. A caller
+  cannot assert its way from R3's deny into R0's hold.
+
+**Adapters SHOULD emit all three axes and a SPEC §2 environment tier.** An
+adapter that does gets exactly the verdicts and rule ids it always did; R0 is
+visible only where classification coverage is actually missing, and it is
+reported as such (a coverage gap, not evidence of a control working).
+
 ---
 
 ## 4.1 Cumulative state — fragmentation resistance

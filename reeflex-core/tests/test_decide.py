@@ -383,8 +383,14 @@ class TestRejectInvalid(unittest.TestCase):
         """
         Missing axes values -> conservative defaults injected -> decision produced
         (NOT a reject; missing axis VALUES are defaulted, not rejected).
-        The conservative defaults (irreversible, systemic, physical) should trigger
-        a deny in production (R3: irreversible + systemic + production).
+
+        RFX-132 changed WHICH withholding this produces. The defaults still
+        compose to irreversible + systemic + production, which is R3's shape --
+        but every one of those three came from core, not from the adapter, so
+        the verdict rests entirely on core's own guesses. That is a hold with
+        its own rule id ("we could not classify this, ask a human"), not R3's
+        terminal refusal that no human may clear. The action is withheld either
+        way; what changed is whether a human can get at it.
         """
         env = _base_envelope(environment="production")
         env["axes"] = {}  # all axis values missing -> defaults injected
@@ -395,11 +401,15 @@ class TestRejectInvalid(unittest.TestCase):
         )
         # Should produce a decision (200), not 400 — axes VALUES can be defaulted
         self.assertEqual(status, 200, f"missing axis values must be defaulted, not rejected: {resp}")
-        # Conservative defaults: irreversible + systemic + production -> deny (R3)
+        self.assertNotEqual(
+            resp["decision"], "allow",
+            f"an envelope core could not classify must never be allowed: {resp}")
         self.assertEqual(
-            resp["decision"], "deny",
-            f"conservative defaults should yield deny (R3), got: {resp}"
-        )
+            resp["decision"], "require_approval",
+            f"conservative defaults should yield a hold (R0), got: {resp}")
+        self.assertEqual(
+            resp["rule"], "reeflex.policy/unclassified_action",
+            f"the hold must carry the DISTINCT rule id, not R2's: {resp}")
 
 
 # ---------------------------------------------------------------------------
@@ -504,19 +514,31 @@ class TestAxisCoercion(unittest.TestCase):
             f"'IRREVERSIBLE' must coerce to deny-class, got: {resp}"
         )
 
-    def test_typo_permanent_coerces_to_deny(self) -> None:
-        """'permanent' (not in enum) -> coerced to 'irreversible' -> deny (R3)."""
+    def test_typo_permanent_coerces_to_the_deny_class_but_holds(self) -> None:
+        """'permanent' -> coerced to 'irreversible', and RECORDED as a guess.
+
+        The coercion is unchanged (RFX-132 did not touch _AXIS_DEFAULTS): the
+        value core evaluates is still the most-guarded member. What is new is
+        that core knows it supplied that value itself, so the verdict is the
+        unclassified hold rather than R3's terminal deny. Still withheld,
+        still not allow, now reachable by a human.
+        """
         env = self._deny_combo_env(reversibility="permanent")
         status, resp = process(env)
         print(f"\n[T_axis_coercion/permanent] status={status} response={json.dumps(resp, indent=2)}")
         self.assertEqual(status, 200)
-        self.assertEqual(
-            resp["decision"], "deny",
-            f"'permanent' must coerce to deny-class, got: {resp}"
-        )
+        self.assertNotEqual(resp["decision"], "allow",
+                            f"'permanent' must never coerce to allow: {resp}")
+        self.assertEqual(resp["decision"], "require_approval", resp)
+        self.assertEqual(resp["rule"], "reeflex.policy/unclassified_action", resp)
 
-    def test_unknown_axis_value_xyz_coerces_to_deny(self) -> None:
-        """'xyz' (completely unknown) -> coerced to most-restrictive -> deny (R3)."""
+    def test_unknown_axis_value_xyz_coerces_to_most_restrictive_and_holds(self) -> None:
+        """'xyz' everywhere -> most-restrictive values, and a hold (RFX-132).
+
+        Three unknown axes is the shape an adapter emits when it cannot price
+        the action at all. Coercion is unchanged; the verdict is now the one
+        that says so.
+        """
         env = _base_envelope(
             verb="execute",
             environment="production",
@@ -529,10 +551,9 @@ class TestAxisCoercion(unittest.TestCase):
         status, resp = process(env)
         print(f"\n[T_axis_coercion/xyz] status={status} response={json.dumps(resp, indent=2)}")
         self.assertEqual(status, 200)
-        self.assertEqual(
-            resp["decision"], "deny",
-            f"Unknown axis values must coerce to most-restrictive (deny), got: {resp}"
-        )
+        self.assertNotEqual(resp["decision"], "allow", resp)
+        self.assertEqual(resp["decision"], "require_approval", resp)
+        self.assertEqual(resp["rule"], "reeflex.policy/unclassified_action", resp)
 
     def test_canonical_reversible_still_allows(self) -> None:
         """Sanity check: canonical 'reversible' still produces allow (not broken by F1)."""
@@ -857,11 +878,15 @@ class TestCrashSurface(unittest.TestCase):
         }
         status, resp = self._call(env)
         print(f"\n[T_crash/axis_list] status={status} resp={json.dumps(resp)}")
-        # Coerced to most-restrictive; production + systemic + irreversible -> deny
+        # Coerced to most-restrictive; the property under test is that garbage
+        # never crashes and never allows. Since RFX-132 the verdict is the
+        # unclassified hold rather than R3 -- a value core cannot read is a
+        # value core guessed.
         self._assert_not_allow(resp, "axis_list")
         self.assertEqual(status, 200)
-        self.assertEqual(resp.get("decision"), "deny",
-                         f"list axis value must coerce to most-restrictive (deny): {resp}")
+        self.assertEqual(resp.get("decision"), "require_approval",
+                         f"list axis value must be withheld: {resp}")
+        self.assertEqual(resp.get("rule"), "reeflex.policy/unclassified_action", resp)
 
     def test_axis_blast_radius_dict_coerced_not_crash(self) -> None:
         """
@@ -879,8 +904,9 @@ class TestCrashSurface(unittest.TestCase):
         print(f"\n[T_crash/axis_dict] status={status} resp={json.dumps(resp)}")
         self._assert_not_allow(resp, "axis_dict")
         self.assertEqual(status, 200)
-        self.assertEqual(resp.get("decision"), "deny",
-                         f"dict axis value must coerce to most-restrictive (deny): {resp}")
+        self.assertEqual(resp.get("decision"), "require_approval",
+                         f"dict axis value must be withheld: {resp}")
+        self.assertEqual(resp.get("rule"), "reeflex.policy/unclassified_action", resp)
 
     # ---- crash site 2: magnitude is a non-dict -----------------------------
 

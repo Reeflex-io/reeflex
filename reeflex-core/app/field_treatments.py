@@ -416,6 +416,35 @@ TREATMENTS: dict[str, Treatment] = {
         CORE_COMPUTED, "ledger.compute_cumulative",
         note="money; keyed on the CANONICAL currency, 'XXX' when undeclared",
     ),
+
+    # -- core-computed: which classification fields core had to GUESS -------
+    # RFX-132. The one field in this table that is ABOUT the other fields:
+    # for each classification input, did the adapter declare something core
+    # recognises, or did a conservative default fill the gap? R0 reads it to
+    # tell "this action IS irreversible+systemic+production" (declared: a
+    # terminal deny) from "we could not tell what this action is" (guessed: a
+    # hold, with its own rule id, because those are different facts).
+    #
+    # CORE_COMPUTED for the same reason `cumulative` is, and it is the whole
+    # security of R0: a caller that could write this block could assert "you
+    # guessed at my reversibility" about an envelope it declared perfectly and
+    # downgrade its own terminal R3 to a resolvable hold. envelope.py assigns
+    # it unconditionally from the RAW caller input, after every coercion has
+    # run; a caller-supplied `provenance` is discarded, never merged.
+    # (No entry for the bare `provenance` path: nothing reads the object
+    # itself, only the one projection below, and this table refuses a
+    # declaration the code does not actually read -- see
+    # TestEnumerationIsTotal::test_no_stale_declarations.)
+    "provenance.undeclared": Treatment(
+        CORE_COMPUTED, "envelope.validate_and_fill_defaults (F8)",
+        note="Sorted list of the classification fields whose value core "
+             "supplied rather than the adapter: any of axes.reversibility, "
+             "axes.blast_radius, axes.externality, target.environment, "
+             "action.verb. DECLARED is judged on the FOLDED token, so "
+             "'Systemic' is a declaration and not a guess -- judged on the raw "
+             "exact match a caller would downgrade a terminal R3 to a "
+             "resolvable hold by capitalising one letter.",
+    ),
 }
 
 

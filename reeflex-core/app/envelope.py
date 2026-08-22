@@ -383,6 +383,93 @@ def _canonicalize_verb(raw_verb: str, canonical_reversibility: str) -> str:
     return _VERB_DEFAULT
 
 
+# ---------------------------------------------------------------------------
+# F8: CLASSIFICATION PROVENANCE — did the adapter TELL us, or did we GUESS?
+# (RFX-132)
+#
+# Every conservative default above is correct and every one of them is a
+# GUESS.  Composed, three of them price an envelope an adapter emits when it
+# cannot classify an action:
+#
+#     {"action": {"verb": "frobnicate"},
+#      "target": {"environment": "qa-eu"},
+#      "axes": {}}
+#
+#     reversibility -> irreversible   (F1 default)
+#     blast_radius  -> systemic       (F1 default)
+#     environment   -> production     (F5 default)
+#     = irreversible + systemic + production = R3 = DENY, TERMINALLY.
+#
+# R3 is the one rule a human cannot clear.  So "we could not tell what this
+# was" was resolving to the most brittle answer the product has, with no human
+# anywhere in it -- on a product whose value proposition IS the human in the
+# loop.  See policy/reeflex.rego's R0 block for the argument about what it
+# should resolve to instead; this block's only job is to make the difference
+# VISIBLE to the policy, because a coerced value is indistinguishable from a
+# declared one once the coercion has happened.
+#
+# WHAT COUNTS AS "DECLARED", AND WHY THE FOLD IS USED FOR THE JUDGEMENT BUT
+# NOT FOR THE VALUE.  A field is DECLARED when the caller supplied something
+# core RECOGNISES -- checked against the folded token (NFKC, control/format
+# stripped, trimmed, casefolded), so "Systemic" is a declaration of systemic
+# and not a guess.  That much is required for soundness: judged on the raw
+# exact match, a caller would downgrade a terminal R3 DENY to a resolvable
+# hold by capitalising one letter, which is RFX-86's evasion one tier up.
+#
+# The fold is NOT used to pick the VALUE, and that restraint is deliberate.
+# `_AXIS_ALLOWED` is still matched exactly, so "Broad" still coerces to
+# `systemic` exactly as it did before this change -- because folding the value
+# too would turn `blast_radius: "SINGLE"` on an irreversible production action
+# from a DENY into an ALLOW, and a case fix that relaxes a refusal is not
+# something this ticket is chartered to do. The residual (a recognisable but
+# non-canonical spelling is read as the most-guarded member, a wrong DENY) is
+# UNCHANGED by this change and is its own ticket. Stated rather than quietly
+# fixed or quietly ignored.
+#
+# CORE-COMPUTED, UNCONDITIONALLY.  A caller supplying its own `provenance`
+# block would otherwise be able to assert "you guessed at this" about an
+# envelope it declared perfectly, and downgrade its own R3 to a hold. Same
+# treatment `cumulative` gets in decide.py, for the same reason: the block is
+# overwritten from what core actually did, never merged with what the caller
+# claims. See field_treatments.TREATMENTS.
+# ---------------------------------------------------------------------------
+
+#: The classification fields whose provenance is recorded. Anything a rule
+#: reads to decide WHAT KIND OF ACTION this is belongs here.
+_PROVENANCE_FIELDS: tuple[str, ...] = (
+    "axes.reversibility",
+    "axes.blast_radius",
+    "axes.externality",
+    "target.environment",
+    "action.verb",
+)
+
+
+def _axis_is_declared(raw_value: Any, axis: str) -> bool:
+    """True if the caller supplied a value for `axis` that core RECOGNISES."""
+    if not isinstance(raw_value, str):
+        return False
+    return _normalize_token(raw_value) in _AXIS_ALLOWED[axis]
+
+
+def _environment_is_declared(raw_env: Any) -> bool:
+    """True if `target.environment` folds to a tier core knows."""
+    if not isinstance(raw_env, str):
+        return False
+    return _normalize_token(raw_env) in _ENV_CANON
+
+
+def _verb_is_declared(raw_verb: Any) -> bool:
+    """True if `action.verb` matched the SPEC §3 verb set or an alias of it.
+
+    Mirrors `_canonicalize_verb`'s own lookup exactly, so "declared" means the
+    same thing here as "did not fall back on the reversibility axis" there.
+    """
+    if not isinstance(raw_verb, str):
+        return False
+    return any(key in _VERB_CANON for key in _verb_key_variants(raw_verb))
+
+
 def _delete_signal_from_ability(ability: Any) -> bool:
     """True if action.ability names a delete while action.verb claims otherwise.
 
@@ -684,6 +771,31 @@ def validate_and_fill_defaults(raw: Any) -> dict:
         _canon_verb = "delete"
     _norm_action["verb"] = _canon_verb
     envelope["action"] = _norm_action
+
+    # -- F8: record WHICH classification fields core had to guess (RFX-132) --
+    # Built from the RAW caller input, after every coercion above has run, and
+    # assigned unconditionally so a caller-supplied `provenance` block is
+    # discarded rather than merged. Sorted so the list is stable across
+    # requests -- it rides on the audit line and the hold record, where an
+    # unstable ordering would make two identical envelopes look different.
+    _undeclared: list[str] = []
+    if not _axis_is_declared(
+            (axes or {}).get("reversibility") if isinstance(axes, dict) else None,
+            "reversibility"):
+        _undeclared.append("axes.reversibility")
+    if not _axis_is_declared(
+            (axes or {}).get("blast_radius") if isinstance(axes, dict) else None,
+            "blast_radius"):
+        _undeclared.append("axes.blast_radius")
+    if not _axis_is_declared(
+            (axes or {}).get("externality") if isinstance(axes, dict) else None,
+            "externality"):
+        _undeclared.append("axes.externality")
+    if not _environment_is_declared(environment):
+        _undeclared.append("target.environment")
+    if not _verb_is_declared(verb):
+        _undeclared.append("action.verb")
+    envelope["provenance"] = {"undeclared": sorted(_undeclared)}
 
     # -- F2: magnitude.count: canonicalize to int; reject invalid values --
     # Guard: magnitude must be a dict if present; a string/list is a hard error.
