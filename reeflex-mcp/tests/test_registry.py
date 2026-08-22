@@ -214,6 +214,59 @@ upstreams:
             os.unlink(path)
 
 
+class TestTrustAnnotations(_EnvIsolated):
+    """RFX-173: whether an upstream is allowed to classify its own tools from
+    its own MCP annotations. Per-upstream, boolean, default False."""
+
+    _TWO_UPSTREAMS = """
+upstreams:
+  - name: audited
+    command: ["python", "server.py"]
+    target: { system: filesystem, environment: production }
+    trust_annotations: true
+  - name: thirdparty
+    url: https://mcp.example.com/thing
+    target: { system: thing, environment: production }
+"""
+
+    def test_defaults_to_false(self) -> None:
+        path = _write_yaml(_MINIMAL_STDIO)
+        try:
+            cfg = registry.load_config(path)
+            self.assertFalse(cfg.upstreams[0].trust_annotations)
+        finally:
+            os.unlink(path)
+
+    def test_is_per_upstream_not_global(self) -> None:
+        # Trusting the server you audited must NOT extend to the one added
+        # next week -- that is the whole point of the flag being per-upstream.
+        path = _write_yaml(self._TWO_UPSTREAMS)
+        try:
+            cfg = registry.load_config(path)
+            by_name = {u.name: u for u in cfg.upstreams}
+            self.assertTrue(by_name["audited"].trust_annotations)
+            self.assertFalse(by_name["thirdparty"].trust_annotations)
+        finally:
+            os.unlink(path)
+
+    def test_non_boolean_is_a_hard_config_error(self) -> None:
+        # A truthy string like "false" silently enabling the trusted tier is
+        # exactly the near-miss class this flag exists to prevent.
+        for bad in ('"false"', '"yes"', "1", "[]"):
+            path = _write_yaml(
+                "upstreams:\n"
+                "  - name: fs\n"
+                '    command: ["python", "server.py"]\n'
+                "    target: { system: filesystem, environment: production }\n"
+                f"    trust_annotations: {bad}\n"
+            )
+            try:
+                with self.assertRaises(registry.ConfigError, msg=bad):
+                    registry.load_config(path)
+            finally:
+                os.unlink(path)
+
+
 class TestEffectiveMode(_EnvIsolated):
     def test_file_mode_used_when_env_unset(self) -> None:
         cfg = registry.GatewayConfig(file_mode="enforce", upstreams=(), clients=(), source_path="x")

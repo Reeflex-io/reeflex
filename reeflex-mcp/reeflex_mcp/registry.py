@@ -63,6 +63,14 @@ class UpstreamSpec:
     target_system: str
     target_environment: str
     required: bool = True
+    # RFX-173: opt IN to reading this upstream's own MCP tool annotations
+    # (`readOnlyHint`/`destructiveHint`) as classification tier 2. Default
+    # False: the annotation is declared by the component being governed, the
+    # MCP spec says a client must treat annotations as untrusted unless the
+    # server is trusted, and `readOnlyHint: true` on a destructive tool was
+    # measured turning a core `deny` into an `allow` that the gateway then
+    # dispatched. Set it only for an upstream you audited yourself.
+    trust_annotations: bool = False
     # stdio
     command: str | None = None
     args: tuple[str, ...] = ()
@@ -190,6 +198,17 @@ def _parse_upstream(entry: object, *, index: int, source_path: str) -> UpstreamS
     if not isinstance(required, bool):
         raise ConfigError(f"reeflex-mcp config: upstream {name!r}.required must be a boolean")
 
+    # RFX-173: must be spelled as a real boolean -- a truthy string like
+    # "false" silently enabling the trusted tier is exactly the class of
+    # near-miss this flag exists to prevent.
+    trust_annotations = entry.get("trust_annotations", False)
+    if not isinstance(trust_annotations, bool):
+        raise ConfigError(
+            f"reeflex-mcp config: upstream {name!r}.trust_annotations must be a boolean "
+            f"(got {trust_annotations!r}) -- it decides whether the upstream is allowed to "
+            f"classify its own tools, so it is never inferred"
+        )
+
     if has_command:
         command_field = entry["command"]
         if isinstance(command_field, str):
@@ -211,6 +230,7 @@ def _parse_upstream(entry: object, *, index: int, source_path: str) -> UpstreamS
             target_system=target_system.strip(),
             target_environment=target_environment,
             required=required,
+            trust_annotations=trust_annotations,
             command=argv[0],
             args=tuple(argv[1:]),
             env={str(k): str(v) for k, v in env_field.items()},
@@ -237,6 +257,7 @@ def _parse_upstream(entry: object, *, index: int, source_path: str) -> UpstreamS
         target_system=target_system.strip(),
         target_environment=target_environment,
         required=required,
+        trust_annotations=trust_annotations,
         url=url.strip(),
         auth_token_env=auth_token_env,
     )

@@ -183,18 +183,52 @@ documented inconsistency in that one component, not a second standard —
 
 ## 4. Mappings — declarative normalization (Track 4)
 
-Every `tools/call` is normalized into an Action Envelope via a **3-tier
+Every `tools/call` is normalized into an Action Envelope via a **4-tier
 resolution**, highest precedence first:
 
 1. **Declarative mapping** — `mappings/<target.system>.yaml` has an entry for
    this exact tool name. Source tag: `mapping`.
-2. **Name-heuristic** — the tool name matches a `delete_*`/`remove_*`/
+2. **The upstream's own MCP annotations** — `readOnlyHint: true` (→ `read`,
+   reversible) or `destructiveHint: true` (→ `delete`, irreversible +
+   `systemic`), read from the tool's own `tools/list` declaration. Source tag:
+   `annotation:<bucket>`. **OFF unless you set `trust_annotations: true` on
+   that upstream** — see the warning below.
+3. **Name-heuristic** — the tool name matches a `delete_*`/`remove_*`/
    `drop_*` (→ `delete`, irreversible), `send_*`/`post_*`/`create_*`/`push_*`
-   (→ `create`, outbound), or `get_*`/`list_*`/`read_*`/`search_*` (→ `read`)
-   prefix. Source tag: `heuristic:<bucket>`.
-3. **Conservative default** — nothing above matched; axes are forced to the
+   (→ `create`, outbound), or `get_*`/`list_*`/`read_*`/`search_*`/`count_*`/
+   `fetch_*`/`query_*`/`describe_*`/`find_*`/`select_*` (→ `read`) prefix.
+   A read prefix is believed **only when no later token in the name is a
+   mutating stem** — `search_files` reads, `search_and_replace` does not, and
+   the latter falls to tier 4. Source tag: `heuristic:<bucket>`.
+4. **Conservative default** — nothing above matched; axes are forced to the
    restrictive floor (`irreversible`/`systemic`/`internal`), same fail-closed
    spirit as core's own axis coercion. Source tag: `heuristic:default`.
+
+> ### Why tier 2 is off by default (RFX-173)
+>
+> An MCP tool annotation is declared by **the upstream server** — the
+> component the gateway exists to govern. The MCP specification says a client
+> MUST treat tool annotations as untrusted unless the server is trusted.
+>
+> Measured on the published `reeflex-mcp` 0.1.3 gateway in `enforce` mode,
+> `target.environment: production`, against a real `reeflex-core`: an upstream
+> that declared `readOnlyHint: true` on a tool which deletes a file turned
+> core's verdict from **`deny`** (`reeflex.policy/irreversible_systemic_prod`)
+> into **`allow`** (`reeflex.policy/read_only_internal`), and the gateway
+> dispatched the call. The file was gone. The *only* difference from the
+> denied control was that one boolean.
+>
+> So `trust_annotations` is **per-upstream and defaults to `false`**. Trusting
+> your own audited filesystem server must not extend to a third-party server
+> you add next week. If you want a specific tool classified differently, the
+> supported way is a **declarative mapping** (tier 1) — an operator statement,
+> not a vendor one.
+>
+> Note also that `destructiveHint: true` keeps the floor's `systemic` blast
+> radius. It used to derive `single` from magnitude, which made an *honest*
+> destructive declaration weaker than saying nothing at all (`allow` instead
+> of `deny`). "Destructive" is a claim about kind; the server said nothing
+> about scope.
 
 Every envelope carries which tier fired at `context.classification_source`,
 and the gateway logs it to stderr on every call

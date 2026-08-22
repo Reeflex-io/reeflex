@@ -75,10 +75,22 @@ for the competitive positioning. Track 7 (PyPI publication) is done:
 
 1. **declarative mapping** -- `mappings/<target.system>.yaml` has an entry
    for this exact tool name. Source tag: `mapping`.
-2. **name-heuristic** -- the tool name matches one of the `delete_*`/
-   `send_*`/`get_*`/etc. prefixes (see `reeflex_mcp/normalize.py`). Source
+2. **the upstream's own MCP annotations** -- `readOnlyHint: true` /
+   `destructiveHint: true` from the tool's own `tools/list` declaration.
+   Source tag: `annotation:<bucket>`. **OFF unless you set
+   `trust_annotations: true` on that upstream** -- the annotation is declared
+   by the component being governed, and the MCP spec says a client must treat
+   annotations as untrusted unless the server is. Measured on this build in
+   `enforce` mode against a real core: an upstream declaring
+   `readOnlyHint: true` on a tool that deletes a file turned core's `deny`
+   into `allow`, and the gateway dispatched the deletion. See
+   `docs/mcp-gateway.md` section 4.
+3. **name-heuristic** -- the tool name matches one of the `delete_*`/
+   `send_*`/`get_*`/etc. prefixes (see `reeflex_mcp/normalize.py`). A read
+   prefix is believed only when no later token in the name is a mutating stem
+   (`search_files` reads; `search_and_replace` falls to the floor). Source
    tag: `heuristic:<bucket>`.
-3. **conservative default** -- nothing above matched; axes are forced to the
+4. **conservative default** -- nothing above matched; axes are forced to the
    restrictive floor (`irreversible`/`systemic`/`internal`). Source tag:
    `heuristic:default`.
 
