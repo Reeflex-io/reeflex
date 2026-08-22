@@ -221,6 +221,102 @@ changes) to prove the tolerance is genuinely policy-controlled.
 
 ---
 
+## 4.3 Named production assets — the input `blast_radius` cannot carry (R6)
+
+`blast_radius` is a **cardinality** axis: `single` means one entity (§4). R2
+requires `broad` and R3 requires `systemic`. Those two facts together left a
+hole that is not a rounding error:
+
+```
+irreversible + production + single   -> matched no rule
+irreversible + production + scoped   -> matched no rule
+```
+
+so `rm /srv/prod/db.sqlite` — one production database, unrecoverable — reached
+R4 `default_allow` and ran with no human. So did the same file destroyed by
+`> db.sqlite`, `truncate -s 0 db.sqlite` and `dd of=db.sqlite`.
+
+**This is not fixable in an adapter, and §4.2 is why.** An adapter that reads
+the axis off the affected set cannot honestly emit `broad` about a command
+naming one file, and a name "may claim KIND; it may not claim CARDINALITY".
+Pricing one file `broad` anyway would also price `rm /tmp/scratch.txt` broad,
+because adapters default `target.environment` conservatively to `production` —
+turning every delete a coding agent issues into an approval prompt. A control
+an operator switches off protects nothing.
+
+One production database file is not a small blast radius in any sense a
+customer would recognise. It is a small **cardinality**. What was missing is a
+second, orthogonal input: **is the thing being acted on production state?**
+That is site knowledge. No adapter can derive it and core cannot compute it, so
+it is declared as **policy data the operator owns** — the same home §4.1.1
+gives the budget limits.
+
+### The rule
+
+> **R6** — an `irreversible` action, in `production`, on a **declared
+> production asset**, requires human approval **at any cardinality**.
+
+R6 reads `axes.reversibility`, `target.environment` and `target.ref`. It
+deliberately reads **neither `blast_radius` nor `action.verb`**: cardinality is
+the axis that was wrong about this action, and the verb is the field adapters
+misclassify most (a truncate-by-redirect and a `dd` over the same file are
+`execute`, and destroy it just as completely).
+
+### The declaration
+
+`reeflex-core/policy/protected.rego` holds two lists of `target.ref` prefixes —
+`protected_assets` and `ephemeral_assets` — and one posture switch,
+`default_protected`:
+
+- `default_protected := false` (**shipped default**) — only declared assets are
+  protected. An undeclared ref is not held, so the pack costs the operator
+  nothing on scratch files.
+- `default_protected := true` — every irreversible production action is held
+  **unless** its ref is declared ephemeral. An unknown ref, and a **missing**
+  one, are held: an adapter that cannot name what it is destroying is the case
+  a human should see.
+
+### Two normative consequences
+
+1. **`target.ref` is a rule input, so core canonicalizes it** (§2, and the same
+   discipline as `target.environment` and `action.verb`). R6 compares it by
+   prefix, and an exact comparison against an untreated caller string fails
+   **open** on every near-miss — `/srv/prod/../prod/db.sqlite`,
+   `//srv/prod/db.sqlite`, a trailing newline, a zero-width character.
+   Canonicalization here is **identity-preserving only** (NFKC, drop
+   control/format characters, trim, lexical path normalization): unlike the
+   closed enums, a ref has no "most-guarded member" to coerce to, so nothing in
+   the treatment can turn one entity into another, and the unknown case is
+   handled by posture rather than by coercion. Case is **not** folded — the
+   value reaches the audit record and the `envelope_hash` preimage, and
+   `/srv/Prod` is a different file from `/srv/prod`; the case-insensitive
+   comparison R6 needs is performed on a lowercased copy inside the rule.
+
+2. **A `ref` of `null` is not a loophole, because §4.2 closes it from the other
+   side.** An adapter that cannot enumerate the affected set MUST NOT emit
+   `single` or `scoped`, so a bulk action with no ref is `broad` or `systemic`
+   and is R2's or R3's business. R6 covers the case where the adapter names
+   exactly what it is destroying; §4.2 covers the case where it cannot.
+
+### What the shipped default does and does not buy
+
+The default `protected_assets` list is **non-empty on purpose** — an empty
+default would answer `allow` for `rm /srv/prod/db.sqlite` in every
+unconfigured installation. Its entries are the locations the Filesystem
+Hierarchy Standard designates for durable service state (`/srv`, `/var/lib`,
+`/var/opt`, `/var/spool`, `/var/backups`) plus the common container mount
+points; the same standard designates `/tmp` and `/var/tmp` as temporary, which
+is why they are absent.
+
+**It is a floor, not a claim of completeness.** It knows nothing about
+`/home/app/data`, a database initialized somewhere unconventional, your bucket
+names, or the URI-shaped refs other adapters emit. **An operator who does not
+edit `protected.rego` is protected only where their estate follows the FHS.**
+Conformance (§7) requires a deployment to review that list, exactly as it
+requires reviewing the budget limits in §4.1.1.
+
+---
+
 ## 5. The Decision
 
 `reeflex-core` returns:

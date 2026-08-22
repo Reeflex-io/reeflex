@@ -221,7 +221,7 @@ about.
 | `REEFLEX_CORE_TOKEN`        | unset                               | optional bearer token; when set, adds `Authorization: Bearer <token>` to the `/v1/decide` request. Never logged. Same env name as the WordPress adapter. |
 
 Setting `REEFLEX_CLAUDE_ENVIRONMENT=dev` or `staging` relaxes the base policy
-(R2/R3 are production-scoped), letting dev workflows through without approvals.
+(R2/R3/R6 are production-scoped), letting dev workflows through without approvals.
 
 `reeflex-claude setup` writes these into your Claude Code `settings.json`
 `env` block for you (see "Install / wire up" above); the table is the
@@ -295,6 +295,28 @@ non-zero exit, malformed output, wrong decision) without touching your real
 
 ## Limits / upgrade paths
 
+- **A single named production file is only governed if your core declares it
+  (RFX-153).**  `blast_radius` is a *cardinality* axis, so R2's `broad`
+  requirement never reached `rm /srv/prod/db.sqlite` — one production database,
+  gone.  The adapter cannot fix this by pricing one file `broad` (SPEC §4.2: a
+  name may claim KIND, not CARDINALITY, and this environment defaults to
+  `production`, so it would prompt on `rm /tmp/scratch.txt` too).  It is closed
+  in the **policy pack** by R6 (SPEC §4.3), which holds an irreversible
+  production action on a *declared production asset* at any cardinality.
+  **Read this before assuming you are covered:** the list shipped in
+  `reeflex-core/policy/protected.rego` is a floor derived from the Filesystem
+  Hierarchy Standard (`/srv`, `/var/lib`, `/var/opt`, ...).  It knows nothing
+  about `/home/app/data`, an unconventional database directory, or your bucket
+  names.  UPGRADE: add your paths to `protected_assets`, or set
+  `default_protected := true` to hold every irreversible production action
+  whose ref is not declared ephemeral.
+- **Two destruction shapes still reach `allow` even with R6 in place, measured.**
+  `> /srv/prod/db.sqlite` and `dd if=/dev/zero of=/srv/prod/db.sqlite` are
+  classified `execute` + `recoverable` by this adapter, and R6 requires
+  `irreversible` — so no policy posture rescues them.  A policy rule cannot
+  correct an envelope that under-declares irreversibility.  UPGRADE: RFX-144 /
+  RFX-146 (verb and reversibility classification); until then, treat
+  redirection and `dd` as ungoverned by this adapter.
 - **Bash classification** is heuristic (regex on the command string).  A
   full parse tree would be more accurate.  UPGRADE: replace `_bash_verb` with
   a shell-AST parser once tooling stabilises.
