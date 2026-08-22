@@ -104,6 +104,14 @@ jobs:
           REEFLEX_HOLD_TTL_SECONDS: "20"   # lets conformance-demo.php's H9 run — see header
           REEFLEX_POLICY_DIR: policy
           REEFLEX_AUDIT_LOG: /tmp/gate-core-audit.jsonl
+          # RFX-84 / 0.2.0: REEFLEX_REQUIRE_VERIFIED_APPROVER now defaults to
+          # TRUE, and all four WordPress harnesses resolve a hold. This binds
+          # each harness principal's bearer token to the principal it IS, so
+          # the harnesses resolve as VERIFIED approvers. wp-stubs.php reads the
+          # SAME file to decide which token to send, so the two sides cannot
+          # drift. Deliberately NOT the opt-out: the gate must exercise the
+          # configuration we ship, or the default is tested by nothing.
+          REEFLEX_RESOLVER_TOKENS: ${{ github.workspace }}/reeflex-wordpress/tests/harness-resolver-tokens.json
         run: |
           nohup python main.py > /tmp/gate-core.log 2>&1 &
           for i in $(seq 1 30); do

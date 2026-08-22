@@ -58,11 +58,16 @@ Reeflex_Gate::register_hooks();
 Reeflex_Admin::init();
 
 // Point the adapter at the live core via the DB-option path (see file docblock).
+// core_token is the credential bound to human:admin-tester -- the principal
+// every resolution below is made as. Since reeflex-core 0.2.0 a resolve whose
+// approver core cannot tie to the calling credential is refused 403
+// principal_not_verified (RFX-84); see harness-resolver-tokens.json.
+$admin_core_token = reeflex_harness_token_for( 'admin-tester' );
 update_option(
 	Reeflex_Config::OPTION_NAME,
 	array(
 		'core_url'   => $core_url,
-		'core_token' => '',
+		'core_token' => $admin_core_token,
 		'verify_ssl' => true,
 		'mode'       => 'enforce',
 	)
@@ -280,7 +285,7 @@ $hold_id3 = create_fresh_hold_for_admin( 'core/delete-post', range( 901, 945 ) )
 if ( null !== $hold_id3 ) {
 	update_option(
 		Reeflex_Config::OPTION_NAME,
-		array( 'core_url' => 'http://127.0.0.1:9', 'core_token' => '', 'verify_ssl' => true, 'mode' => 'enforce' )
+		array( 'core_url' => 'http://127.0.0.1:9', 'core_token' => $admin_core_token, 'verify_ssl' => true, 'mode' => 'enforce' )
 	);
 
 	$notice4 = Reeflex_Admin::process_resolution( $hold_id3, 'approve', '', 'admin-tester' );
@@ -295,7 +300,7 @@ if ( null !== $hold_id3 ) {
 	// the script well-behaved if scenarios are appended later).
 	update_option(
 		Reeflex_Config::OPTION_NAME,
-		array( 'core_url' => $core_url, 'core_token' => '', 'verify_ssl' => true, 'mode' => 'enforce' )
+		array( 'core_url' => $core_url, 'core_token' => $admin_core_token, 'verify_ssl' => true, 'mode' => 'enforce' )
 	);
 } else {
 	check(

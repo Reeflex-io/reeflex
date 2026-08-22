@@ -56,10 +56,45 @@ Adapters also expose a mode:
 | `REEFLEX_HOLDS_PATH` | *(in-memory)* | Path to the holds store. |
 | `REEFLEX_HOLD_TTL_SECONDS` | `14400` | Default hold TTL (4 hours) before `expires_ts`. |
 | `REEFLEX_RESOLUTION_POLICY` | — | Which principal **type** may resolve a hold (HIL / AIL policy). See [Why Reeflex](../why-reeflex.md#ail). |
-| `REEFLEX_RESOLVER_TOKENS` | — | Binds a bearer token to the principal it **is**: `{"tok": {"type":"human","id":"alice"}}`. Without it the approving principal is only *asserted* by the caller, and resolutions are recorded `decided_by_verified: false`. **Set this (or the flag below) if you claim four-eyes.** |
-| `REEFLEX_REQUIRE_VERIFIED_APPROVER` | `false` | `true`/`1`/`yes` → refuse to resolve a hold whose approver cannot be verified (`403 principal_not_verified`). |
+| `REEFLEX_RESOLVER_TOKENS` | — | Binds a bearer token to the principal it **is**: `{"tok": {"type":"human","id":"alice"}}`. Without it the approving principal is only *asserted* by the caller — and since 0.2.0 an unverifiable approver is **refused**, not recorded. |
+| `REEFLEX_REQUIRE_VERIFIED_APPROVER` | **`true`** (since 0.2.0) | Refuse to resolve a hold whose approver cannot be verified (`403 principal_not_verified`). `false`/`0`/`no`/`off` opts out; anything unrecognised reads as the default. |
 
 `REEFLEX_RESOLUTION_POLICY` checks the principal type the caller *claims*; `REEFLEX_RESOLVER_TOKENS` is what establishes *who the caller is*. See [reeflex-core README → Approver verification](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-core/README.md#approver-verification-rfx-core-2).
+
+### Verified approvers
+
+**Since reeflex-core 0.2.0 this is on by default, and it is a breaking change for anyone who was resolving holds with a self-asserted approver.** The image sets `REEFLEX_REQUIRE_VERIFIED_APPROVER=true`; upgrading a deployment that never configured `REEFLEX_RESOLVER_TOKENS` turns every hold resolution into `403 principal_not_verified`.
+
+Two ways forward, and the refusal itself names both:
+
+```bash
+# THE FIX — bind each approver's bearer token to the principal it IS.
+# Inline JSON, or a path to a JSON file. Re-read per request: no restart.
+REEFLEX_RESOLVER_TOKENS='{"tok_live_alice": {"type": "human", "id": "alice@example.com"}}'
+
+# THE ESCAPE HATCH — pre-0.2.0 behaviour while you wire the above up.
+# Holds resolve on the caller's word, and every record says so
+# (decided_by_verified: false), so the deployment cannot claim four-eyes.
+REEFLEX_REQUIRE_VERIFIED_APPROVER=false
+```
+
+Why the default moved: with it off, one bearer token could raise an irreversible production hold and approve it as `human:totally-invented-auditor`, and core minted and persisted the Art. 14 record saying a human had overseen it (RFX-84, reproduced live). Shipping an artefact whose *default* accepts an invented approver, in a product whose claim is evidence of human oversight, is not defensible.
+
+The `403` carries a machine-readable `remedy` alongside `error`/`reason`:
+
+```jsonc
+{
+  "error": "principal_not_verified",
+  "reason": "the approver human:alice@example.com is asserted by the caller and this core cannot check it: ...",
+  "hold_id": "…",
+  "remedy": {
+    "principal": "human:alice@example.com",
+    "why": "verification_not_configured",   // or "unbound_credential"
+    "actions": ["set REEFLEX_RESOLVER_TOKENS to …", "or … REEFLEX_REQUIRE_VERIFIED_APPROVER=false"],
+    "docs": "https://github.com/Reeflex-io/reeflex/blob/main/docs/reference/configuration.md#verified-approvers"
+  }
+}
+```
 
 ## Freeze (operator kill-switch)
 

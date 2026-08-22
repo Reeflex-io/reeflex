@@ -616,7 +616,10 @@ class Gate:
         key = "wp-conformance"
         if not self.args.core_url:
             self.component(key, "SKIPPED",
-                           "needs a LIVE reeflex-core (pass --core-url); the harnesses POST real /v1/decide calls — see reeflex-wordpress/tests/README.md")
+                           "needs a LIVE reeflex-core (pass --core-url); the harnesses POST real /v1/decide calls "
+                           "AND resolve real holds, so since core 0.2.0 that core must also be started with "
+                           "REEFLEX_RESOLVER_TOKENS=reeflex-wordpress/tests/harness-resolver-tokens.json "
+                           "(or REEFLEX_REQUIRE_VERIFIED_APPROVER=false) — see reeflex-wordpress/tests/README.md")
             return
         if not self.php:
             self.component(key, "SKIPPED", "php CLI not found")
