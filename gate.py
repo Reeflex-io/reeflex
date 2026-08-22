@@ -137,7 +137,8 @@ SKIP_REGISTRY = {
         "core and passes --core-url, so this allowance is no longer used there — "
         "it remains for local runs on a box with no php.",
     "wp-spec-conformance":
-        "needs a php CLI and NOTHING else — no core, no network (RFX-131). It is "
+        "needs a php CLI and NOTHING else — no core, no network (RFX-131, "
+        "RFX-164). It is "
         "registered here only for a box with no php at all; if php exists this "
         "component has no reason to skip, which is why it is not folded into "
         "wp-conformance's live-core allowance.",
@@ -656,15 +657,25 @@ class Gate:
 
     # -- SPEC conformance vectors, no live core ------------------------------
 
-    # RFX-131: these harnesses assert the SPEC's normative axis derivations
-    # against the shared vector files in reeflex-spec/conformance/. They resolve
-    # entirely inside the normalizer — no /v1/decide call, no network — so they
-    # must NOT sit behind --core-url. Filed as their own component precisely
-    # because inheriting wp-conformance's live-core prerequisite would SKIP them
-    # for a reason that does not apply to them, and a suite skipped for the wrong
-    # reason is the RFX-105 defect with a different label.
+    # RFX-131 and RFX-164: these harnesses assert the SPEC's normative axis
+    # derivations against the shared vector files in reeflex-spec/conformance/.
+    # They resolve entirely inside the normalizer — no /v1/decide call, no
+    # network — so they must NOT sit behind --core-url. Filed as their own
+    # component precisely because inheriting wp-conformance's live-core
+    # prerequisite would SKIP them for a reason that does not apply to them, and
+    # a suite skipped for the wrong reason is the RFX-105 defect with a
+    # different label.
+    #
+    # MERGE NOTE, RESOLVED (dev-3 round 039). #94 (RFX-131, blast_radius) and
+    # #101 (RFX-164, reversibility) each introduced this component
+    # independently — same SKIP_REGISTRY key, same `run_wp_spec` body, same
+    # component-list row, differing only in the RFX number in the prose. #94
+    # landed first (`0243ee1`); the union is ONE component with BOTH entries,
+    # which is what #101's original note asked for. Nothing is lost: each
+    # harness is still driven, and `run_wp_spec` reports every one of them.
     WP_SPEC_HARNESSES = [
         ("conformance-blast-radius.php", "SPEC §4.2 axes.blast_radius"),
+        ("conformance-reversibility.php", "SPEC §2 axes.reversibility"),
     ]
 
     def run_wp_spec(self):
@@ -806,7 +817,7 @@ class Gate:
             ("entrypoints     build wheels from tree + invoke every entry point", self.run_entrypoints),
             ("pypi-smoke      fresh install of the PUBLISHED packages", self.run_pypi_smoke),
             ("wp-conformance  WordPress live-core harness", self.run_wp),
-            ("wp-spec-conformance  SPEC conformance vectors, no live core (RFX-131)", self.run_wp_spec),
+            ("wp-spec-conformance  SPEC axis vectors, no live core (RFX-131, RFX-164)", self.run_wp_spec),
             ("migration-heads-selftest  scripts/tests: check_migration_heads correctness", self.run_migration_heads_selftest),
             ("migration-heads  static alembic graph (reeflex-app, if checked out) — single head, no DB", self.run_migration_heads),
             ("test-census     every enumerated test file must YIELD TESTS (RFX-87)", self.run_test_census),
