@@ -69,7 +69,27 @@ function _failClosed(reason: string): IDataObject {
 interface ReeflexAdditionalFields {
 	onBehalfOf?: string;
 	targetRef?: string;
+	amount?: number;
+	currency?: string;
 }
+
+/**
+ * ISO-4217 shape check only - core owns the currency table (budgets.rego
+ * `default_budgets.money.limits`), this just refuses something that cannot
+ * possibly be a currency code so the operator finds out here rather than by
+ * having their money budget silently charged against the "XXX" fallback.
+ */
+const CURRENCY_RE = /^[A-Z]{3}$/;
+
+/**
+ * Verbs whose whole point is moving money or committing an obligation. For
+ * these, `params.amount`/`params.currency` are not decoration: they are the
+ * only input to reeflex-core's cumulative MONEY budget (budgets.rego - "the
+ * one dimension with a UNIT"). An envelope without them cannot be budgeted at
+ * any amount, so the node refuses to send one rather than collecting a
+ * `default_allow` for a payout of unbounded size.
+ */
+const MONEY_VERBS = new Set(['transact']);
 
 /**
  * Reeflex Gate - a thin, zero-business-logic consumer of reeflex-core's
@@ -102,6 +122,22 @@ interface ReeflexAdditionalFields {
  * "Directory layout" -> audit/decisions.jsonl). This node does not duplicate
  * that audit trail.
  *
+ * Money (SPEC SS4.1, budgets.rego): `params.amount`/`params.currency` are the
+ * only input to reeflex-core's cumulative MONEY budget - the one budget over a
+ * quantity with a unit. Every other axis this node sends is a count, and no
+ * count budget can tell a 1-euro refund from a 1-million-euro payout. So a
+ * `transact` with no declared Amount is routed to Denied here rather than sent:
+ * core would answer `default_allow` at any size, and only the count budgets
+ * (external_sends = 50, objects_touched = 200) would ever stop it - on the 51st
+ * call, never on the amount.
+ *
+ * Sessions (SPEC SS4.1): every cumulative budget accumulates per
+ * `agent.session_id`. The Session ID default is `={{$workflow.id}}`, not
+ * `={{$execution.id}}`: an execution-scoped id resets every budget on every
+ * run, so a trigger that fires once per item - the ordinary way to do bulk work
+ * in n8n - never accumulates, and fragmentation resistance holds only inside a
+ * single run.
+ *
  * Obligations (SPEC SS5): the `obligations` array from the Decision is passed
  * through verbatim on the `reeflex` output field. This node does not itself
  * enforce specific obligations (e.g. `redact:pii`) - build that as downstream
@@ -132,7 +168,7 @@ export class ReeflexGate implements INodeType {
 		properties: [
 			{
 				displayName:
-					'Reeflex Gate submits one Action Envelope per input item to reeflex-core and routes the item to Allowed, Held for Approval, or Denied. The axis defaults below (Irreversible / Systemic / Outbound) are deliberately the most restrictive, so an unconfigured node fails toward safety - set them to describe your actual action truthfully.',
+					'Reeflex Gate submits one Action Envelope per input item to reeflex-core and routes the item to Allowed, Held for Approval, or Denied. The axis defaults below (Irreversible / Systemic / Outbound) are deliberately the most restrictive, so an unconfigured node fails toward safety - set them to describe your actual action truthfully. Two things carry cumulative safety: Session ID (budgets accumulate per session, so an ID that changes every run makes fragmentation resistance void across runs) and, for the Transact verb, Amount + Currency under Additional Fields (the money budget cannot price a payout without them).',
 				name: 'reeflexNotice',
 				type: 'notice',
 				default: '',
@@ -286,8 +322,9 @@ export class ReeflexGate implements INodeType {
 				name: 'sessionId',
 				type: 'string',
 				required: true,
-				default: '={{$execution.id}}',
-				description: 'Stable identifier tying this action to a session (Action Envelope agent.session_id), required so reeflex-core can detect fragmented bulk actions across calls (SPEC SS4.1). Defaults to this workflow execution\'s ID.',
+				default: '={{$workflow.id}}',
+				// eslint-disable-next-line n8n-nodes-base/node-param-description-miscased-id -- "$execution.id" and "session_id" are literal n8n-expression / Action Envelope JSON names (lowercase by SPEC), not prose.
+				description: 'Stable identifier tying this action to a session (Action Envelope agent.session_id), required so reeflex-core can detect fragmented bulk actions across calls (SPEC SS4.1). Defaults to the WORKFLOW ID, not the execution ID: reeflex-core accumulates its cumulative budgets per session_id, so an execution-scoped value resets the budget on every run and a trigger that fires once per item never accumulates at all. Narrow it deliberately (e.g. to $execution.id) only if you actually want each run budgeted independently.',
 			},
 			{
 				displayName: 'Agent ID',
@@ -321,6 +358,22 @@ export class ReeflexGate implements INodeType {
 						default: '',
 						placeholder: 'e.g. post:1481',
 						description: 'Stable identifier of the specific entity being acted on (Action Envelope target.ref). Leave empty for bulk actions.',
+					},
+					{
+						displayName: 'Amount',
+						name: 'amount',
+						type: 'number',
+						default: 0,
+						placeholder: 'e.g. 2500',
+						description: 'How much money this action moves, in the minor-unit-free amount of Currency (Action Envelope params.amount). REQUIRED for the "Transact" verb: it is the only input to reeflex-core\'s cumulative money budget, so a transact without it cannot be budgeted at any size. Ignored for other verbs unless you set it.',
+					},
+					{
+						displayName: 'Currency',
+						name: 'currency',
+						type: 'string',
+						default: '',
+						placeholder: 'e.g. EUR',
+						description: 'ISO-4217 code for Amount (Action Envelope params.currency). Budgets are PER CURRENCY and reeflex-core never converts between them; a code it has no budget entry for is charged against the stricter fallback limit. REQUIRED whenever Amount is set.',
 					},
 				],
 			},
@@ -375,6 +428,53 @@ export class ReeflexGate implements INodeType {
 
 				const namespace = ability.includes('/') ? ability.split('/')[0] : 'n8n';
 
+				// `params` carries the ONE axis reeflex-core budgets with a unit
+				// attached: money. Everything else the node sends is a count, and a
+				// count budget cannot tell a 1-euro refund from a 1-million-euro
+				// payout - both are `count: 1`. So an amount, when the operator
+				// declares one, goes through verbatim.
+				const params: IDataObject = {};
+				const rawAmount = additionalFields.amount;
+				const rawCurrency = (additionalFields.currency || '').trim().toUpperCase();
+				const hasAmount = typeof rawAmount === 'number' && Number.isFinite(rawAmount) && rawAmount !== 0;
+
+				if (hasAmount) {
+					if (!CURRENCY_RE.test(rawCurrency)) {
+						throw new NodeOperationError(
+							this.getNode(),
+							'Currency is required (ISO-4217, e.g. "EUR") whenever Amount is set',
+							{
+								itemIndex,
+								description:
+									"reeflex-core's money budget is PER CURRENCY and it never converts between them, so an amount with no currency cannot be charged against any budget. Set Currency under Additional Fields.",
+							},
+						);
+					}
+					params.amount = rawAmount;
+					params.currency = rawCurrency;
+				}
+
+				// Fail closed on a money move nobody priced. Without params.amount
+				// reeflex-core's money budget cannot fire at ANY size, so a payout
+				// of unbounded value collects `default_allow` - the count budgets
+				// (external_sends, objects_touched) would stop the 51st call and
+				// never the amount. Refusing here is the same posture as the axis
+				// defaults above: an unconfigured node fails toward safety.
+				if (MONEY_VERBS.has(verb) && !hasAmount) {
+					deniedItems.push({
+						json: {
+							...items[itemIndex].json,
+							reeflex: _failClosed(
+								`verb "${verb}" moves money but no Amount was declared, so reeflex-core's ` +
+									'cumulative money budget cannot price it at any size -- set Amount and ' +
+									'Currency under Additional Fields',
+							),
+						},
+						pairedItem: { item: itemIndex },
+					});
+					continue;
+				}
+
 				const envelope: IDataObject = {
 					reeflex_version: REEFLEX_VERSION,
 					agent: {
@@ -392,16 +492,19 @@ export class ReeflexGate implements INodeType {
 						ref: additionalFields.targetRef || null,
 						environment,
 					},
-					// Deliberately empty: this generic gate node does not know the
-					// shape of the caller's backend action, and pass-through of raw
-					// item data here would risk piping arbitrary/PII-bearing payload
-					// content into reeflex-core's audit trail without the operator's
-					// explicit intent (project-wide zero-PII-by-default posture).
+					// Carries the declared Amount/Currency and NOTHING else. Raw item
+					// data is deliberately still not passed through: that would pipe
+					// arbitrary/PII-bearing payload content into reeflex-core's audit
+					// trail without the operator's explicit intent (project-wide
+					// zero-PII-by-default posture). An amount is different in kind -
+					// it is a decision input the money budget reads, and omitting it
+					// does not protect the operator, it just makes the budget
+					// unreachable.
 					// UPGRADE: expose an opt-in "Additional Context (JSON)" field
 					// under Additional Fields that merges into `context` (SPEC SS2
 					// says context is "free passthrough for policy use") once a real
 					// policy pack needs it.
-					params: {},
+					params,
 					magnitude: {
 						count,
 					},

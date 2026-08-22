@@ -32,7 +32,7 @@
         "externality": "={{$json.externality}}",
         "count": "={{$json.count}}",
         "targetSystem": "={{$json.table}}",
-        "sessionId": "={{$execution.id}}-{{$json.table}}",
+        "sessionId": "={{$workflow.id}}",
         "agentId": "agent:n8n-demo1-bulk-delete-guard",
         "additionalFields": {}
       },

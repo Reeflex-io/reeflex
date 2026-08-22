@@ -1,8 +1,30 @@
 # Demo 3 — The Approval Loop
 
-**Teaches:** the full human-in-the-loop cycle end to end — decide → HOLD
-(`hold_id` returned) → resolve the hold → resubmit the SAME envelope with
-approval → allow.
+**Teaches:** the full approval cycle end to end — decide → HOLD (`hold_id`
+returned) → resolve the hold → resubmit the SAME envelope with approval →
+allow.
+
+> ### ⚠️ There is no human in this workflow. Do not ship it.
+>
+> This demo shows the **mechanics** of the hold cycle, and to fit them in one
+> click the workflow **resolves its own hold**, with the same credential the
+> acting agent uses. Measured end to end against api-dev: an
+> `irreversible + broad + production` bulk delete of 25 posts goes from
+> `require_approval` to `allow` with **no human consulted at any point**.
+>
+> reeflex-core cannot tell the difference. `principal: {type: "human", id: …}`
+> is **self-asserted by whoever holds the token** — an id that exists nowhere,
+> belongs to nobody, and was never asked, resolves the hold with HTTP 200.
+> The only things core checks are that the type is one the rule allows, that
+> the id is non-empty, and that it differs from the acting agent's id
+> (`403 actor_is_approver`). None of those is a check that a person decided.
+>
+> **If you copy the "Resolve hold" node into a production workflow you have
+> built an Art.14 human-oversight loop with no human in it**, and the evidence
+> trail will name an approver who does not exist. Step 3 belongs to a real
+> person, out of band — the WordPress "Pending approvals" surface, an MCP
+> client, your own approval UI, or the webhook variant documented at the
+> bottom of this page. Delete that node before you adapt this workflow.
 
 File: [`demo3-the-approval-loop.workflow.json`](./demo3-the-approval-loop.workflow.json)
 
@@ -82,13 +104,24 @@ in the workflow.
 
 This entire loop (steps 1–5 above) is **fully live and works exactly as
 described against the shared api-dev endpoint** — nothing here is
-simulated. One honest simplification: to show the full cycle in a single
-click, the workflow POSTs the resolve step itself (recording the approval
-under `human:demo3-approver`). In a real deployment a real person resolves
-the hold out of band — via the WordPress "Pending approvals" surface, an
-MCP client like Claude Desktop, or your own approval UI — and only then
-does the resubmit succeed. The mechanics core enforces (single-use hold,
-TTL, action-hash binding, actor≠approver) are identical either way.
+simulated. **That is precisely the problem, and it is not a simplification:
+the workflow POSTs the resolve step itself, so the loop completes with zero
+humans** (see the warning at the top of this page). In a real deployment a
+real person must resolve the hold out of band — via the WordPress "Pending
+approvals" surface, an MCP client like Claude Desktop, or your own approval
+UI — and **nothing in reeflex-core enforces that**; it is a property of how
+you wire step 3, not of the product.
+
+The four mechanics core does enforce were each verified against a live core,
+and all four hold: **single-use hold** (a second resubmission of one approved
+hold returns `reeflex_hold_consumed`), **TTL**, **action-hash binding** (a
+hold raised for action A, attached to action B, returns
+`reeflex_hold_envelope_mismatch`; an invented `hold_id` returns
+`reeflex_hold_not_found`; `approval.present: true` with no `hold_id` also
+returns `reeflex_hold_not_found`), and **actor≠approver** (including
+`reeflex_hold_actor_mismatch` if the resubmitting agent is not the one the
+approval was granted to). What none of the four is, is a check that a human
+decided anything.
 
 **Not implemented in this JSON, documented here instead:** the
 **webhook-trigger variant**. `reeflex-core` can push a `hold.created`
@@ -118,7 +151,7 @@ the box.
 
 ## GIF (filmed at T7)
 
-*(placeholder — no GIF yet)*
+![demo3](./img/demo3-the-approval-loop.gif)
 
 **How to film:** import into a local n8n (Docker), attach the credential to
 all 3 nodes that need it (Reeflex Gate + 2 HTTP Request nodes), click

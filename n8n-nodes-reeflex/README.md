@@ -64,6 +64,8 @@ downstream "resolve the hold, then resubmit" flow can reuse it verbatim
 | Agent ID | `agent.id` |
 | Additional Fields -> On Behalf Of | `agent.on_behalf_of` |
 | Additional Fields -> Target Ref | `target.ref` |
+| Additional Fields -> Amount | `params.amount` (required for `transact`) |
+| Additional Fields -> Currency | `params.currency` (ISO-4217, required with Amount) |
 
 The Reversibility / Blast Radius / Externality dropdowns default to the
 most restrictive value in each set (`irreversible` / `systemic` /
@@ -107,14 +109,36 @@ Core URL, even though the node's real `/v1/decide` calls do.
 
 ## Usage
 
-**Session ID is required.** reeflex-core uses `agent.session_id` to detect
-fragmented bulk actions across multiple calls in the same session (SPEC
-SS4.1 - "fragmentation resistance": ten single-item deletes in the same
-session are evaluated cumulatively, not as ten independent small actions).
-The node defaults this field to the expression `={{$execution.id}}`, which
-is stable for the lifetime of one workflow execution. Reuse the same
-session id across a longer-lived process (e.g. a chat session spanning
-several executions) if you want cumulative budgets to apply across it.
+**Session ID is required, and its scope decides whether fragmentation
+resistance actually holds.** reeflex-core accumulates every cumulative
+budget per `agent.session_id` (SPEC SS4.1 - "fragmentation resistance": ten
+single-item deletes in the same session are evaluated cumulatively, not as
+ten independent small actions). Budgets do not accumulate across two
+different session ids, at all.
+
+The node therefore defaults this field to `={{$workflow.id}}`, which is the
+same value on every run of that workflow. It deliberately does **not**
+default to `={{$execution.id}}`: an execution-scoped id resets every budget
+on every run, so the ordinary n8n bulk pattern - a Webhook or Schedule
+trigger that fires once per item, one execution each - would never
+accumulate anything and fragmentation resistance would hold only *inside* a
+single run. Measured against a real core: ten `delete count=5` calls under
+one session id hold from the fifth; the same ten under a per-run id put all
+fifty deletions through.
+
+Narrow it to `={{$execution.id}}` only when you actively want each run
+budgeted independently, and widen it (a chat/thread id, a tenant id) when
+the process you are governing outlives the workflow.
+
+**Money needs an Amount.** `params.amount` / `params.currency` are the only
+input to reeflex-core's cumulative **money** budget - the one budget over a
+quantity with a unit. Every other field this node sends is a count, and no
+count budget can tell a 1-euro refund from a 1-million-euro payout: both are
+`magnitude.count: 1`. So a `transact` with no Amount declared is routed to
+**Denied** by the node rather than sent, because core would answer
+`default_allow` at any size and only the count budgets (`external_sends` = 50,
+`objects_touched` = 200) would ever stop it - on the 51st call, never on the
+amount. Set Amount and Currency under **Additional Fields**.
 
 **This node does not resolve holds or re-execute anything.** When the
 verdict is `require_approval`, the output item on "Held for Approval"
@@ -167,8 +191,14 @@ checklist for a source-side adapter:
   omitted - see the safe-conservative defaults above).
 - Applies `allow` / `require_approval` / `deny` correctly by routing to the
   matching output.
-- Fails closed on any core error (see above).
-- Supplies a stable `session_id`.
+- Fails closed on any core error (see above), and on a money-moving verb with
+  no declared amount - which core cannot budget at any size.
+- Supplies a `session_id` whose default is stable across every run of the
+  workflow, so cumulative budgets accumulate rather than resetting per run.
+  **Scope is the operator's decision and it changes what the budgets mean** -
+  see [Usage](#usage). An adapter cannot make this claim unconditionally: two
+  different session ids share no budget, so "fragmentation-resistant" is a
+  property of the id you configure, not of the node.
 - Passes `obligations` through on the `reeflex` output field for the
   workflow to act on. **The node does not itself enforce any obligation**
   (e.g. `redact:pii`) - build that as downstream workflow logic that

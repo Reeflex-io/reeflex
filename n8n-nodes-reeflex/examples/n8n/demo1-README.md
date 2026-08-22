@@ -57,7 +57,7 @@ api-dev endpoint — no local core needed, nothing simulated.
 
 ## GIF (filmed at T7)
 
-*(placeholder — no GIF yet)*
+![demo1](./img/demo1-bulk-delete-guard.gif)
 
 **How to film:** import this workflow into a local n8n (Docker), attach the
 credential, click "Execute workflow" once, and capture the canvas showing
