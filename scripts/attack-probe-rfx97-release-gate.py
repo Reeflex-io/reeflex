@@ -1395,6 +1395,30 @@ def main():
     # A run that cannot certify a ticket and a run that found it broken are
     # different findings and the table says which; they are the same DECISION,
     # which is: do not cut this release.
+    #
+    # THE COST OF THIS, STATED RATHER THAN DISCOVERED.  dev-3--026 looked at
+    # the same line and deliberately did NOT change it, for a reason that is
+    # still true: against **api-dev** a build that legitimately predates a
+    # dimension scores INCONCLUSIVE, so a blanket non-zero turns those runs
+    # red, and that round judged the clean fix to be target-aware rather than
+    # a one-line `return`.
+    #
+    # Changed anyway, and here is the argument rather than an oversight:
+    #   * The sentence this exit code should mean is "this run certified these
+    #     tickets against this artefact".  Against a lagging api-dev that
+    #     sentence is FALSE, so non-zero is the accurate answer, not a false
+    #     alarm — api-dev is not the release artefact and a gate reading of it
+    #     was never a release decision (see the api-dev pinning trap).
+    #   * The blast radius today is zero: no file in .github/workflows/ runs
+    #     this script, so nothing in CI goes red on this change.  It is invoked
+    #     by hand, where a non-zero exit is read by a person who can see the
+    #     table two lines above it.
+    #   * Leaving it meant the DEFAULT SHIPPED CONFIG could not be certified
+    #     and said so only in prose, which is the defect (RFX-179), not a
+    #     tuning preference.
+    # If a target-aware exit code is wanted later, the fingerprint already
+    # carries what it needs and the per-row `variants_not_executed` says which
+    # rows were skipped and why.  Flagged for the console.
     return len(open_) + len(overblock) + len(incon)
 
 
