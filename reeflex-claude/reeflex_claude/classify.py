@@ -852,6 +852,41 @@ def _decompose(command: str, depth: int = 0) -> list:
     return segments
 
 
+# ssh flags that consume the following token as their value, so it is not the
+# host and not the start of the remote command.
+_SSH_VALUE_FLAGS = frozenset([
+    "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m",
+    "-O", "-o", "-p", "-Q", "-R", "-S", "-W", "-w",
+])
+
+
+def _ssh_remote_command(tokens: list):
+    """
+    Return the remote command string from `ssh [flags] [user@]host cmd...`, or
+    None when there is no remote command (an interactive session).
+
+    Deliberately does NOT try to reassemble quoting: the tokens are joined with
+    spaces and re-split downstream. That loses the distinction between
+    `ssh h 'a; b'` and `ssh h a\\; b`, which is fine here -- both are two
+    remote commands and both should be judged as the worse of them.
+    """
+    i = 1
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        if tok in _SSH_VALUE_FLAGS:
+            i += 2
+            continue
+        if tok.startswith("-"):
+            i += 1
+            continue
+        break
+    # tokens[i] is the host; anything after it is the remote command.
+    if i + 1 >= n:
+        return None
+    return " ".join(tokens[i + 1:])
+
+
 def _shell_c_argument(tokens: list):
     """Return the command string passed to `sh -c` / `bash -lc`, or None."""
     for i, tok in enumerate(tokens[1:], start=1):
@@ -940,7 +975,41 @@ def _classify_segment(seg: "_Segment", preview: Optional[str]) -> dict:
 
     # -- recognised emission -------------------------------------------------
     if _EMIT_RE.search(raw):
-        return _classify_bash_emit(raw, preview)
+        emitted = _classify_bash_emit(raw, preview)
+        # `ssh host '<command>'` is remote command execution wearing an emit
+        # hat, and the EMIT class emits `scoped`, so `ssh prod 'rm -rf /srv/data'`
+        # was allowed -- an irreversible production destruction that happens to
+        # travel over a socket. Credit where due: dev-2 filed this as RFX-158's
+        # `gap-remote-execution` row while measuring their own branch, and it is
+        # a fail-open of exactly the class this change claims to close, so
+        # leaving it would make the claim false.
+        #
+        # The remote command string is classified the same way `sh -c` is -- it
+        # is a command string, and the fact that a socket carries it there does
+        # not make it smaller. The severity of the two readings is compared and
+        # the worse one wins, with externality kept `outbound` because the bytes
+        # do leave. An ssh with no command (an interactive session) is an
+        # emission and nothing more.
+        if name in ("ssh", "dbclient"):
+            remote = _ssh_remote_command(seg.tokens)
+            if remote is None:
+                # An INTERACTIVE session. `ssh prod ls` is a remote read and is
+                # allowed; `ssh prod` opens an unbounded channel that this hook
+                # cannot see into and will never be asked about again. Those two
+                # differ in exactly the thing the UNRESOLVED class is for --
+                # whether the adapter can see what is about to run -- so a bare
+                # ssh is UNRESOLVED and not an emission of nothing.
+                return _classify_bash_unresolved(
+                    raw, preview,
+                    "interactive remote session: no command to classify")
+            inner = [_classify_segment(s, preview) for s in _decompose(remote)]
+            if inner:
+                worst = max(inner, key=_segment_severity)
+                if _segment_severity(worst) > _segment_severity(emitted):
+                    worst = dict(worst)
+                    worst["externality"] = "outbound"
+                    return worst
+        return emitted
 
     # -- recognised read -----------------------------------------------------
     if name in _READ_COMMANDS:

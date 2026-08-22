@@ -431,6 +431,63 @@ class TestStrictModeIsDecisionRelevant(unittest.TestCase):
         self.assertFalse(_fires_r2_or_r3(r))
 
 
+class TestRemoteExecution(unittest.TestCase):
+    """
+    `ssh host '<command>'` is remote command execution wearing an emit hat, and
+    the EMIT class emits `scoped`, so `ssh prod 'rm -rf /srv/data'` was allowed.
+
+    Found by dev-2's probe while they measured their own branch for the same
+    ticket cluster, and filed by them as RFX-158's `gap-remote-execution` row.
+    It is a fail-open of exactly the class this change claims to close, so
+    leaving it would have made the claim false. Credited here because the next
+    person reading this file should know where it came from.
+    """
+
+    def test_remote_destruction_reaches_a_human(self):
+        r = _c("ssh prod 'rm -rf /srv/data'")
+        self.assertEqual("delete", r["verb"])
+        self.assertTrue(_fires_r2_or_r3(r))
+
+    def test_externality_stays_outbound(self):
+        """The bytes do leave, even when the worse reading is the remote one."""
+        r = _c("ssh prod 'rm -rf /srv/data'")
+        self.assertEqual("outbound", r["externality"])
+
+    def test_value_flags_do_not_shift_the_host(self):
+        for cmd in ("ssh -p 2222 user@prod 'rm -rf /srv/data'",
+                    "ssh -i /k.pem prod 'rm -rf /srv/data'",
+                    "ssh -o StrictHostKeyChecking=no prod 'rm -rf /srv/data'"):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(_fires_r2_or_r3(_c(cmd)), cmd)
+
+    def test_remote_container_delete_is_systemic(self):
+        r = _c('ssh -p 2222 user@prod "kubectl delete namespace production"')
+        self.assertEqual("systemic", r["blast_radius"])
+
+    def test_remote_read_is_not_escalated(self):
+        """The emit reading wins when it is the worse of the two."""
+        for cmd in ("ssh prod ls", "ssh prod uptime"):
+            with self.subTest(cmd=cmd):
+                r = _c(cmd)
+                self.assertEqual("emit", r["verb"])
+                self.assertFalse(_fires_r2_or_r3(r), cmd)
+
+    def test_interactive_session_is_unresolved(self):
+        """
+        `ssh prod` opens a channel this hook cannot see into and will never be
+        asked about again -- the same reason the UNRESOLVED class exists.
+        """
+        r = _c("ssh prod")
+        self.assertEqual("unclassified_command", r["danger_signature"])
+        self.assertTrue(_fires_r2_or_r3(r))
+
+    def test_the_other_emit_forms_are_untouched(self):
+        self.assertEqual("emit", _c("scp a.txt prod:/tmp/")["verb"])
+        self.assertEqual("git_force_push",
+                         _c("git push --force origin main")["danger_signature"])
+        self.assertEqual("emit", _c("curl -X POST https://x/y -d @f")["verb"])
+
+
 class TestNoRegressionInTheKnownCases(unittest.TestCase):
     """The cases main already got right must not move."""
 
