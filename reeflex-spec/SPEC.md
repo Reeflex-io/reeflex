@@ -306,6 +306,25 @@ On resubmission, core recomputes the hash over the same projection of the resubm
 
 **A modified action cannot ride an old approval.**
 
+### What an approval authorises (normative)
+
+The hash binds **what**. It is not the whole of what a human agreed to, and treating it as such is a fail-open. An approval authorises **that agent, acting for that person, to perform that action, at that cost — once**. Formally, a resubmission MUST be refused unless all four hold:
+
+1. the action-defining projection hashes equal (above);
+2. every field of `params` that the decision path reads equals the held value — this MUST NOT be inferred from the hash, because `params` is outside the projection and carries the money dimension;
+3. the **actor identity** equals the held actor identity — an ordered comparison of `agent.id` and `agent.on_behalf_of`, falling back to `agent.session_id` when the envelope names no agent at all. Each is compared after folding (NFKC, drop control/format characters, trim, casefold) — the same fold §3 requires for verbs — so that a re-cased or zero-width-padded identity is the same actor rather than a refusal. The comparison MUST be ordered and exact, not a set intersection: an agent that merely *overlaps* the approved identities is not the approved actor. `agent.session_id` MUST NOT be bound when the agent is named — an agent that restarts inside the hold's TTL presents a new session, and refusing it is a wrong deny on an action a human has already approved;
+4. the hold is unconsumed and within its TTL.
+
+Condition 3 is not derivable from condition 1 and MUST be checked separately. A projection that covered identity would change on every resubmission, which is why the hash cannot carry this and why widening it is the wrong fix — `envelope_hash` is joined on by the audit record, the SIEM event and the evidence chain, so re-preimaging it invalidates every cross-build join.
+
+A refusal under condition 3 MUST NOT consume the hold, and it SHOULD be distinguishable from a hash mismatch (core returns `reeflex_hold_actor_mismatch`): on a substitution the action matched perfectly and only the actor moved, so reporting it as an action mismatch names the one thing that is not true. Consuming the hold on such a refusal closes the hijack and keeps its other half — any caller holding the `hold_id` could destroy a human's approval on demand, and the approved agent would have to find a second human.
+
+An implementation that omits condition 3 grants any agent sharing the deployment the right to spend any other agent's approval, and denies the approved agent its own approval (the hold is consumed by the substitute). The one-line form: **the approval belongs to the actor, not only to the action.**
+
+**Adapter responsibility.** A resubmission MUST carry the agent identity captured when the hold was created, NOT the identity of the context that triggers the retry. A resolution surface (an admin screen, a CLI, a chat approval) runs in the operator's context, so deriving identity from "the live request" at resubmission time substitutes the resolver for the actor — the adapter would then be the thing that breaks condition 3, on an action a human really did approve. Adapters MUST capture `{id, on_behalf_of, session_id}` at hold creation and replay them verbatim. See also §5.1 *Adapter responsibility on approval* below.
+
+**Residual, stated rather than implied:** all three identity fields remain caller-asserted (§2 requires only `session_id`). Condition 3 makes an approval non-transferable *between* declared identities; it does not make a declared identity true. That needs signed envelopes (§6) or an authenticated session identity.
+
 Holds are **single-use**: once a resubmission succeeds, the hold transitions to `consumed`. Any further resubmission with the same `hold_id` is denied with `reeflex_hold_consumed`.
 
 Holds have a TTL (default 4 hours, configurable via `REEFLEX_HOLD_TTL_SECONDS`). A hold past its `expires_ts` evaluates to `deny` with reason `reeflex_hold_expired`.
@@ -315,6 +334,8 @@ Holds have a TTL (default 4 hours, configurable via `REEFLEX_HOLD_TTL_SECONDS`).
 The holds API (`GET /v1/holds`, `POST /v1/holds/{id}/resolve`) is core's output. Re-submission of the envelope after resolution is the adapter's responsibility. Core validates the approval and returns `allow`; only then does the adapter execute the original action in the governed system.
 
 Phase 2 (adapter surfaces) will add re-submission logic to the WordPress adapter and other reference adapters. In Phase 1, core provides the mechanism; adapters must implement re-submission themselves.
+
+An adapter implementing re-submission MUST replay the agent identity captured at hold creation rather than deriving it at retry time — see *What an approval authorises (normative)*, condition 3 and the adapter obligation stated with it. This is the one part of re-submission an adapter can get wrong without core being able to tell: core will refuse the substituted identity, and the refusal will be indistinguishable from the attack the refusal exists for.
 
 ### Traceability: `parent_decision_id` and `traceparent` (additive)
 

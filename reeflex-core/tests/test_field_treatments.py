@@ -542,6 +542,40 @@ class TestDecideDeclarationMatchesCode(unittest.TestCase):
             % sorted(undeclared_here),
         )
 
+    def test_the_sweep_is_not_vacuous(self):
+        """The two assertions above are SUBSET assertions, so a chain that read
+        less would satisfy both.
+
+        `test_the_sweep_would_catch_a_new_undeclared_reader` below proves the
+        RECORDER still records; it says nothing about whether the CHAIN still
+        reads identity.  A refactor that moved the four-eyes compare or the
+        actor key out of `_validate_approval()` would shrink the sink, keep
+        `undeclared(touched) == set()` and `decide_only - DECIDE == set()` both
+        green, and leave the two tests above as tautologies over a smaller set.
+        "The guard passes because it checks nothing" is the exact defect RFX-139
+        names, one layer up, so the floor is pinned explicitly.
+
+        Carried from PR #95 (dev-1--022 §5 item 4), which had it and #96 did
+        not; the params entries are the pin for §5 item 2, so the two paths
+        added to DECIDE_ENVELOPE_PATHS are asserted to be read rather than
+        merely declared.
+        """
+        touched = self._sweep()
+        for expected in ("agent.id",            # check 6 + check 8
+                         "agent.on_behalf_of",  # check 6 + check 8
+                         "agent.session_id",    # check 8's fallback
+                         "approval.hold_id",    # check 1 names the hold
+                         "params.amount",       # check 7
+                         "params.currency"):    # check 7
+            self.assertIn(
+                expected, touched,
+                "the approval chain no longer dereferences %s. If that is "
+                "genuinely intended, the guard that stopped reading it needs "
+                "re-reading — not this test relaxing: every path listed here "
+                "is one a hold-approval check was written to compare, and a "
+                "check that stops reading its field stops being a check."
+                % expected)
+
     def test_the_sweep_would_catch_a_new_undeclared_reader(self):
         """Negative control: the derivation must actually be able to go red.
 

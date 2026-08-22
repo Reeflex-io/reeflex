@@ -441,7 +441,21 @@ The `approval` field is deliberately excluded from the projection: the hash is i
 - **`params`** carries a decision input (`params.amount` drives the money budget), so a hold raised for EUR 6,000 could be resubmitted as EUR 6,000,000 with a byte-identical hash. Those fields are compared directly against the held envelope; a difference denies with `reeflex_hold_envelope_mismatch`.
 - **`agent`** says *who* is acting, so an approval was spendable by any caller that knew the `hold_id` — a different agent, or the same bot claiming a different `on_behalf_of`. The resubmission's actor identity must match the approved envelope's; a difference denies with `reeflex_hold_actor_mismatch` **without consuming the hold**. `agent.session_id` is compared only when the envelope names no agent at all, so an agent that restarts (new session) does not lose an approval it was granted.
 
-Both lists are derived from `app/field_treatments.py`, where every caller-supplied field declares what an approval binds about it — so a new decision input is bound by declaring it, not by remembering to.
+Both lists are derived from `app/field_treatments.py`, where every caller-supplied field declares what an approval binds about it — so a new decision input is bound by declaring it, not by remembering to. Block by block, that declaration comes out as:
+
+| block | in the hash? | bound to the approval? | why |
+|---|---|---|---|
+| `action`, `axes`, `magnitude`, `target` | yes | yes, by the hash (`BIND_HASH`) | **what** the action is |
+| `params` | no | yes, field by field (`BIND_VALUE`, check 7) | **what it costs** — the money budget is driven entirely by `params.amount`, so a hold raised for EUR 6,000 must not be resubmitted as EUR 6,000,000 with a byte-identical hash |
+| `agent` | no | yes, as one ordered actor key on folded identities (`BIND_ACTOR`, check 8) | **who** — an approval authorises *that agent acting for that person*, not the action alone. Without this, a human approves agent ALPHA and agent BETA spends the approval (and ALPHA is then refused `reeflex_hold_consumed`). `session_id` is a fallback used only when the envelope names no agent, so a gate that restarts inside the TTL keeps its approval |
+| `approval` | no | no (`BIND_NONE`) | it is the thing being validated |
+| `context`, `meta` | no | no — and not declared in the table at all | audit-only: they cannot change a verdict, so there is nothing for an approval to bind. Deliberately outside `TREATMENTS` rather than declared `BIND_NONE`; they are an evidence-integrity surface, not a decision one (see the RESIDUAL notes in `app/field_treatments.py`) |
+
+The `BIND_*` column is not documentation of the code, it *is* the code: an exclusion has to be written as `BIND_NONE` with a reason, and `tests/test_field_treatments.py` fails on a caller-supplied field that declares no binding at all. RFX-138 was an **undeclared** binding, not a wrong one.
+
+Widening the hash preimage to cover `params` or `agent` would be the wrong fix rather than a stricter one: `envelope_hash` is written into the audit record, the SIEM event, the hold record and the evidence chain, and changing what it is computed over silently invalidates every cross-build join on it. For `agent` it would also change the hash on every resubmission, which defeats check 5 outright. Field comparison binds the same facts and leaves the wire alone.
+
+**Adapter contract.** A resubmission must carry the ORIGINAL agent identity — `id`, `on_behalf_of` and `session_id` as captured when the hold was created — not the identity of whatever context triggers the retry. A resolution surface (admin screen, CLI, chat approval) runs in the *operator's* context, so deriving identity from "the live request" at resubmission time substitutes the resolver for the actor, and core will refuse it. Every reference adapter already does the right thing: the WordPress adapter passes `$agent_override` verbatim ("the actor stays the actor"), and the MCP gateway's holds tracker is keyed on `(session_id, action_hash)` so a cross-session resubmission cannot even find the hold. Core now enforces it. Stated normatively in SPEC §5.1, *What an approval authorises*.
 
 TTL default is 4 hours (`REEFLEX_HOLD_TTL_SECONDS`). A hold past its `expires_ts` evaluates to `deny` with reason `reeflex_hold_expired`.
 
