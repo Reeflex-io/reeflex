@@ -31,7 +31,13 @@ if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
 
 from reeflex_claude.cli import resolve_hook_command, run_deny_probe
-from reeflex_claude.setup_settings import DEFAULT_MATCHER, DEFAULT_TIMEOUT, HOOK_COMMAND, is_ours
+from reeflex_claude.setup_settings import (
+    DEFAULT_MATCHER,
+    DEFAULT_TIMEOUT,
+    HOOK_COMMAND,
+    hook_command_for_settings,
+    is_ours,
+)
 
 _SUBPROCESS_TIMEOUT = 20
 
@@ -150,8 +156,19 @@ class TestCliSetup(unittest.TestCase):
             self.assertEqual(len(pretool), 1)
             self.assertEqual(pretool[0]["matcher"], DEFAULT_MATCHER)
             self.assertEqual(pretool[0]["hooks"], [
-                {"type": "command", "command": HOOK_COMMAND, "timeout": DEFAULT_TIMEOUT}
+                {"type": "command", "command": hook_command_for_settings(),
+                 "timeout": DEFAULT_TIMEOUT}
             ])
+            # RFX (qa--032): whatever form it takes, it must be an ABSOLUTE
+            # command. A bare name is resolved against the PATH of the shell
+            # that launches Claude Code, not the environment pip installed
+            # into; when it fails to resolve the hook exits non-zero and Claude
+            # Code runs the tool anyway -- silent allow, no audit record.
+            wired = pretool[0]["hooks"][0]["command"]
+            self.assertTrue(
+                wired.split()[0].startswith("/") or wired.split()[0].startswith("'/"),
+                f"hook command must be absolute, got {wired!r}",
+            )
             self.assertEqual(data["env"]["REEFLEX_CORE_URL"], "http://127.0.0.1:9000")
             self.assertEqual(data["env"]["REEFLEX_MODE"], "enforce")
             self.assertEqual(data["env"]["REEFLEX_CLAUDE_ENVIRONMENT"], "production")
