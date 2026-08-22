@@ -860,14 +860,18 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
         # against the same limit, and both be allowed -- the budget is then
         # enforced once per concurrent caller instead of once per session.
         #
-        # That race does NOT occur on the shipped image today, and this guard is
-        # not claiming it did: app/server.py builds http.server.HTTPServer, which
-        # serialises requests, so the window is never interleaved (measured under
-        # RFX-197: 6 barrier-released simultaneous calls let exactly the budget
-        # through). But that is an accident of the dev-server choice, not a
-        # designed property. RFX-198's fix IS ThreadingHTTPServer, and the moment
-        # it lands the accident is gone. A budget's correctness must not depend on
-        # the server class, so the guard exists whether or not anything overlaps.
+        # This guard is not claiming the race was ever observed on a shipped
+        # image. Until RFX-198 it could not be: app/server.py built
+        # http.server.HTTPServer, which serialises requests, so the window was
+        # never interleaved (measured under RFX-197: 6 barrier-released
+        # simultaneous calls let exactly the budget through). But that was an
+        # accident of a dev-server choice, not a designed property, and RFX-198
+        # has now removed it -- the request path runs on a bounded worker pool
+        # (server.py: PooledHTTPServer; NOT ThreadingHTTPServer, because every
+        # decision forks an `opa eval`). So the window is real now, and this
+        # guard is the only thing closing it. A budget's correctness must not
+        # depend on the server class either way, which is why the guard was
+        # written before the server changed rather than alongside it.
         #
         # session_guard takes a per-stripe thread lock AND a POSIX record lock, so
         # the cycle is atomic across threads and across processes (two replicas
