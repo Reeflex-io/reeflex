@@ -139,6 +139,14 @@ big call. Each batch looks innocent on its own; the session total doesn't —
 so fragmenting a dangerous action doesn't evade the gate.
 ([How impact is computed →](reeflex-spec/IMPACT-MODEL.md))
 
+That ledger is **durable and shared**: it is an append-only file on the volume
+core already mounts, so a restart resumes the session's window instead of
+zeroing it, and replicas that share the volume enforce **one** budget between
+them. Replicas that do *not* share storage — separate hosts, a ReadWriteOnce
+volume per pod — each keep their own ledger and each grant a full budget, so
+read [the deployment requirement](INSTALL.md#the-session-ledger-must-be-shared-and-must-survive-a-restart)
+before scaling out. `GET /healthz` reports which mode a core is in.
+
 The whole base policy is **five rules you can read in one minute** — each a
 decades-old safety principle applied to agent actions, with its limits
 [documented honestly](reeflex-spec/IMPACT-MODEL.md#what-the-base-policy-does-not-catch).
@@ -272,7 +280,7 @@ Already running MCP servers (filesystem, GitHub, Postgres, your own)? Put
 - `reeflex-core` decision engine (`POST /v1/decide`) — Python + OPA/Rego, **255** unit tests (1 platform-specific skip), **9/9** policy tests
 - Base policy pack (R1–R5): read-only allow, irreversible-broad-prod approval, irreversible-systemic-prod deny, default allow, session delete-budget
 - Fail-closed on any OPA error or unreachable core — never a silent allow
-- Anti-fragmentation: a per-session cumulative ledger defeats split-batch evasion
+- Anti-fragmentation: a durable per-session cumulative ledger defeats split-batch evasion — survives restarts, and shared by every replica that shares its volume ([limits](INSTALL.md#the-session-ledger-must-be-shared-and-must-survive-a-restart))
 - Three conformance-tested reference adapters (Claude Code, WordPress, MCP gateway)
 - **SIEM-ready**: every decision streams as syslog (RFC 5424, JSON or CEF) — Splunk, QRadar, Wazuh, Graylog, Loki and friends consume it with zero vendor connectors. The SOC sees the attempt, not just the aftermath. See [docs/siem.md](docs/siem.md).
 - **Human-in-the-loop, operational**: `require_approval` creates a persistent hold with a resolution API (`/v1/holds`); the operator's designated principal resolves it (human-only by default — [HITL/HOTL/AIL](docs/why-reeflex.md#ail)), with `actor ≠ approver` enforced and single-use, TTL-bound holds. Surfaces: the WordPress "Pending approvals" page and the [`reeflex-holds`](reeflex-holds/) MCP server (`pip install reeflex-holds`) — list/inspect/resolve holds from Claude Desktop or any MCP client.
