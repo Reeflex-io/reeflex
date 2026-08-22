@@ -414,7 +414,8 @@ $resolve_body    = wp_json_encode( array(
 	'reason'    => 'fanout regression harness (e)',
 ) );
 $resolve_headers = array( 'Content-Type' => 'application/json' );
-$core_token      = Reeflex_Config::core_token();
+$core_token      = reeflex_harness_token_for( 'fanout-regression-tester' );
+if ( '' === $core_token ) { $core_token = Reeflex_Config::core_token(); }
 if ( '' !== $core_token ) { $resolve_headers['Authorization'] = 'Bearer ' . $core_token; }
 $resolve_resp = ( null !== $hold_id_e ) ? wp_remote_post(
 	rtrim( $core_url, '/' ) . '/v1/holds/' . rawurlencode( $hold_id_e ) . '/resolve',

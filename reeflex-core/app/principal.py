@@ -59,20 +59,50 @@ WHAT THIS MODULE DOES
    The frozen `decided_by` "{type}:{id}" shape is left exactly as it was, so
    nothing downstream breaks; the provenance is additive.
 
-3. OPTIONALLY REFUSE OUTRIGHT.  `REEFLEX_REQUIRE_VERIFIED_APPROVER=true` makes
-   an unverifiable approver a hard 403.  A deployment that wants to CLAIM
-   four-eyes must set this.
+3. REFUSE OUTRIGHT BY DEFAULT.  `REEFLEX_REQUIRE_VERIFIED_APPROVER` makes an
+   unverifiable approver a hard 403, and SINCE 0.2.0 IT IS ON UNLESS THE
+   OPERATOR TURNS IT OFF.  A deployment that wants to keep resolving holds on
+   a self-asserted approver must now say so in as many words.
 
-WHY (3) IS NOT THE DEFAULT — AND WHY THAT IS NOT A SOFTENED FIX.  SPEC §7's
-fail-closed bias is about ambiguous INPUT: an unparseable value resolves to the
-most-guarded reading.  It is not a licence to disable a subsystem when CONFIG
-is absent.  Defaulting (3) on would make every hold unresolvable on upgrade for
-every existing deployment — the holds API, the holds CLI (RFX-42) and the
-dashboard would all stop working until an operator wrote a token map.  That is
-not a wrong-DENY on one action, it is a feature outage, and the trade is not
-core's to make silently.  So the default is: still resolvable, but the evidence
-now tells the truth about what was verified, and core says so loudly on stderr.
-Whether to flip the default is flagged as an OWNER GATE in the PR.
+=============================================================================
+WHY (3) IS THE DEFAULT — AND WHAT THE OLD ARGUMENT FOR THE OTHER DEFAULT WAS
+=============================================================================
+Until 0.2.0 the default was OFF, and the reason written here was: SPEC §7's
+fail-closed bias is about ambiguous INPUT, not a licence to disable a subsystem
+when CONFIG is absent; defaulting it on would make every hold unresolvable on
+upgrade — the holds API, the holds CLI (RFX-42) and the dashboard would all
+stop working until an operator wrote a token map — and a feature outage is not
+core's trade to make silently.
+
+That argument was about UPGRADE COST, and it was answered rather than refuted:
+
+  * The cost is real and it is now PAID EXPLICITLY.  This is a MINOR version
+    bump, the CHANGELOG names the break and who it breaks, and the refusal
+    below tells the operator, at the moment it happens, the one line that
+    restores the old behaviour.  A break an operator is told about at the
+    point of failure is a different thing from a silent one.
+
+  * The thing being defended was never a working feature.  What
+    `REQUIRE_VERIFIED_APPROVER=false` buys is the ability to resolve a hold
+    with an approver core cannot verify — and RFX-84 is the measurement of
+    what that is worth: one bearer token raised an irreversible production
+    hold and approved it as `human:totally-invented-auditor`, and core minted
+    and PERSISTED the Art.14 record saying a human had overseen it.  Keeping
+    a subsystem "working" in the sense that it still accepts an invented human
+    is keeping the defect, not the feature.
+
+  * The RFX-97 release gate measures the difference on a built artefact.  At
+    the old default, five of six known evasions close and the survivor is
+    exactly this one.  At the new default it closes.  Shipping an image whose
+    DEFAULT accepts an invented approver, in a product whose entire claim is
+    evidence of human oversight, is the fail-open class the last six tickets
+    were spent killing.
+
+WHAT DOES NOT CHANGE.  (1) and (2) are untouched: a deployment that configures
+`REEFLEX_RESOLVER_TOKENS` verifies its approvers and nothing about this default
+is visible to it, and a deployment that opts out with
+`REEFLEX_REQUIRE_VERIFIED_APPROVER=false` gets exactly the pre-0.2.0
+behaviour, warning on stderr and `decided_by_verified: false` included.
 """
 
 from __future__ import annotations
@@ -231,6 +261,22 @@ def approval_actor_key(envelope: dict) -> tuple[str, ...]:
 _TOKENS_ENV = "REEFLEX_RESOLVER_TOKENS"
 _STRICT_ENV = "REEFLEX_REQUIRE_VERIFIED_APPROVER"
 
+#: Where the operator can read the whole story rather than one 403's worth of
+#: it.  Named once, so a moved page is one edit and not four.
+_DOCS_URL = "https://github.com/Reeflex-io/reeflex/blob/main/docs/reference/configuration.md#verified-approvers"
+
+
+def _display(ptype: object, pid: object) -> str:
+    """The "type:id" form used in messages -- never the bare id.
+
+    A refusal that says only `alice` leaves the operator guessing whether core
+    read a human or an agent, and the type is half of what makes an approver
+    acceptable (the resolution policy is keyed on it).
+    """
+    t = str(ptype or "").strip() or "?"
+    i = str(pid or "").strip() or "?"
+    return "%s:%s" % (t, i)
+
 
 def _load_resolver_tokens() -> dict:
     """Load the bearer-token -> principal map.
@@ -274,9 +320,50 @@ def _load_resolver_tokens() -> dict:
     return out
 
 
+#: What `REEFLEX_REQUIRE_VERIFIED_APPROVER` does when the operator says nothing.
+#: Flipped to True in 0.2.0 — see the module docstring for the argument, and
+#: the CHANGELOG for who this breaks and the one line that restores 0.1.x.
+STRICT_DEFAULT: bool = True
+
+_TRUTHY = frozenset({"true", "1", "yes", "on"})
+_FALSEY = frozenset({"false", "0", "no", "off"})
+
+
 def strict_mode() -> bool:
-    """True if an unverifiable approver must be refused outright."""
-    return os.environ.get(_STRICT_ENV, "").strip().lower() in ("true", "1", "yes")
+    """True if an unverifiable approver must be refused outright.
+
+    TRI-STATE, and it has to be: unset now means something DIFFERENT from
+    "false", so the two cannot share a parse.
+
+        unset / empty / unrecognised  -> STRICT_DEFAULT (True since 0.2.0)
+        true | 1 | yes | on           -> True
+        false | 0 | no | off          -> False   (the 0.1.x behaviour)
+
+    AN UNRECOGNISED VALUE READS AS THE DEFAULT, NOT AS "off".  `="maybe"` or
+    `="False "` with a stray character is a config the operator got wrong, and
+    the SPEC §7 reading of a value we cannot parse is the most-guarded one --
+    the same rule envelope.py applies to every caller-supplied enum.  Turning
+    the guard OFF on a typo would be the fail-open shape this default exists to
+    close, one config file over.  Only an explicit, recognised falsey word
+    opts out; the word is compared folded (`_normalize_token`-equivalent:
+    trim + casefold) so `FALSE` and `False` work, but nothing else does.
+    """
+    raw = os.environ.get(_STRICT_ENV)
+    if raw is None:
+        return STRICT_DEFAULT
+    token = raw.strip().casefold()
+    if token in _TRUTHY:
+        return True
+    if token in _FALSEY:
+        return False
+    if token:
+        print(
+            "[reeflex-core] WARN: %s=%r is not a recognised boolean; reading it "
+            "as the default (%s). Use 'true' or 'false'."
+            % (_STRICT_ENV, raw, "true" if STRICT_DEFAULT else "false"),
+            file=sys.stderr,
+        )
+    return STRICT_DEFAULT
 
 
 def verification_configured() -> bool:
@@ -307,13 +394,33 @@ class PrincipalRefused(Exception):
     """Raised when the asserted principal must not be accepted.
 
     `error` is the machine reason code the HTTP layer returns; `reason` is the
-    human sentence.
+    human sentence; `remedy` is the machine-readable "what would make this
+    work", echoed on the 403 alongside the other two.
+
+    WHY THERE IS A `remedy` AT ALL.  `principal_not_verified` on its own is a
+    refusal that sends the operator to the source: it names no principal, no
+    setting and no next step, and the person reading it is usually a human who
+    just clicked Approve in a holds inbox on an action that is now stuck.  A
+    refusal a product means to ship as a DEFAULT has to carry its own
+    instructions.  `reason` says what happened in a sentence; `remedy` is the
+    same thing in fields a dashboard can render as a button:
+
+        {"error": "principal_not_verified",
+         "reason": "...one sentence, naming the principal...",
+         "remedy": {"principal": "human:alice@example.com",
+                    "why": "unbound_credential" | "verification_not_configured",
+                    "actions": ["...", "..."],
+                    "docs": "https://..."} }
+
+    `remedy` is ADDITIVE and optional -- every existing consumer reads `error`
+    and ignores unknown keys, so no wire contract moves.
     """
 
-    def __init__(self, error: str, reason: str) -> None:
+    def __init__(self, error: str, reason: str, remedy: dict | None = None) -> None:
         super().__init__(reason)
         self.error = error
         self.reason = reason
+        self.remedy = remedy or {}
 
 
 def resolve_approver(bearer: str | None, asserted_type: str, asserted_id: str) -> dict:
@@ -334,8 +441,23 @@ def resolve_approver(bearer: str | None, asserted_type: str, asserted_id: str) -
         if asserted_id and not (a_ids & b_ids):
             raise PrincipalRefused(
                 "principal_mismatch",
-                "the asserted principal does not match the principal bound to "
-                "this credential; a caller may only approve as itself",
+                "the asserted principal %s does not match %s, the principal "
+                "bound to the credential this request was made with; a caller "
+                "may only approve as itself"
+                % (_display(asserted_type, asserted_id),
+                   _display(bound["type"], bound["id"])),
+                {
+                    "principal": _display(asserted_type, asserted_id),
+                    "bound_principal": _display(bound["type"], bound["id"]),
+                    "why": "credential_bound_to_another_principal",
+                    "actions": [
+                        "approve as %s (the principal this credential IS), or"
+                        % _display(bound["type"], bound["id"]),
+                        "make this request with the bearer token %s is bound to "
+                        "in %s" % (_display(asserted_type, asserted_id), _TOKENS_ENV),
+                    ],
+                    "docs": _DOCS_URL,
+                },
             )
         return {"type": bound["type"], "id": bound["id"],
                 "verified": True, "source": "credential"}
@@ -344,23 +466,81 @@ def resolve_approver(bearer: str | None, asserted_type: str, asserted_id: str) -
     if verification_configured() or strict_mode():
         # Either this deployment DOES bind credentials (and this one is not in
         # the map), or it demands verified approvers. Both mean: refuse.
+        #
+        # SAME CODE, DIFFERENT SITUATIONS -- and the operator's next move is
+        # not the same one, so the sentence must not be.  "Your token is
+        # missing from a map that exists" is a five-second fix by whoever owns
+        # the map; "this core has verification switched on and no map at all"
+        # is a deployment that has never been wired up, and the honest thing
+        # to offer there is BOTH the real fix and the documented escape hatch.
+        # The `error` code stays `principal_not_verified` for both, because it
+        # is the same refusal and the code is a wire contract the RFX-97
+        # release gate and every adapter assert on.
+        configured = verification_configured()
+        principal = _display(asserted_type, asserted_id)
+        if configured:
+            raise PrincipalRefused(
+                "principal_not_verified",
+                "the approver %s cannot be verified: this core binds bearer "
+                "tokens to approving principals via %s, and the credential "
+                "this request was made with is not in that map, so nothing "
+                "establishes that %s is who resolved this hold"
+                % (principal, _TOKENS_ENV, principal),
+                {
+                    "principal": principal,
+                    "why": "unbound_credential",
+                    "actions": [
+                        "add this bearer token to %s as "
+                        '{"<token>": {"type": %r, "id": %r}} -- the map is '
+                        "re-read per request, so no restart is needed"
+                        % (_TOKENS_ENV, asserted_type or "human",
+                           asserted_id or "alice@example.com"),
+                        "or resolve this hold with a token that IS bound in %s"
+                        % _TOKENS_ENV,
+                    ],
+                    "docs": _DOCS_URL,
+                },
+            )
         raise PrincipalRefused(
             "principal_not_verified",
-            "this credential is not bound to an approving principal, so the "
-            "asserted principal cannot be verified; four-eyes cannot be "
-            "established for this resolution",
+            "the approver %s is asserted by the caller and this core cannot "
+            "check it: %s is on (the default since 0.2.0) and no %s map is "
+            "configured, so no credential is bound to any approving principal "
+            "and four-eyes cannot be established for this resolution"
+            % (principal, _STRICT_ENV, _TOKENS_ENV),
+            {
+                "principal": principal,
+                "why": "verification_not_configured",
+                "actions": [
+                    "set %s to a JSON object (or a path to one) binding each "
+                    'approver\'s bearer token to the principal it IS: '
+                    '{"<token>": {"type": %r, "id": %r}}'
+                    % (_TOKENS_ENV, asserted_type or "human",
+                       asserted_id or "alice@example.com"),
+                    "or, to keep the pre-0.2.0 behaviour while you wire that "
+                    "up, set %s=false -- the hold resolves, and the record "
+                    "says decided_by_verified=false because nothing verified it"
+                    % _STRICT_ENV,
+                ],
+                "docs": _DOCS_URL,
+            },
         )
 
-    # Unverifiable, and this deployment has not opted into strictness.  Accept
-    # the assertion but record it AS an assertion -- see the module docstring
-    # for why this is not a softened fix.  Loud on stderr because a deployment
-    # running like this cannot claim four-eyes.
+    # Unverifiable, and this deployment has EXPLICITLY OPTED OUT of strictness
+    # (`REEFLEX_REQUIRE_VERIFIED_APPROVER=false`; since 0.2.0 that is the only
+    # way to reach this line).  Accept the assertion but record it AS an
+    # assertion.  Loud on stderr because a deployment running like this cannot
+    # claim four-eyes -- and louder than before, because it is now a state the
+    # operator chose rather than one they inherited.
     print(
         "[reeflex-core] WARN: resolving a hold with an UNVERIFIED approver "
-        "(%s:%s) -- no %s binding for this credential. The hold record is "
-        "marked decided_by_verified=false. Set %s to bind credentials to "
-        "principals, or %s=true to refuse instead."
-        % (asserted_type, asserted_id, _TOKENS_ENV, _TOKENS_ENV, _STRICT_ENV),
+        "(%s) -- %s=false is set and no %s binding exists for this credential, "
+        "so core is recording an approver it did not authenticate. The hold "
+        "record, the hold.resolved webhook and the Art.14 audit line all carry "
+        "decided_by_verified=false; this deployment cannot claim four-eyes. "
+        "Set %s to bind credentials to principals and remove the opt-out."
+        % (_display(asserted_type, asserted_id), _STRICT_ENV, _TOKENS_ENV,
+           _TOKENS_ENV),
         file=sys.stderr,
     )
     return {"type": asserted_type, "id": asserted_id,

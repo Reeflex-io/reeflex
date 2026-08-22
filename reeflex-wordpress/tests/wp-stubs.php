@@ -22,6 +22,86 @@ if ( ! defined( 'MINUTE_IN_SECONDS' ) ){ define( 'MINUTE_IN_SECONDS', 60 ); }
 if ( ! defined( 'HOUR_IN_SECONDS' ) )  { define( 'HOUR_IN_SECONDS', 3600 ); }
 if ( ! defined( 'DAY_IN_SECONDS' ) )   { define( 'DAY_IN_SECONDS', 86400 ); }
 
+// --- Resolving as a principal core can VERIFY (reeflex-core 0.2.0, RFX-84) --
+//
+// Every one of the four live-core harnesses resolves a hold, and since 0.2.0
+// reeflex-core refuses a resolve whose approver it cannot tie to the calling
+// credential (403 principal_not_verified). Presenting no Authorization header
+// at all -- what these harnesses did -- is exactly that case.
+//
+// So the harness now presents a credential BOUND to the principal each
+// scenario approves as. Both sides read the same file
+// (harness-resolver-tokens.json): core is started with
+// REEFLEX_RESOLVER_TOKENS pointed at it, and the lookup below finds the token
+// for a given principal id. One source of truth, so the harness and the core
+// it talks to cannot drift.
+//
+// Absent or unreadable -> "" -> no Authorization header, i.e. the pre-0.2.0
+// behaviour, which still works against a core running the documented opt-out
+// (REEFLEX_REQUIRE_VERIFIED_APPROVER=false).
+
+/**
+ * The bearer token bound to `$principal_id` in the harness resolver map.
+ *
+ * @param string $principal_id The principal a scenario is approving as.
+ * @return string The token, or '' when the map is absent/unreadable/has no
+ *                entry (caller then sends no Authorization header).
+ */
+function reeflex_harness_token_for( string $principal_id ): string {
+	static $map = null;
+	if ( null === $map ) {
+		$map  = array();
+		$path = getenv( 'REEFLEX_HARNESS_RESOLVER_TOKENS' );
+		if ( ! is_string( $path ) || '' === $path ) {
+			$path = __DIR__ . '/harness-resolver-tokens.json';
+		}
+		$raw = is_readable( $path ) ? file_get_contents( $path ) : false;
+		if ( false !== $raw ) {
+			$parsed = json_decode( $raw, true );
+			if ( is_array( $parsed ) ) {
+				foreach ( $parsed as $token => $principal ) {
+					if ( is_array( $principal ) && isset( $principal['id'] ) ) {
+						$map[ (string) $principal['id'] ] = (string) $token;
+					}
+				}
+			}
+		}
+	}
+	return $map[ $principal_id ] ?? '';
+}
+
+/**
+ * Print a one-line diagnosis when core refused a resolve for a reason the
+ * harness can actually do something about.
+ *
+ * A scenario table row reading "FAIL" over a 403 sends the reader to the
+ * source. This names the cause and the fix, once, at the moment it happens --
+ * the same discipline reeflex-core's own refusal now follows.
+ *
+ * @param int        $code HTTP status from the resolve call.
+ * @param array|null $body Decoded response body, if any.
+ * @return void
+ */
+function reeflex_harness_explain_resolve_refusal( int $code, $body ): void {
+	static $said = false;
+	if ( $said || 403 !== $code || ! is_array( $body ) ) {
+		return;
+	}
+	if ( 'principal_not_verified' !== ( $body['error'] ?? '' ) ) {
+		return;
+	}
+	$said = true;
+	fwrite(
+		STDERR,
+		"\n[harness] reeflex-core refused this resolve: the approver is not bound to the calling credential.\n"
+		. "[harness] Since reeflex-core 0.2.0 REEFLEX_REQUIRE_VERIFIED_APPROVER defaults to true.\n"
+		. "[harness] Start the core under test with:\n"
+		. "[harness]   REEFLEX_RESOLVER_TOKENS=" . __DIR__ . "/harness-resolver-tokens.json\n"
+		. "[harness] (or, to run these harnesses against the pre-0.2.0 behaviour,\n"
+		. "[harness]  REEFLEX_REQUIRE_VERIFIED_APPROVER=false).\n\n"
+	);
+}
+
 // --- Filter/action registry ------------------------------------------------
 $GLOBALS['__filters'] = array();
 

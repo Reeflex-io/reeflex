@@ -27,11 +27,26 @@ RUN useradd --uid 10001 --user-group --home-dir /app --shell /usr/sbin/nologin r
     && chown -R reeflex:reeflex /app
 
 # Container must bind 0.0.0.0 (not 127.0.0.1) so the published port is reachable.
+#
+# REEFLEX_REQUIRE_VERIFIED_APPROVER=true is the SHIPPED DEFAULT (0.2.0, RFX-84).
+# An approver this core cannot tie to the credential that resolved the hold is
+# refused (403 principal_not_verified) rather than recorded as a human who
+# exercised oversight. Stated here as well as in the code default so it is
+# visible in `docker inspect` and overridable per deployment with `-e`:
+#
+#   -e REEFLEX_RESOLVER_TOKENS='{"tok":{"type":"human","id":"alice@example.com"}}'
+#       the fix: bind each approver's bearer token to the principal it IS.
+#   -e REEFLEX_REQUIRE_VERIFIED_APPROVER=false
+#       the escape hatch: pre-0.2.0 behaviour, holds resolve on a self-asserted
+#       approver and the record says decided_by_verified=false.
+#
+# See CHANGELOG 0.2.0 and docs/reference/configuration.md.
 ENV REEFLEX_HOST=0.0.0.0 \
     REEFLEX_PORT=8080 \
     REEFLEX_OPA_BIN=/usr/local/bin/opa \
     REEFLEX_POLICY_DIR=/app/policy \
     REEFLEX_AUDIT_LOG=/app/audit/decisions.jsonl \
+    REEFLEX_REQUIRE_VERIFIED_APPROVER=true \
     PYTHONUNBUFFERED=1
 
 EXPOSE 8080

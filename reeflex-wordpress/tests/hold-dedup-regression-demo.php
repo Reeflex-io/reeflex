@@ -77,7 +77,8 @@ function core_resolve_hold( string $core_url, string $hold_id, string $decision 
 		'reason'    => 'hold-dedup regression harness',
 	) );
 	$headers = array( 'Content-Type' => 'application/json' );
-	$token   = Reeflex_Config::core_token();
+	$token   = reeflex_harness_token_for( 'dedup-regression-tester' );
+	if ( '' === $token ) { $token = Reeflex_Config::core_token(); }
 	if ( '' !== $token ) { $headers['Authorization'] = 'Bearer ' . $token; }
 	$resp = wp_remote_post(
 		rtrim( $core_url, '/' ) . '/v1/holds/' . rawurlencode( $hold_id ) . '/resolve',

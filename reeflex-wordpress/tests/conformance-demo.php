@@ -242,7 +242,12 @@ if ( $h3_pass ) {
 		'reason'    => 'conformance harness approval',
 	) );
 	$resolve_headers = array( 'Content-Type' => 'application/json' );
-	$core_token      = Reeflex_Config::core_token();
+	// The credential bound to human:conformance-tester (see
+	// harness-resolver-tokens.json). Falls back to the configured core token,
+	// then to no header at all -- which only works against a core running the
+	// documented REEFLEX_REQUIRE_VERIFIED_APPROVER=false opt-out.
+	$core_token      = reeflex_harness_token_for( 'conformance-tester' );
+	if ( '' === $core_token ) { $core_token = Reeflex_Config::core_token(); }
 	if ( '' !== $core_token ) {
 		$resolve_headers['Authorization'] = 'Bearer ' . $core_token;
 	}
@@ -255,6 +260,12 @@ if ( $h3_pass ) {
 		)
 	);
 	$h4_pass = ! is_wp_error( $resolve_resp ) && 200 === (int) wp_remote_retrieve_response_code( $resolve_resp );
+	if ( ! $h4_pass && ! is_wp_error( $resolve_resp ) ) {
+		reeflex_harness_explain_resolve_refusal(
+			(int) wp_remote_retrieve_response_code( $resolve_resp ),
+			json_decode( (string) wp_remote_retrieve_body( $resolve_resp ), true )
+		);
+	}
 }
 printf(
 	"%-50s | %-26s | %s\n",
@@ -335,7 +346,13 @@ function core_resolve_hold( string $core_url, string $hold_id, string $decision,
 		'reason'    => 'conformance harness',
 	) );
 	$headers = array( 'Content-Type' => 'application/json' );
-	$token   = Reeflex_Config::core_token();
+	// Bound to the principal being asserted (reeflex-core 0.2.0 takes the
+	// approver from the CREDENTIAL). H10 relies on this: without a credential
+	// bound to the raising agent's identity, its resolve is refused
+	// principal_not_verified at check 4 and never reaches the four-eyes guard
+	// at check 5 that the scenario exists to prove.
+	$token   = reeflex_harness_token_for( $principal_id );
+	if ( '' === $token ) { $token = Reeflex_Config::core_token(); }
 	if ( '' !== $token ) { $headers['Authorization'] = 'Bearer ' . $token; }
 	$resp = wp_remote_post(
 		rtrim( $core_url, '/' ) . '/v1/holds/' . rawurlencode( $hold_id ) . '/resolve',
@@ -344,6 +361,7 @@ function core_resolve_hold( string $core_url, string $hold_id, string $decision,
 	if ( is_wp_error( $resp ) ) { return array( 0, null ); }
 	$code    = (int) wp_remote_retrieve_response_code( $resp );
 	$decoded = json_decode( (string) wp_remote_retrieve_body( $resp ), true );
+	reeflex_harness_explain_resolve_refusal( $code, $decoded );
 	return array( $code, is_array( $decoded ) ? $decoded : null );
 }
 

@@ -133,7 +133,12 @@ run.
    calling `POST /v1/holds/{hold_id}/resolve` on reeflex-core directly (see
    the reeflex-core README, "Holds API"). This can be a Slack action, a
    ticketing system webhook, or a second n8n workflow with its own HTTP
-   Request node.
+   Request node. **Whatever makes that call must present the bearer token
+   bound to the approving principal**: since core 0.2.0
+   `REEFLEX_REQUIRE_VERIFIED_APPROVER` defaults to true, so the approver is
+   taken from the credential and a self-asserted one is refused `403
+   principal_not_verified` (see
+   [Verified approvers](../reference/configuration.md#verified-approvers)).
 4. Once resolved, the `hold.resolved` webhook event (or your own polling
    with an HTTP Request node against `GET /v1/holds/{id}`) resumes the
    Wait node.

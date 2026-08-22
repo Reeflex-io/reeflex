@@ -171,6 +171,41 @@ SAME value):
 REEFLEX_HOLD_TTL_SECONDS=8 php.exe tests/conformance-demo.php http://127.0.0.1:8299
 ```
 
+### The core these harnesses talk to must bind resolver credentials
+
+All four harnesses **resolve real holds**, and since **reeflex-core 0.2.0**
+`REEFLEX_REQUIRE_VERIFIED_APPROVER` defaults to **true** (RFX-84): a resolve
+whose approver core cannot tie to the calling credential is refused `403
+principal_not_verified`. The harnesses used to send no `Authorization` header
+at all, which is exactly that case — measured, all four fail.
+
+So start the core under test with the harness token map:
+
+```bash
+cd reeflex-core
+REEFLEX_HOLD_TTL_SECONDS=20 \
+REEFLEX_RESOLVER_TOKENS=../reeflex-wordpress/tests/harness-resolver-tokens.json \
+python main.py
+```
+
+`harness-resolver-tokens.json` maps one bearer token per harness principal
+(`conformance-tester`, `admin-tester`, `fanout-regression-tester`,
+`dedup-regression-tester`, and `agent:wordpress` for H10). **Both sides read
+that one file** — `wp-stubs.php`'s `reeflex_harness_token_for()` looks up which
+token to send for the principal a scenario approves as — so the harness and the
+core cannot drift apart.
+
+**H10 is why the `agent:wordpress` entry exists.** Check 4 (verification) runs
+*before* check 5 (four-eyes). Without a credential bound to the raising agent's
+identity, H10's resolve is refused `principal_not_verified` and never reaches
+the guard it exists to prove — a 403 for the wrong reason, which reads as a
+pass. H10 asserts the *reason*, not just the status.
+
+To run them against the pre-0.2.0 behaviour instead, start the core with
+`REEFLEX_REQUIRE_VERIFIED_APPROVER=false`; the harnesses fall back to sending
+no `Authorization` header and behave as they always did. If you forget both,
+each harness prints a one-line diagnosis naming the two settings.
+
 ### Proof of the LOCKED DECISION (actor stays actor)
 
 T1.2 requires that a resubmitted action carries the ORIGINAL agent identity —

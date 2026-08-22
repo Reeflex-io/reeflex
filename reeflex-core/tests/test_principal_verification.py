@@ -236,23 +236,128 @@ class TestStrictMode(_EnvIsolated):
         self.assertTrue(got["verified"])
 
     def test_strict_flag_parsing(self):
-        for raw, expected in (("true", True), ("TRUE", True), ("1", True),
-                              ("yes", True), ("false", False), ("", False),
-                              ("nope", False)):
+        """Tri-state (RFX-84, 0.2.0): unset is not the same as false.
+
+        `""` and `"nope"` USED to read as False, when False was the default
+        and an unparseable value landing there was invisible. Now the default
+        is True and an unrecognised value must resolve to it, not to the
+        opt-out -- a guard that switches off on a typo is the fail-open shape
+        this default exists to close, one config file over.
+        """
+        for raw, expected in (
+            # explicit on
+            ("true", True), ("TRUE", True), ("True", True), ("1", True),
+            ("yes", True), ("on", True), ("  true  ", True),
+            # explicit off -- the documented escape hatch, and the ONLY way off
+            ("false", False), ("FALSE", False), ("False", False), ("0", False),
+            ("no", False), ("off", False), ("  false  ", False),
+            # neither: reads as the default, which is now ON
+            ("", True), ("nope", True), ("faLSe!", True), ("2", True),
+        ):
             with self.subTest(raw=raw):
                 os.environ["REEFLEX_REQUIRE_VERIFIED_APPROVER"] = raw
                 self.assertIs(principal.strict_mode(), expected)
 
+    def test_unset_means_strict(self):
+        """The headline of 0.2.0: the image default with nothing configured."""
+        os.environ.pop("REEFLEX_REQUIRE_VERIFIED_APPROVER", None)
+        self.assertTrue(principal.strict_mode())
+        self.assertTrue(principal.STRICT_DEFAULT)
+        with self.assertRaises(PrincipalRefused) as ctx:
+            resolve_approver("any-token", "human", "totally-invented-auditor")
+        self.assertEqual(ctx.exception.error, "principal_not_verified")
+
+    def test_the_refusal_tells_the_operator_what_to_do(self):
+        """`principal_not_verified` on its own sends someone to the source.
+
+        RFX-84's requirement, asserted rather than described: the refusal
+        NAMES THE PRINCIPAL it would not accept, and states what would make it
+        verified -- including the escape hatch, which an operator whose holds
+        have just stopped resolving needs to be able to find without reading
+        principal.py.
+        """
+        os.environ.pop("REEFLEX_REQUIRE_VERIFIED_APPROVER", None)
+        with self.assertRaises(PrincipalRefused) as ctx:
+            resolve_approver("any-token", "human", "alice@example.com")
+        exc = ctx.exception
+
+        # The principal, in type:id form, in the sentence a human reads.
+        self.assertIn("human:alice@example.com", exc.reason)
+        # Both settings that change the answer are named.
+        self.assertIn("REEFLEX_REQUIRE_VERIFIED_APPROVER", exc.reason)
+        self.assertIn("REEFLEX_RESOLVER_TOKENS", exc.reason)
+
+        # And the machine-readable half, for a dashboard that should not have
+        # to string-match prose.
+        self.assertEqual(exc.remedy["principal"], "human:alice@example.com")
+        self.assertEqual(exc.remedy["why"], "verification_not_configured")
+        actions = " ".join(exc.remedy["actions"])
+        self.assertIn("REEFLEX_RESOLVER_TOKENS", actions)
+        self.assertIn("REEFLEX_REQUIRE_VERIFIED_APPROVER=false", actions)
+        self.assertTrue(exc.remedy["docs"].startswith("http"))
+
+    def test_an_unbound_credential_gets_a_different_sentence(self):
+        """Two situations, one code, two next moves.
+
+        A token missing from a map that EXISTS is a five-second fix by whoever
+        owns the map. Telling that operator to "set REEFLEX_RESOLVER_TOKENS"
+        -- which they plainly already did -- is the refusal wasting the one
+        chance it has to be useful.
+        """
+        os.environ["REEFLEX_RESOLVER_TOKENS"] = \
+            '{"tok-alice": {"type": "human", "id": "alice"}}'
+        with self.assertRaises(PrincipalRefused) as ctx:
+            resolve_approver("tok-nobody", "human", "bob")
+        exc = ctx.exception
+        self.assertEqual(exc.error, "principal_not_verified")
+        self.assertEqual(exc.remedy["why"], "unbound_credential")
+        self.assertIn("human:bob", exc.reason)
+        # It must NOT offer the escape hatch here: this deployment has already
+        # opted into verification by configuring a map, and switching the
+        # requirement off would not even help -- verification_configured() is
+        # itself sufficient to refuse.
+        self.assertNotIn("REEFLEX_REQUIRE_VERIFIED_APPROVER=false",
+                         " ".join(exc.remedy["actions"]))
+
+    def test_the_escape_hatch_actually_restores_the_old_behaviour(self):
+        """The CHANGELOG's one-liner, exercised (not just documented)."""
+        os.environ["REEFLEX_REQUIRE_VERIFIED_APPROVER"] = "false"
+        got = resolve_approver("any-token", "human", "leo.david")
+        self.assertEqual(got["id"], "leo.david")
+        self.assertFalse(got["verified"])
+        self.assertEqual(got["source"], "asserted")
+
+    def test_a_principal_mismatch_also_names_both_principals(self):
+        os.environ["REEFLEX_RESOLVER_TOKENS"] = \
+            '{"tok-alice": {"type": "human", "id": "alice"}}'
+        with self.assertRaises(PrincipalRefused) as ctx:
+            resolve_approver("tok-alice", "human", "bob")
+        exc = ctx.exception
+        self.assertEqual(exc.error, "principal_mismatch")
+        self.assertIn("human:bob", exc.reason)
+        self.assertIn("human:alice", exc.reason)
+        self.assertEqual(exc.remedy["bound_principal"], "human:alice")
+
 
 class TestUnverifiedIsRecordedAsUnverified(_EnvIsolated):
-    """The default path still resolves -- but never claims verification.
+    """The OPTED-OUT path still resolves -- but never claims verification.
 
     This is the anti-laundering property: an unverified assertion must be
     distinguishable, downstream, from a real human decision. RFX-74 is what
     happens when it is not.
+
+    SINCE 0.2.0 THIS IS NO LONGER THE DEFAULT PATH -- reaching it requires
+    `REEFLEX_REQUIRE_VERIFIED_APPROVER=false`, set explicitly below. The
+    property is still load-bearing and still tested, because the escape hatch
+    is a supported configuration: an operator who takes it must still get a
+    record that says nothing verified this. What changed is who ends up here.
     """
 
-    def test_default_path_marks_the_approver_unverified(self):
+    def setUp(self):
+        super().setUp()
+        os.environ["REEFLEX_REQUIRE_VERIFIED_APPROVER"] = "false"
+
+    def test_opted_out_path_marks_the_approver_unverified(self):
         got = resolve_approver("any-token", "human", "leo.david")
         self.assertEqual(got["id"], "leo.david")
         self.assertFalse(got["verified"])
