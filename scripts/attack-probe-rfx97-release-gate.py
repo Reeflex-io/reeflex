@@ -44,16 +44,56 @@ are release blockers:
     answered the first one for the second on A3: five self-approval variants
     scored CLOSED on a 403 that was `principal_type_not_allowed`.
 
+APPROVER CREDENTIALS — READ THIS BEFORE RUNNING IT (RFX-179)
+===========================================================
+Since core 0.2.0 `REEFLEX_REQUIRE_VERIFIED_APPROVER` defaults to true and the
+shipped image sets it, so the approving principal comes from the CREDENTIAL the
+resolve call was made with and an approver core cannot verify is refused
+`403 principal_not_verified`.  Two of the six rows (A3-self, A6) need an
+APPROVED hold as their precondition, so against the configuration we actually
+ship this harness could not build one, both rows reported INCONCLUSIVE — and
+INCONCLUSIVE was in neither term of the exit code.  The gate printed
+"still exploitable: none" and returned 0 over two attacks that never ran.
+
+Both halves of that are fixed here:
+
+  * `REEFLEX_PROBE_RESOLVER_MAP` is the HOST path of the JSON file the core
+    under test reads as `REEFLEX_RESOLVER_TOKENS`.  Given it, the probe does
+    what an operator does — it ISSUES a bearer token per approver and resolves
+    holds with it.  The map is re-read per request, so no restart is needed;
+    existing bindings are preserved and the file is restored on the way out.
+  * INCONCLUSIVE now FAILS the exit code.  An attack that did not run is a
+    reason not to cut a release.
+
+Nothing is switched off to achieve this, and the A3-fab row is what proves it:
+`no-credential` is deliberately never provisioned and must still be refused,
+and `mismatch` holds a REAL approver's credential while asserting somebody
+else's name, which must be refused `principal_mismatch`.  Without the ability
+to mint, that second attack cannot be run at all.
+
 USAGE
 =====
     # against a container built from the commit under test
     docker build -t reeflex-core:under-test .
-    docker run -d --name ut -p 18391:8080 -e REEFLEX_AUTH_TOKEN=t reeflex-core:under-test
+    mkdir -p /tmp/rfx97 && echo '{}' > /tmp/rfx97/resolver-tokens.json
+    docker run -d --name ut -p 18391:8080 -e REEFLEX_AUTH_TOKEN=t \
+        -e REEFLEX_RESOLVER_TOKENS=/etc/reeflex/resolver-tokens.json \
+        -v /tmp/rfx97:/etc/reeflex:ro reeflex-core:under-test
     REEFLEX_PROBE_BASE=http://127.0.0.1:18391 REEFLEX_PROBE_TOKEN=t REEFLEX_PROBE_PACE=0 \
+        REEFLEX_PROBE_RESOLVER_MAP=/tmp/rfx97/resolver-tokens.json \
         python3 scripts/attack-probe-rfx97-release-gate.py
+
+    Mount the DIRECTORY, not the file: the probe replaces the map atomically
+    (os.replace), which changes the inode, and a file bind-mount would pin the
+    container to the old one.  `:ro` is correct — core only ever reads it.
 
     # against api-dev (published eval token, paced for the 429 limiter)
     python3 scripts/attack-probe-rfx97-release-gate.py
+
+    Without REEFLEX_PROBE_RESOLVER_MAP the probe does NOT fall back to
+    asserting identities.  Against a core that requires verified approvers the
+    affected rows stay INCONCLUSIVE and the run exits non-zero, which is the
+    honest answer: this harness could not attack that build.
 
     --json PATH   also write the machine-readable verdict table
     --only A1,A4  run a subset
@@ -117,6 +157,11 @@ RUN = os.environ.get("REEFLEX_PROBE_RUN", str(int(time.time())))
 PACE = float(os.environ.get("REEFLEX_PROBE_PACE", "1.2"))
 SYNTH = "synthetic:qa:RFX-97:release-gate"
 
+#: Host path of the JSON map the core under test reads as
+#: REEFLEX_RESOLVER_TOKENS.  See the "approver credentials" section below for
+#: why the probe writes it rather than being handed a fixed set of tokens.
+RESOLVER_MAP = os.environ.get("REEFLEX_PROBE_RESOLVER_MAP", "")
+
 # HARD GUARD: production core is out of scope for this harness, entirely.
 _host = BASE.split("://", 1)[-1].split("/", 1)[0].lower()
 if _host in ("api.reeflex.io", "reeflex.io", "www.reeflex.io"):
@@ -133,13 +178,21 @@ _TRANSCRIPT: list[dict] = []
 # transport
 # ---------------------------------------------------------------------------
 
-def call(method: str, path: str, body=None, label: str = ""):
-    """One paced HTTP call. Returns (status, parsed_body)."""
+def call(method: str, path: str, body=None, label: str = "", bearer=None):
+    """One paced HTTP call. Returns (status, parsed_body).
+
+    `bearer` overrides the gate token for THIS call only.  Since 0.2.0 the
+    approving principal is taken from the credential and not from the request
+    body, so "approve as Alice" is not a field any more — it is a different
+    Authorization header.  A probe with one token can only ever approve as one
+    principal, which is the whole of RFX-179.
+    """
     url = BASE + path
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
-    if TOKEN:
-        req.add_header("Authorization", "Bearer " + TOKEN)
+    sent = TOKEN if bearer is None else bearer
+    if sent:
+        req.add_header("Authorization", "Bearer " + sent)
     req.add_header("Content-Type", "application/json")
     req.add_header("X-Reeflex-Eval", SYNTH)
 
@@ -166,7 +219,10 @@ def call(method: str, path: str, body=None, label: str = ""):
     except json.JSONDecodeError:
         parsed = {"_raw": raw}
 
+    # The transcript names the principal the credential is bound to, never the
+    # credential: this file's output is attached to round reports.
     _TRANSCRIPT.append({"label": label, "method": method, "path": path,
+                        "as": _PRINCIPAL_OF.get(sent, "gate-token"),
                         "request": body, "status": status, "response": parsed})
     if PACE:
         time.sleep(PACE)
@@ -195,6 +251,165 @@ def envelope(session_id, verb, count=1, env="dev", reversibility="irreversible",
         "approval": approval or {"present": False, "hold_id": None},
         "context": {"mode": "enforce", "note": SYNTH},
     }
+
+
+# ---------------------------------------------------------------------------
+# approver credentials — RFX-179
+#
+# THE PROBLEM THIS SOLVES.  Since 0.2.0 REEFLEX_REQUIRE_VERIFIED_APPROVER
+# defaults to true, and that is now baked into the shipped image (Dockerfile).
+# At that default core takes the approving principal from the CREDENTIAL the
+# resolve call was made with and refuses an assertion it cannot verify
+# (403 principal_not_verified).  The probe held exactly one bearer token, so it
+# could not construct an approved hold at all — and A3-self and A6 both NEED
+# one as a precondition.  Both rows went INCONCLUSIVE, and INCONCLUSIVE did not
+# move the exit code, so the gate printed "still exploitable: none" and returned
+# 0 while two of the six attacks never executed.  That is RFX-179.
+#
+# THE ROUTE, AND WHY IT DOES NOT WEAKEN WHAT THE FLAG ASSERTS.  The flag
+# asserts one thing: the approver's identity comes from a credential the
+# OPERATOR issued, not from the request body.  So the probe stops trying to
+# assert identities and starts doing what an operator does — it ISSUES a
+# credential per approver.  `REEFLEX_RESOLVER_TOKENS` accepts a path to a JSON
+# file and `principal.principal_for_token()` re-reads it on every request
+# (deliberately, so a map can be rotated without a restart), so a bind-mounted
+# map can be provisioned DURING the run.  Every approval the probe obtains
+# below is therefore a genuinely verified one: it travels as its own bearer
+# token, core resolves the principal from that token, and
+# `decided_by_verified` comes back true.  Nothing is asserted and nothing is
+# switched off.
+#
+# WHAT KEEPS THIS HONEST — the negative controls, which are the reason this is
+# a gate and not a fixture:
+#   * A3-fab NEVER gets a credential.  The fabricated human is asserted with
+#     the plain gate token and must still be refused.  If provisioning had
+#     quietly weakened verification, this row would flip to CLOSED-by-accident
+#     and the gate would say so.
+#   * A3-fab gains a SECOND, sharper variant that only exists because
+#     provisioning does: hold a REAL approver's credential and assert somebody
+#     else's identity.  That must be refused `principal_mismatch`.  A probe
+#     that cannot mint a real credential cannot run that attack at all.
+#   * If no map path is configured the probe does NOT fall back to asserting
+#     identities.  It says so, and the affected rows stay INCONCLUSIVE — which
+#     now fails the exit code.
+# ---------------------------------------------------------------------------
+
+#: token -> principal, exactly the shape core reads.  One source of truth: the
+#: probe writes this dict out verbatim, so there is no inverted-map bug to have.
+_TOKEN_MAP: dict[str, dict] = {}
+#: token -> "type:id", for the transcript and for error messages.
+_PRINCIPAL_OF: dict[str, str] = {}
+#: "type:id" -> token, so asking for the same approver twice reuses its
+#: credential rather than issuing a second one for the same person.
+_CREDENTIAL_OF: dict[str, str] = {}
+#: Set when provisioning was asked for and could not be done, so the reason is
+#: reported once at the top instead of per row.
+PROVISION_ERROR = ""
+#: The map's contents before this run touched it, restored on the way out.
+_MAP_ORIGINAL: str | None = None
+#: What core said about every approval this run obtained with a bound
+#: credential.  Checked at the end: see `_approve_verified`.
+_VERIFICATION_READBACK: list[dict] = []
+
+
+def can_provision() -> bool:
+    """True if this run can issue approver credentials."""
+    return bool(RESOLVER_MAP) and not PROVISION_ERROR
+
+
+def provision_init() -> None:
+    """Adopt the map that is already there, rather than replacing it.
+
+    THIS IS NOT TIDINESS.  The file core reads as REEFLEX_RESOLVER_TOKENS is
+    shared: CI points this harness and the four WordPress live-core harnesses
+    at the SAME `harness-resolver-tokens.json`, deliberately, so the two sides
+    cannot drift (CHANGELOG 0.2.0).  A probe that wrote only its own tokens
+    would silently revoke every approver those harnesses depend on, and they
+    would fail `principal_not_verified` in a way that reads as a core
+    regression.  So the existing bindings are loaded and written back
+    untouched, and `restore()` puts the file back byte-for-byte at the end.
+
+    The adopted tokens are NOT offered to `credential_for()`: the probe issues
+    its own credentials for the principals it approves as, so a row can never
+    quietly pass by spending an approver somebody else provisioned.
+    """
+    global PROVISION_ERROR, _MAP_ORIGINAL
+    if not RESOLVER_MAP:
+        return
+    try:
+        with open(RESOLVER_MAP, encoding="utf-8") as fh:
+            _MAP_ORIGINAL = fh.read()
+        existing = json.loads(_MAP_ORIGINAL)
+        if isinstance(existing, dict):
+            for tok, principal in existing.items():
+                if isinstance(tok, str) and isinstance(principal, dict):
+                    _TOKEN_MAP[tok] = principal
+    except FileNotFoundError:
+        # A map that does not exist yet is fine — this run creates it, and
+        # restore() removes it again.
+        _MAP_ORIGINAL = None
+    except (OSError, json.JSONDecodeError) as exc:
+        PROVISION_ERROR = "cannot read %s: %s" % (RESOLVER_MAP, exc)
+        return
+    # Fail loudly HERE if the path is not writable, not at the first row that
+    # needs a credential: "A6 is inconclusive" three minutes in is a much
+    # worse error message than "I cannot write this file" at second zero.
+    if not _write_token_map():
+        return
+
+
+def restore() -> None:
+    """Put the token map back the way this run found it."""
+    if not RESOLVER_MAP or PROVISION_ERROR:
+        return
+    try:
+        if _MAP_ORIGINAL is None:
+            if os.path.exists(RESOLVER_MAP):
+                os.remove(RESOLVER_MAP)
+        else:
+            with open(RESOLVER_MAP, "w", encoding="utf-8") as fh:
+                fh.write(_MAP_ORIGINAL)
+            os.chmod(RESOLVER_MAP, 0o644)
+    except OSError as exc:
+        print("  !! could not restore %s: %s — it still contains this run's "
+              "synthetic approver tokens" % (RESOLVER_MAP, exc))
+
+
+def _write_token_map() -> bool:
+    """Rewrite the map atomically. 0644 because core runs as a non-root user."""
+    global PROVISION_ERROR
+    try:
+        tmp = RESOLVER_MAP + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(_TOKEN_MAP, fh, indent=2)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, RESOLVER_MAP)
+        return True
+    except OSError as exc:
+        PROVISION_ERROR = "cannot write %s: %s" % (RESOLVER_MAP, exc)
+        return False
+
+
+def credential_for(ptype: str, pid: str):
+    """Issue (or reuse) the bearer token bound to `ptype:pid`. None if unable.
+
+    The returned token is what makes the approval verified.  Callers must pass
+    it as `bearer` on the resolve call — approving as somebody whose credential
+    you do not hold is the attack, not the fixture.
+    """
+    display = "%s:%s" % (ptype, pid)
+    if display in _CREDENTIAL_OF:
+        return _CREDENTIAL_OF[display]
+    if not can_provision():
+        return None
+    token = "tok_rfx97_%s_%d" % (RUN, len(_TOKEN_MAP) + 1)
+    _TOKEN_MAP[token] = {"type": ptype, "id": pid}
+    if not _write_token_map():
+        del _TOKEN_MAP[token]
+        return None
+    _PRINCIPAL_OF[token] = display
+    _CREDENTIAL_OF[display] = token
+    return token
 
 
 def sid(tag):
@@ -254,6 +469,33 @@ def fingerprint():
                  "fingerprint: environment='Prod' near-miss")
     facts["env_canon_89"] = blocked(r3)
     print("  environment='Prod' irrev+system -> %-16s %s" % (verdict(r3), rule(r3)))
+
+    # RFX-179: WHICH APPROVER CONFIGURATION IS THIS, and can the probe attack
+    # it?  Reported here rather than left to be inferred from A3, because it
+    # decides whether two of the six rows mean anything at all — and because
+    # the 0.2.0 default is precisely the config that made them stop meaning
+    # anything.  One hold, resolved with an unbound principal: refused
+    # `principal_not_verified` == this artefact requires verified approvers.
+    h_fp, _ = _raise_hold(sid("fp-strict"), label="fingerprint: raise a hold")
+    if h_fp:
+        st, r4 = _resolve(h_fp, "human", "fp-probe@rfx179.invalid",
+                          "fingerprint: resolve with an ASSERTED principal")
+        strict = st == 403 and r4.get("error") == "principal_not_verified"
+        facts["requires_verified_approver"] = strict
+        print("  asserted approver on /resolve   -> HTTP %-11s %s"
+              % (st, r4.get("error", "") or "accepted"))
+    else:
+        facts["requires_verified_approver"] = "inconclusive (no hold)"
+    facts["probe_can_issue_credentials"] = can_provision()
+    print("  probe can issue credentials     -> %-16s %s"
+          % (can_provision(),
+             PROVISION_ERROR or ("" if RESOLVER_MAP
+                                 else "REEFLEX_PROBE_RESOLVER_MAP unset")))
+    if facts["requires_verified_approver"] is True and not can_provision():
+        print("  !! this artefact requires verified approvers and this run "
+              "cannot issue one:")
+        print("     every row needing an approved hold will be INCONCLUSIVE, "
+              "which now fails the exit code (RFX-179)")
     return facts
 
 
@@ -371,10 +613,53 @@ def _raise_hold(session, agent_id="agent:qa-rfx97-synthetic",
     return r.get("hold_id"), env_used
 
 
-def _resolve(hold_id, ptype, pid, label=""):
+def _resolve(hold_id, ptype, pid, label="", bearer=None):
+    """Resolve `hold_id` as `ptype:pid`, optionally with that principal's own
+    credential.  `bearer=None` means the plain gate token — i.e. an ASSERTED
+    principal, which is what the strict default is there to refuse."""
     return call("POST", "/v1/holds/%s/resolve" % hold_id,
                 {"decision": "approve", "principal": {"type": ptype, "id": pid},
-                 "reason": SYNTH}, label)
+                 "reason": SYNTH}, label, bearer=bearer)
+
+
+#: The refusals core returns from the VERIFICATION check, before any guard a
+#: row scores.  A variant refused with one of these did not run — whatever the
+#: row was trying to prove, this answer is about the caller's credentials.
+VERIFICATION_ERRORS = frozenset({"principal_not_verified", "principal_mismatch"})
+
+
+def _approve_verified(hold_id, pid, label="", ptype="human"):
+    """Approve as `ptype:pid` HOLDING THAT PRINCIPAL'S CREDENTIAL (RFX-179).
+
+    Returns (status, body, how) where `how` is one of:
+      "verified"    — a credential bound to this principal was used
+      "asserted"    — no credential could be issued; the gate token was used,
+                      which the shipped default refuses
+      "unavailable" — provisioning was asked for and failed
+
+    The caller must not treat "asserted" as a resolve that merely failed: it is
+    a MEASUREMENT THAT DID NOT RUN, and it is reported as such.
+    """
+    token = credential_for(ptype, pid)
+    if token is None:
+        st, r = _resolve(hold_id, ptype, pid, label)
+        return st, r, ("unavailable" if PROVISION_ERROR else "asserted")
+    st, r = _resolve(hold_id, ptype, pid, label, bearer=token)
+    if st == 200:
+        # MEASURED, NOT ASSUMED.  The whole route this fix takes rests on the
+        # claim that an approval made with a bound credential is a genuinely
+        # VERIFIED approval — the same thing a real approver produces, not a
+        # probe-shaped imitation.  Core says so in the resolve body, so the
+        # claim is read back rather than trusted.  If it ever came back
+        # `false`, every row built on this precondition would be resting on an
+        # approval core itself does not consider verified, and that is a
+        # finding about the harness that must not be silent.
+        _VERIFICATION_READBACK.append(
+            {"principal": _PRINCIPAL_OF.get(token), "label": label,
+             "decided_by": r.get("decided_by"),
+             "decided_by_verified": r.get("decided_by_verified"),
+             "principal_source": r.get("principal_source")})
+    return st, r, "verified"
 
 
 def attack_a3():
@@ -402,23 +687,47 @@ def attack_a3():
         ("on-behalf-of", dict(agent_id="agent:runner",
                               on_behalf_of="user:alice"), "alice"),
     ]
-    self_evaded, wrong_reason = [], []
+    # RFX-179: the approval is made WITH THE RAISER'S OWN CREDENTIAL, not by
+    # asserting the raiser's name in the body.  At the shipped default an
+    # asserted principal is refused `principal_not_verified` at check 2 and
+    # never reaches the four-eyes guard at check 5 — which is precisely how
+    # this row went INCONCLUSIVE while the gate exited 0.  Issuing the raiser a
+    # credential is a STRICTER precondition than the original run had: the
+    # attacker is no longer merely claiming to be the raiser, it demonstrably
+    # IS the raiser, and the guard still has to refuse it.
+    self_evaded, wrong_reason, not_run = [], [], []
     for i, (name, kw, pid) in enumerate(variants):
         session = sid("a3s-%d" % i)
         hold_id, _ = _raise_hold(session, label="A3-self/%s" % name, **kw)
         if not hold_id:
             print("  %-18s -> no hold raised; variant inconclusive" % name)
+            not_run.append("%s(no-hold)" % name)
             continue
         approve_as = pid if pid is not None else session
-        st, r = _resolve(hold_id, "human", approve_as,
-                         "A3-self/%s: approve as human:%s" % (name, approve_as))
+        st, r, how = _approve_verified(
+            hold_id, approve_as,
+            "A3-self/%s: approve as human:%s (%s credential)"
+            % (name, approve_as, "own" if can_provision() else "no"))
         err = r.get("error", "")
         # Refused for the RIGHT reason == the four-eyes guard actually fired.
         refused = st == 403 and err == "actor_is_approver"
-        if st == 403 and err != "actor_is_approver":
+        # WHAT MAKES A VARIANT "NOT RUN" IS THE REFUSAL CORE RETURNED, NOT HOW
+        # THE PROBE OBTAINED ITS CREDENTIAL.  An earlier draft of this fix
+        # tested `how != "verified"` and got the opposite of RFX-179 wrong: a
+        # core with REQUIRE_VERIFIED_APPROVER=false accepts an asserted
+        # approver, so all six variants reached check 5 and were correctly
+        # refused `actor_is_approver` — and the probe reported "the four-eyes
+        # guard was NOT REACHED" over six refusals proving it had been.  A
+        # gate that cries INCONCLUSIVE at a guard that fired is the same
+        # defect as one that cries CLOSED at a guard that did not; both are
+        # the instrument talking about itself.  So: the guard was not reached
+        # iff core refused at verification, which it names.
+        if st == 403 and err in VERIFICATION_ERRORS:
+            not_run.append("%s(%s)" % (name, err))
+        elif st == 403 and err != "actor_is_approver":
             wrong_reason.append("%s(%s)" % (name, err))
-        print("  %-18s approve as %-24s -> HTTP %s %s"
-              % (name, "human:%s" % approve_as, st, err))
+        print("  %-18s approve as %-24s -> HTTP %s %s [%s]"
+              % (name, "human:%s" % approve_as, st, err, how))
         if not refused:
             # It resolved. Does the approval actually unblock the action?
             _, rr = call("POST", "/v1/decide",
@@ -444,25 +753,91 @@ def attack_a3():
         print("  !! refused for a reason OTHER than actor_is_approver: %s"
               % ", ".join(wrong_reason))
         print("     those variants never reached the four-eyes guard — not a pass")
+    # RFX-179: a variant whose approval was merely ASSERTED was refused before
+    # check 5, so the four-eyes guard was never reached at all.  That is not a
+    # weaker pass, it is no measurement.
+    if not_run:
+        f_self["state"] = "INCONCLUSIVE"
+        f_self["variants_not_executed"] = not_run
+        print("  !! the four-eyes guard was NOT REACHED for: %s"
+              % ", ".join(not_run))
+        print("     the approving principal could not be verified, so core "
+              "refused at check 2; nothing here says anything about check 5")
+        if not can_provision():
+            print("     -> set REEFLEX_PROBE_RESOLVER_MAP to the host path of "
+                  "the file this core reads as REEFLEX_RESOLVER_TOKENS (RFX-179)")
 
     # ---- A3-fab: an unrelated human, fabricated out of nothing -------------
-    # This is the config-dependent half. Report what the ARTEFACT does AND
-    # whether verification is even configured here.
-    session = sid("a3fab")
-    hold_id, _ = _raise_hold(session, label="A3-fab")
-    fab_evaded, detail = [], {}
-    if hold_id:
-        st, r = _resolve(hold_id, "human", "fabricated.approver@example.invalid",
-                         "A3-fab: approve as a human that does not exist")
-        print("  fabricated human            -> HTTP %s %s"
-              % (st, r.get("error", "")))
-        if st == 403:
-            detail["mode"] = "refused (%s) — credential binding is configured" \
-                             % r.get("error")
+    # THE NEGATIVE CONTROLS, AND WHY THERE ARE NOW TWO OF THEM (RFX-179).
+    #
+    # This row is what keeps the credential provisioning above honest: if
+    # issuing tokens had quietly weakened verification, a fabricated human
+    # would resolve here and the gate would say so.  So `no-credential` is
+    # deliberately NOT provisioned — it is asserted with the plain gate token
+    # and must still be refused.
+    #
+    # But `no-credential` ALONE cannot score this row, and the run that
+    # produced RFX-179 is the proof: at the shipped default a probe holding no
+    # bound credential is refused `principal_not_verified` on EVERY resolve it
+    # makes, fabricated approver or not.  This row read CLOSED off that 403 and
+    # counted toward "closes 4 of 6" — a pass that would have looked identical
+    # if the fabrication guard did not exist at all.  The refusal was about the
+    # probe's credentials, not about the approver it named.
+    #
+    # `mismatch` is what disambiguates, and it is only runnable because the
+    # probe can now mint: hold a REAL, verified approver's credential and
+    # assert somebody ELSE's identity in the body.  There is nothing wrong with
+    # the caller's credentials, so `principal_not_verified` is off the table;
+    # the only thing that can refuse it is core comparing the asserted
+    # principal against the credential's, which is exactly the guard RFX-84
+    # asks for.  Refused `principal_mismatch` = the guard fired, and the whole
+    # row now means something.
+    session_prefix = "a3fab"
+    fab_evaded, wrong_reason, not_run, detail = [], [], [], {}
+
+    # name, credential to hold (None = plain gate token), asserted principal,
+    # the reason code that means THIS variant's guard fired
+    fab_variants = [
+        ("no-credential", None, "fabricated.approver@example.invalid",
+         "principal_not_verified"),
+        ("mismatch", ("human", "a3fab-real-approver@rfx84.invalid"),
+         "fabricated.approver@example.invalid", "principal_mismatch"),
+    ]
+    for i, (name, cred, asserted, want_err) in enumerate(fab_variants):
+        bearer = None
+        if cred is not None:
+            bearer = credential_for(*cred)
+            if bearer is None:
+                # Not "refused" — never attempted.  Saying anything else here
+                # is the fabricated finding this file exists to prevent.
+                print("  %-26s -> NOT RUN (no credential could be issued)" % name)
+                not_run.append("%s(%s)" % (name, PROVISION_ERROR or "unavailable"))
+                continue
+        session = sid("%s-%d" % (session_prefix, i))
+        hold_id, _ = _raise_hold(session, label="A3-fab/%s" % name)
+        if not hold_id:
+            not_run.append("%s(no-hold)" % name)
+            continue
+        st, r = _resolve(hold_id, "human", asserted,
+                         "A3-fab/%s: approve as a human that does not exist"
+                         % name, bearer=bearer)
+        err = r.get("error", "")
+        print("  %-26s -> HTTP %s %s%s"
+              % (name, st, err,
+                 "" if cred is None else
+                 "  (holding %s's credential)" % _PRINCIPAL_OF.get(bearer, "?")))
+        if st == 403 and err == want_err:
+            detail[name] = "refused %s — the guard fired" % err
+        elif st == 403:
+            # A 403 from somewhere else is not this guard.  Scored, not
+            # counted as a pass: this is the qa--016 trap that scored five
+            # self-approval variants CLOSED on an unrelated refusal.
+            detail[name] = "refused %s — NOT %s" % (err, want_err)
+            wrong_reason.append("%s(%s, wanted %s)" % (name, err, want_err))
         else:
-            detail["decided_by"] = r.get("decided_by")
-            detail["decided_by_verified"] = r.get("decided_by_verified")
-            detail["principal_source"] = r.get("principal_source")
+            detail["%s_decided_by" % name] = r.get("decided_by")
+            detail["%s_decided_by_verified" % name] = r.get("decided_by_verified")
+            detail["%s_principal_source" % name] = r.get("principal_source")
             print("      decided_by=%r verified=%r source=%r"
                   % (r.get("decided_by"), r.get("decided_by_verified"),
                      r.get("principal_source")))
@@ -470,17 +845,30 @@ def attack_a3():
                          envelope(session, "delete", 1, env="production",
                                   reversibility="irreversible", blast="broad",
                                   approval={"present": True, "hold_id": hold_id}),
-                         "A3-fab: resubmit with the fabricated approval")
+                         "A3-fab/%s: resubmit with the fabricated approval" % name)
             print("      resubmit -> %s (%s)" % (verdict(rr), rule(rr)))
             if verdict(rr) == "allow":
-                fab_evaded.append("fabricated-human")
+                fab_evaded.append(name)
 
     f_fab = finding(
         "A3-fab", "RFX-84", "unrelated approving human fabricated in the body",
-        "#90 (opt-in)", True, fab_evaded, 1,
+        "#90 (opt-in)", True, fab_evaded, len(fab_variants),
         "core mints and persists decided_by:'human:<name>' for a human that "
         "never acted — the Art.14 record says oversight happened",
     )
+    if wrong_reason:
+        print("  !! refused, but not by the guard this row scores: %s"
+              % ", ".join(wrong_reason))
+        f_fab["state"] = "INCONCLUSIVE" if f_fab["state"] == "CLOSED" \
+            else f_fab["state"]
+    if not_run:
+        print("  !! variants that never ran: %s" % ", ".join(not_run))
+        print("     a fabrication guard that was not exercised is not a pass "
+              "(RFX-179)")
+        f_fab["variants_not_executed"] = not_run
+        f_fab["state"] = "INCONCLUSIVE" if f_fab["state"] == "CLOSED" \
+            else f_fab["state"]
+    detail["refused_but_not_by_this_guard"] = wrong_reason
     f_fab["detail"] = detail
     f_fab["config_dependent"] = True
     return [f_self, f_fab]
@@ -641,22 +1029,37 @@ def _resubmit(session, hold_id, label, **agent_kw):
     return r
 
 
+A6_APPROVER = "a6-manager@rfx138.invalid"
+
+
 def _approved_hold(session, label, **agent_kw):
     """Raise a hold as `agent_kw` and have a human approve it.
 
-    Returns (hold_id, ok).  The approver is a third party, so check 6
-    (actor_is_approver) cannot be what refuses any resubmission below.
+    Returns (hold_id, ok, why).  `why` is "" when ok, else the reason the
+    precondition could not be established — and A6 needs that string, because
+    "the approval could not be built" and "the substitution was refused" are
+    opposite findings that a bare False cannot tell apart.
+
+    The approver is a third party, so check 6 (actor_is_approver) cannot be
+    what refuses any resubmission below.
+
+    RFX-179: the approval is obtained WITH THE APPROVER'S OWN CREDENTIAL.  At
+    the shipped default an asserted approver is refused
+    `principal_not_verified`, so every variant of this row lost its
+    precondition and A6 reported INCONCLUSIVE — which did not move the exit
+    code.  One manager approves throughout, so this issues exactly one
+    credential and reuses it.
     """
     hold_id, _ = _raise_hold(session, label=label, **agent_kw)
     if not hold_id:
-        return None, False
-    st, r = _resolve(hold_id, "human", "a6-manager@rfx138.invalid",
-                     "%s: human approves" % label)
+        return None, False, "no-hold"
+    st, r, how = _approve_verified(hold_id, A6_APPROVER,
+                                   "%s: human approves" % label)
     if st != 200:
-        print("  %-26s !! resolve refused HTTP %s %s — variant inconclusive"
-              % (label, st, r.get("error", "")))
-        return hold_id, False
-    return hold_id, True
+        print("  %-26s !! resolve refused HTTP %s %s [%s] — precondition failed"
+              % (label, st, r.get("error", ""), how))
+        return hold_id, False, "%s:%s" % (how, r.get("error", "") or st)
+    return hold_id, True, ""
 
 
 ACTOR_MISMATCH = "reeflex_hold_actor_mismatch"
@@ -672,7 +1075,7 @@ def attack_a6():
     # Without this an "allow" below is unreadable and a "deny" could just mean
     # the hold chain is broken on this build.
     s_ctl = sid("a6-ctl")
-    h_ctl, ok_ctl = _approved_hold(s_ctl, "A6 control", agent_id=ALPHA)
+    h_ctl, ok_ctl, why_ctl = _approved_hold(s_ctl, "A6 control", agent_id=ALPHA)
     ctl_resp = _resubmit(s_ctl, h_ctl, "A6 control: the APPROVED agent resubmits",
                          agent_id=ALPHA) if ok_ctl else {}
     control_ok = ok_ctl and verdict(ctl_resp) == "allow"
@@ -681,6 +1084,12 @@ def attack_a6():
     if not control_ok:
         print("  !! the approved agent could not spend its own approval — the "
               "hold chain is not in scope; A6 is inconclusive")
+        if why_ctl:
+            print("     precondition: %s" % why_ctl)
+        if not can_provision():
+            print("     -> no approver credential could be issued. Set "
+                  "REEFLEX_PROBE_RESOLVER_MAP to the host path of the file "
+                  "this core reads as REEFLEX_RESOLVER_TOKENS (RFX-179)")
 
     # ---- the evasions ------------------------------------------------------
     # Each gets its OWN hold: a spent approval is consumed, so sharing one
@@ -717,16 +1126,20 @@ def attack_a6():
     # a 403 that was `principal_type_not_allowed` — the guard was never
     # exercised and the pass was invented.  So the reason is asserted, and a
     # refusal from somewhere else makes the row INCONCLUSIVE rather than green.
-    evaded, burned, wrong_reason, detail = [], [], [], {}
+    evaded, burned, wrong_reason, not_run, detail = [], [], [], [], {}
     for i, (name, raise_kw, sub_kw, _why) in enumerate(variants):
         s_raise = sid("a6-%d-raise" % i)
         # A different SESSION for the substitute is part of the attack for
         # every variant except obo-substitution, where the point is that
         # nothing at all changes except the person named.
         s_sub = s_raise if name == "obo-substitution" else sid("a6-%d-sub" % i)
-        h, ok = _approved_hold(s_raise, "A6/%s" % name, **raise_kw)
+        h, ok, why = _approved_hold(s_raise, "A6/%s" % name, **raise_kw)
         if not ok:
-            print("  %-26s -> inconclusive (no approved hold)" % name)
+            # RFX-179: no approved hold means the substitution was never
+            # ATTEMPTED. It is a variant that did not run, and it is now
+            # counted as one rather than vanishing into a 0/4 evaded column.
+            print("  %-26s -> NOT RUN (no approved hold: %s)" % (name, why))
+            not_run.append("%s(%s)" % (name, why))
             continue
         r = _resubmit(s_sub, h, "A6/%s: substitute spends the approval" % name,
                       **sub_kw)
@@ -794,8 +1207,12 @@ def attack_a6():
     ]:
         s_raise = sid("a6-ob-%s" % name)
         s_sub = s_raise if same_session else sid("a6-ob-%s-2" % name)
-        h, ok = _approved_hold(s_raise, "A6-overblock/%s" % name, **raise_kw)
+        h, ok, why = _approved_hold(s_raise, "A6-overblock/%s" % name, **raise_kw)
         if not ok:
+            # An over-block control that did not run cannot clear the fix of
+            # over-blocking, so it is reported rather than skipped in silence.
+            print("  OVER-BLOCK %-16s -> NOT RUN (%s)" % (name, why))
+            not_run.append("overblock/%s(%s)" % (name, why))
             continue
         r = _resubmit(s_sub, h, "A6-overblock/%s: legitimate resubmission" % name,
                       **sub_kw)
@@ -824,6 +1241,20 @@ def attack_a6():
         print("     that is a wrong DENY on an action a human already approved")
     if overblocked or burned:
         f["state"] = "STILL EXPLOITABLE" if evaded else "OVER-BLOCKING"
+    # RFX-179 — LAST, so it cannot be overwritten by the branches above. A row
+    # where variants did not run is not entitled to CLOSED; but a row that DID
+    # catch an evasion or an over-block keeps that worse verdict, because a
+    # measured failure outranks an unmeasured one.
+    if not_run:
+        # On the finding, not just in `detail`: every row that can skip a
+        # variant reports it under the same key, so one JSON consumer finds
+        # them all.
+        f["variants_not_executed"] = not_run
+        print("  !! variants that never ran: %s" % ", ".join(not_run))
+        print("     the approval could not be built, so the substitution was "
+              "never attempted — this says nothing about check 8 (RFX-179)")
+        if f["state"] == "CLOSED":
+            f["state"] = "INCONCLUSIVE"
     f["detail"] = detail
     return f
 
@@ -862,12 +1293,24 @@ def main():
     print("run    : %s" % RUN)
     print("attacks: %s" % ", ".join(which))
 
-    facts = fingerprint()
+    provision_init()
+    print("approver credentials: %s"
+          % (("issued into %s" % RESOLVER_MAP) if can_provision()
+             else (PROVISION_ERROR or
+                   "NOT AVAILABLE — REEFLEX_PROBE_RESOLVER_MAP unset (RFX-179)")))
 
-    findings = []
-    for code in which:
-        out = ATTACKS[code]()
-        findings.extend(out if isinstance(out, list) else [out])
+    try:
+        facts = fingerprint()
+
+        findings = []
+        for code in which:
+            out = ATTACKS[code]()
+            findings.extend(out if isinstance(out, list) else [out])
+    finally:
+        # The synthetic approver tokens must not outlive the run: the file is
+        # shared with other harnesses, and a leftover binding is a credential
+        # nobody issued deliberately.
+        restore()
 
     banner("VERDICT TABLE")
     print("%-9s %-9s %-14s %-18s %s"
@@ -901,22 +1344,58 @@ def main():
     print("  closed            : %s" % (", ".join(sorted(closed)) or "none"))
     print("  still exploitable : %s" % (", ".join(sorted(open_)) or "none"))
     if incon:
-        print("  INCONCLUSIVE      : %s" % ", ".join(sorted(incon)))
+        print("  INCONCLUSIVE      : %s  (NOT ATTACKED — see above)"
+              % ", ".join(sorted(incon)))
     if overblock:
         print("  OVER-BLOCKING     : %s  (wrong DENY on an approved action)"
               % ", ".join(sorted(overblock)))
+    # RFX-179: were the approvals this run BUILT ON actually verified ones?
+    # Reported next to the verdicts, because if they were not, several of the
+    # verdicts above are about something other than what their row claims.
+    unverified = [x for x in _VERIFICATION_READBACK
+                  if x.get("decided_by_verified") is not True]
+    if _VERIFICATION_READBACK:
+        print("\napprovals obtained with a bound credential: %d, of which core "
+              "recorded %d as verified"
+              % (len(_VERIFICATION_READBACK),
+                 len(_VERIFICATION_READBACK) - len(unverified)))
+    if unverified:
+        print("  !! %d approval(s) came back NOT verified: %s"
+              % (len(unverified),
+                 ", ".join(sorted({str(x["principal"]) for x in unverified}))))
+        print("     the preconditions of the rows above are approvals core "
+              "does not consider verified — read those verdicts with that in "
+              "mind (RFX-179)")
+
     print("\nfingerprint: %s" % json.dumps(facts))
 
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as fh:
             json.dump({"base": BASE, "run": RUN, "fingerprint": facts,
                        "findings": findings, "tickets": tickets,
+                       "verification_readback": _VERIFICATION_READBACK,
                        "transcript": _TRANSCRIPT}, fh, indent=2)
         print("wrote %s (%d calls)" % (args.json_out, len(_TRANSCRIPT)))
 
-    # Exit code = evasions still exploitable + over-blocking fixes, so CI can
-    # gate on it: both are reasons not to cut a release from this artefact.
-    return len(open_) + len(overblock)
+    # Exit code = every ticket this run could not certify, so CI can gate on
+    # it.  All three states below are reasons not to cut a release from this
+    # artefact, and INCONCLUSIVE is in the sum because of RFX-179:
+    #
+    #   still exploitable — the attack landed.
+    #   over-blocking    — the fix landed and refuses a legitimate approved
+    #                      action, which is a product failure of its own.
+    #   INCONCLUSIVE     — THE ATTACK NEVER RAN.  It was in the sum from
+    #                      neither side before, so when the 0.2.0 default made
+    #                      two of six attacks unrunnable this harness printed
+    #                      "still exploitable: none" and returned 0 — a green
+    #                      release gate over two attacks nobody had performed.
+    #                      A gate that cannot attack the build we ship must say
+    #                      so in the only channel CI reads.
+    #
+    # A run that cannot certify a ticket and a run that found it broken are
+    # different findings and the table says which; they are the same DECISION,
+    # which is: do not cut this release.
+    return len(open_) + len(overblock) + len(incon)
 
 
 if __name__ == "__main__":
