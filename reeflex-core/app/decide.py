@@ -107,6 +107,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 import uuid
 
@@ -197,8 +198,24 @@ _INTERNAL_ERROR_DECISION: dict = {
 # Stores the last-seen freeze state so we can detect flips.
 # None = not yet read (first request).  True/False = last known state.
 _last_freeze_state: bool | None = None
-_freeze_lock = None  # we use module-level state + GIL; no explicit lock needed
-                     # (Python bool assignment is atomic under the GIL)
+
+# RFX-198 — this used to read:
+#
+#     _freeze_lock = None  # we use module-level state + GIL; no explicit lock
+#                          # needed (Python bool assignment is atomic under
+#                          # the GIL)
+#
+# The assignment is indeed atomic. The COMPARE-THEN-ASSIGN in
+# _check_freeze_flip() is not, and it was written when app/server.py served
+# one request at a time, so no two callers could ever be inside it together.
+# RFX-198 makes the request path concurrent, which makes this a real
+# read-modify-write: two threads that both observe (stored=False,
+# current=True) both assign and both fire, so the operator's kill switch --
+# the ONE event the module docstring says must reach the webhook, the audit
+# log and the SIEM -- is reported twice for one flip. Detection noise on the
+# kill switch, not a wrong decision, but the fix is three lines and the
+# alternative is a comment that is no longer true.
+_freeze_lock = threading.Lock()
 
 
 def _read_freeze() -> bool:
@@ -215,13 +232,19 @@ def _check_freeze_flip(current: bool) -> None:
     exception here is swallowed rather than blocking the request.
     """
     global _last_freeze_state
-    if _last_freeze_state is None:
+    # The compare and the assign are ONE critical section (RFX-198): under a
+    # concurrent request path, two threads seeing the same stale value would
+    # otherwise both fire for a single flip. The fire itself is deliberately
+    # OUTSIDE the lock -- it does network I/O (webhook) and must not serialise
+    # decisions behind a slow SIEM.
+    with _freeze_lock:
+        if _last_freeze_state is None:
+            _last_freeze_state = current
+            return
+        if current == _last_freeze_state:
+            return
+        # State changed
         _last_freeze_state = current
-        return
-    if current == _last_freeze_state:
-        return
-    # State changed
-    _last_freeze_state = current
     _try_fire_freeze_flipped(current)
 
 
