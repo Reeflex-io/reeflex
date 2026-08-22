@@ -151,6 +151,19 @@ DECIDE_ENVELOPE_PATHS: tuple[str, ...] = (
     "action.verb",        # freeze gate (_is_read_verb)
     "approval.present",   # routes into the hold-validation chain
     "approval.hold_id",   # names the hold the eight checks run against
+    # Check 7 has dereferenced both since #92 -- it iterates
+    # field_treatments.approval_bound_paths(), which is exactly
+    # {params.amount, params.currency}, and compares this envelope's values
+    # against the held ones.  The tuple named neither, and the dynamic sweep in
+    # tests/test_field_treatments.py does not require it to: it subtracts
+    # `policy_input_paths | LEDGER_ENVELOPE_PATHS` as "explained elsewhere",
+    # and the ledger declares both.  That is self-consistent but it is not what
+    # this tuple says it is.  This tuple's stated purpose, four lines up, is
+    # "the envelope fields THIS MODULE reads to reach a verdict" -- and check 7
+    # reaches a deny on them.  Declaring a field twice costs nothing; the
+    # RFX-127/133/138 pattern is a reader that declared it nowhere.
+    "params.amount",      # check 7 (approval binding, BIND_VALUE)
+    "params.currency",    # check 7 (approval binding, BIND_VALUE)
 )
 
 # The Decision returned when OPA evaluation fails for any reason.
