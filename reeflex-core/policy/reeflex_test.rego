@@ -336,3 +336,130 @@ test_r5_still_fires_without_an_approval if {
 	got := policy.decision with input as envelope
 	got.decision == "require_approval"
 }
+
+# ===========================================================================
+# R0 — the action the classifier could not price (RFX-132)
+# ===========================================================================
+# These run against the POLICY, on the envelope shape envelope.py produces:
+# already-coerced axis values PLUS the `provenance.undeclared` list saying
+# which of them core had to guess. The end-to-end path (raw envelope in,
+# verdict out) is covered in tests/test_unclassified_action_rfx132.py.
+
+# The exact envelope RFX-132 measured, after envelope.py's coercions:
+# axes omitted -> irreversible+systemic, environment "qa-eu" -> production,
+# verb "frobnicate" -> delete. That is R3 on three guesses.
+_unclassified_envelope := {
+	"action": {"verb": "delete"},
+	"target": {"environment": "production"},
+	"axes": {"reversibility": "irreversible", "blast_radius": "systemic", "externality": "physical"},
+	"magnitude": {"count": 1},
+	"approval": {"present": false},
+	"provenance": {"undeclared": [
+		"action.verb", "axes.blast_radius", "axes.externality",
+		"axes.reversibility", "target.environment",
+	]},
+}
+
+test_r0_an_unclassifiable_action_holds_instead_of_denying if {
+	got := policy.decision with input as _unclassified_envelope
+	got.decision == "require_approval"
+	got.rule == "reeflex.policy/unclassified_action"
+}
+
+# THE REQUIREMENT THAT MAKES THIS AUDITABLE: a distinct reason code, so
+# "a rule asked for a human" and "we could not tell what this was" are not the
+# same row in a report.
+test_r0_rule_id_is_distinct_from_a_policy_intended_hold if {
+	unclassified := policy.decision with input as _unclassified_envelope
+	intended := policy.decision with input as cases.r2_irreversible_broad_prod_require_approval.envelope
+	unclassified.decision == intended.decision
+	unclassified.rule != intended.rule
+	intended.rule == "reeflex.policy/irreversible_broad_prod"
+}
+
+# ...and the reason NAMES the fields, so an operator can see WHAT was not
+# classified rather than only that something was not.
+test_r0_reason_names_the_guessed_fields if {
+	got := policy.decision with input as _unclassified_envelope
+	contains(got.reason, "axes.reversibility")
+	contains(got.reason, "axes.blast_radius")
+	contains(got.reason, "target.environment")
+}
+
+# R3 KEEPS EVERY CASE IT WAS DESIGNED FOR. Same coerced values, but the
+# adapter declared all three: still a terminal deny.
+test_r0_does_not_fire_when_the_adapter_declared_the_axes if {
+	envelope := object.union(_unclassified_envelope, {"provenance": {"undeclared": []}})
+	got := policy.decision with input as envelope
+	got.decision == "deny"
+	got.rule == "reeflex.policy/irreversible_systemic_prod"
+}
+
+# Guessing a field NO RULE READS cannot soften a declared R3. externality and
+# verb are recorded in provenance for honesty; neither is an R2/R3 input.
+test_r0_ignores_undeclared_fields_that_r2_r3_do_not_read if {
+	envelope := object.union(_unclassified_envelope, {"provenance": {"undeclared": ["axes.externality", "action.verb"]}})
+	got := policy.decision with input as envelope
+	got.decision == "deny"
+	got.rule == "reeflex.policy/irreversible_systemic_prod"
+}
+
+# One guessed input is enough: core cannot be sure this is an R3 action.
+test_r0_fires_on_a_single_guessed_classification_input if {
+	envelope := object.union(_unclassified_envelope, {"provenance": {"undeclared": ["target.environment"]}})
+	got := policy.decision with input as envelope
+	got.decision == "require_approval"
+	got.rule == "reeflex.policy/unclassified_action"
+	contains(got.reason, "target.environment was not declared")
+}
+
+# R0 ALSO RELABELS AN R2 HOLD RAISED ON A GUESS. Same verdict, distinct code:
+# the auditor's question is not "was a human asked" but "why".
+test_r0_relabels_an_r2_hold_reached_by_guessing if {
+	envelope := {
+		"action": {"verb": "delete"},
+		"target": {"environment": "production"},
+		"axes": {"reversibility": "irreversible", "blast_radius": "broad", "externality": "internal"},
+		"magnitude": {"count": 1},
+		"approval": {"present": false},
+		"provenance": {"undeclared": ["target.environment"]},
+	}
+	got := policy.decision with input as envelope
+	got.decision == "require_approval"
+	got.rule == "reeflex.policy/unclassified_action"
+}
+
+# R0 CANNOT CONVERT AN ALLOW. A guessed verb on a declared, reversible,
+# non-production action is still R4 — otherwise every unaliased verb in the
+# long tail becomes a hold, which is the volume objection this rule has to
+# survive.
+test_r0_never_converts_an_allow if {
+	envelope := {
+		"action": {"verb": "update"},
+		"target": {"environment": "dev"},
+		"axes": {"reversibility": "reversible", "blast_radius": "single", "externality": "internal"},
+		"magnitude": {"count": 1},
+		"approval": {"present": false},
+		"provenance": {"undeclared": ["action.verb", "axes.blast_radius"]},
+	}
+	got := policy.decision with input as envelope
+	got.decision == "allow"
+	got.rule == "reeflex.policy/default_allow"
+}
+
+# An envelope with NO provenance block at all (a pre-RFX-132 caller, or a
+# direct OPA eval) behaves exactly as it did before. object.get's default is
+# what makes that true; without it the rule would error and core would
+# fail-closed on every such envelope.
+test_r0_absent_provenance_block_changes_nothing if {
+	envelope := {
+		"action": {"verb": "delete"},
+		"target": {"environment": "production"},
+		"axes": {"reversibility": "irreversible", "blast_radius": "systemic", "externality": "internal"},
+		"magnitude": {"count": 1},
+		"approval": {"present": false},
+	}
+	got := policy.decision with input as envelope
+	got.decision == "deny"
+	got.rule == "reeflex.policy/irreversible_systemic_prod"
+}

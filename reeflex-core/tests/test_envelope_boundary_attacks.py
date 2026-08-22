@@ -135,11 +135,20 @@ class TestA1EnvironmentNearMiss(_AttackCase):
     """"Prod" is production. So are "PROD", "prod ", "live" and "qa-eu"."""
 
     #: Every spelling that missed `environment == "production"` and fell
-    #: through to R4 default_allow, plus an unrecognised tier which SPEC §7
-    #: says must coerce to the most-guarded one.
+    #: through to R4 default_allow. All are RECOGNISED spellings of the
+    #: production tier -- the adapter told us, in a form the alias table
+    #: knows -- so all of them still land on R3's terminal deny.
     SPELLINGS = ["production", "Production", "PRODUCTION", "Prod", "prod",
                  "PROD", " production ", "production\n", "production​",
-                 "﻿production", "live", "prd", "qa-eu-west-1"]
+                 "﻿production", "live", "prd"]
+
+    #: An UNRECOGNISED tier is a different fact and, since RFX-132, gets a
+    #: different verdict. SPEC §7 still coerces it to the most-guarded tier,
+    #: so the action is still withheld -- but core GUESSED that it is
+    #: production, and a verdict resting on core's own guess is a hold with
+    #: its own rule id, not a refusal no human may clear. Kept in its own
+    #: list so the two properties cannot be confused for one.
+    UNRECOGNISED_TIERS = ["qa-eu-west-1", "qa-eu", "staging-eu", ""]
 
     def test_a1_no_spelling_of_production_reaches_default_allow(self):
         for spelling in self.SPELLINGS:
@@ -155,6 +164,39 @@ class TestA1EnvironmentNearMiss(_AttackCase):
                     "production was ALLOWED" % spelling,
                 )
                 self.assertEqual("deny", decision, "environment=%r" % spelling)
+
+    def test_a1_an_unrecognised_tier_is_withheld_but_as_a_hold(self):
+        """RFX-132: still not allowed, and now with a human in the loop.
+
+        The A1 property that matters is "no spelling reaches default_allow".
+        An unrecognised tier still cannot: core coerces it to production, R3's
+        conditions still match, and the action is still withheld. What changed
+        is WHICH withholding -- because core supplied the environment itself,
+        the honest verdict is "we could not classify this, ask a human", not a
+        terminal refusal nobody may clear.
+        """
+        for spelling in self.UNRECOGNISED_TIERS:
+            with self.subTest(environment=spelling):
+                env = _env(session_id=self.session("a1u"),
+                           environment=spelling,
+                           reversibility="irreversible",
+                           blast_radius="systemic")
+                if spelling == "":
+                    # An empty environment is a STRUCTURAL error (400), not a
+                    # classification gap -- asserted here so the boundary
+                    # between "malformed" and "unclassifiable" stays explicit.
+                    from app.envelope import ValidationError
+                    from app.envelope import validate_and_fill_defaults
+                    with self.assertRaises(ValidationError):
+                        validate_and_fill_defaults(env)
+                    continue
+                decision, rule = _verdict(env)
+                self.assertNotEqual("reeflex.policy/default_allow", rule,
+                                    "environment=%r reached default_allow" % spelling)
+                self.assertEqual("require_approval", decision,
+                                 "environment=%r" % spelling)
+                self.assertEqual("reeflex.policy/unclassified_action", rule,
+                                 "environment=%r" % spelling)
 
     def test_a1_broad_variant_still_requires_a_human(self):
         for spelling in self.SPELLINGS:
