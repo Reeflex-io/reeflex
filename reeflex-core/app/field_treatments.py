@@ -22,7 +22,16 @@ CANONICALISING OR VERIFYING IT.
     RFX-133 params.currency is optional, and omitting it kept an amount out
             of the ledger entirely, so the money budget never accumulated;
             and the money it did compare was a sum of unlike currencies.
-                                                                  (this PR)
+                                                                  (PR #92)
+    RFX-138 `agent` sits outside the envelope hash AND outside the binding
+            derived from this table, so a human's approval of agent A's
+            irreversible production delete was spendable by agent B -- or by
+            the same bot claiming a different on_behalf_of.        (this PR)
+    RFX-139 ...and the reason it was: DECIDE_ENVELOPE_PATHS omitted agent.id
+            and agent.on_behalf_of, which decide.py reads through
+            principal.is_self_approval().  The "nothing undeclared" test
+            passed by under-reporting, and a field that is never DECLARED can
+            never be BOUND by a derivation built from this table.  (this PR)
 
 Patching the fifth instance and stopping would guarantee a sixth.  What stops
 the recurrence is an ENUMERATION: every caller-supplied field a rule can read,
@@ -48,6 +57,17 @@ That test is tests/test_field_treatments.py.  It reads:
 THREE READERS, NOT ONE — and each of the last two was discovered only after a
 defect had already shipped through it.  Adding a field to any of them without
 declaring it here turns the gate red.
+
+AND A DERIVATION THAT DOES NOT DEPEND ON A HUMAN KEEPING A LIST.  RFX-139 is
+the proof that it had to: DECIDE_ENVELOPE_PATHS is hand-maintained, it was
+short by two fields, and the test that guards it compared the LIST against
+this table — never the list against the CODE.  No regex over decide.py would
+have found the gap either, because the two fields are dereferenced in ANOTHER
+MODULE (principal.py iterates them by name).  So the decide.py side is now
+swept DYNAMICALLY: the approval chain runs against an envelope that records
+every field anything dereferences, and the recorded set must be declared here.
+It follows indirection because it watches the data, not the source.  See
+tests/test_field_treatments.py::TestDecideDeclarationMatchesCode.
 
 =============================================================================
 THE FOUR TREATMENTS
@@ -106,6 +126,35 @@ CORE_COMPUTED = "core_computed"
 _KINDS = frozenset({CANONICALISE, VALIDATE, VERIFY, CORE_COMPUTED})
 
 
+# ---------------------------------------------------------------------------
+# How an APPROVAL binds each field (RFX-138)
+#
+# A treatment says how a field is made safe to compare.  It does not say what
+# a human's approval of that field's value is worth on the NEXT request that
+# cites it -- and RFX-138 is exactly that gap: `agent` sits outside the
+# envelope hash and outside check 7's params comparison, so a human's approval
+# of agent A's irreversible production delete was spendable by agent B.
+#
+# So every declared field now states its binding, and the gate refuses an
+# undeclared one.  The point is not the four constants; it is that adding a
+# field forces the question "and what does an approval of it bind?" to be
+# ANSWERED IN THE TABLE instead of being answered by omission.
+# ---------------------------------------------------------------------------
+
+#: Covered by holds.canonical_hash() -- check 5 already binds it.
+BIND_HASH = "hash"
+#: Outside the hash; bound by comparing the VALUE against the held envelope
+#: (decide._validate_approval check 7).
+BIND_VALUE = "value"
+#: Outside the hash; part of WHO the approval was granted to, bound as an
+#: identity by check 8 (principal.approval_actor_key).
+BIND_ACTOR = "actor"
+#: Deliberately not bound, with the reason stated in the treatment's note.
+BIND_NONE = "none"
+
+_BINDINGS = frozenset({BIND_HASH, BIND_VALUE, BIND_ACTOR, BIND_NONE})
+
+
 class Treatment(NamedTuple):
     """How one caller-supplied field is made safe to compare against."""
 
@@ -123,6 +172,11 @@ class Treatment(NamedTuple):
     #: envelope, so a deliberate lie is undetectable.  This set is the
     #: residual risk, stated rather than papered over.
     unverifiable_assertion: bool = False
+    #: What a human's approval of this action binds about this field on the
+    #: resubmission that cites it -- one of _BINDINGS.  Empty means UNDECLARED
+    #: and is a gate failure for any caller-supplied field: RFX-138 was an
+    #: undeclared binding, not a wrong one.
+    approval_binding: str = ""
     note: str = ""
 
 
@@ -157,6 +211,7 @@ TREATMENTS: dict[str, Treatment] = {
         closed_set=_AXIS_ALLOWED["reversibility"],
         conservative_default=_AXIS_DEFAULTS["reversibility"],
         unverifiable_assertion=True,
+        approval_binding=BIND_HASH,
         note="Read by R2/R3 and by the unrecognised-verb fallback. The "
              "adapter's estimate; core cannot check it.",
     ),
@@ -165,6 +220,7 @@ TREATMENTS: dict[str, Treatment] = {
         closed_set=_AXIS_ALLOWED["blast_radius"],
         conservative_default=_AXIS_DEFAULTS["blast_radius"],
         unverifiable_assertion=True,
+        approval_binding=BIND_HASH,
         note="Decides HOLD (broad) vs DENY (systemic). Both reference "
              "adapters resolve it by substring match, so it is the most "
              "guessed value in the envelope.",
@@ -174,6 +230,7 @@ TREATMENTS: dict[str, Treatment] = {
         closed_set=_AXIS_ALLOWED["externality"],
         conservative_default=_AXIS_DEFAULTS["externality"],
         unverifiable_assertion=True,
+        approval_binding=BIND_HASH,
         note="Read by R1 (internal) and the external_sends budget "
              "(outbound). 'physical' appears in no rule.",
     ),
@@ -184,6 +241,7 @@ TREATMENTS: dict[str, Treatment] = {
         closed_set=_ENV_TIERS,
         conservative_default=_ENV_DEFAULT,
         unverifiable_assertion=True,
+        approval_binding=BIND_HASH,
         note="R2/R3 match 'production' exactly. Declared by the adapter, not "
              "guessed (WP reads a PHP constant), so the weakest of the three "
              "unverifiable axes-like fields.",
@@ -195,6 +253,7 @@ TREATMENTS: dict[str, Treatment] = {
         closed_set=_SPEC_VERBS,
         conservative_default="",  # conditional: irreversible -> delete, else update
         unverifiable_assertion=True,
+        approval_binding=BIND_HASH,
         note="R1 and the deletions budget match exact literals. Unrecognised "
              "coerces to 'delete' when irreversible, else 'update'; never to "
              "'read'. A caller that labels a delete 'read' still evades — "
@@ -204,24 +263,33 @@ TREATMENTS: dict[str, Treatment] = {
     # -- approval (SPEC §2) -- RFX-127, this PR -----------------------------
     "approval.present": Treatment(
         VERIFY, "decide.process Step 4 + decide._validate_approval",
-        note="Switches R5 off entirely, so it is the highest-leverage field "
+        approval_binding=BIND_NONE,
+        note="NOT BOUND, and it must not be: this field is the thing being "
+             "validated, so binding it to the held envelope would be circular "
+             "(the held envelope had present=false by construction). "
+             "Switches R5 off entirely, so it is the highest-leverage field "
              "in the envelope. NEVER read from the caller: every present=true "
              "envelope goes through the six-check hold chain, and the OPA "
              "input's approval.present is set from what core verified, not "
              "from what the caller wrote.",
     ),
     "approval.hold_id": Treatment(
-        VERIFY, "decide._validate_approval (six checks)",
-        note="A store-key lookup, so a near-miss fails CLOSED "
-             "(reeflex_hold_not_found) and needs no canonicalisation. Bound "
-             "to the envelope by canonical_hash, to a resolution by status, "
-             "and to a different principal by is_self_approval (RFX-84).",
+        VERIFY, "decide._validate_approval (eight checks)",
+        approval_binding=BIND_NONE,
+        note="NOT BOUND, same reason as approval.present: it NAMES the hold "
+             "the binding is done against. A store-key lookup, so a near-miss "
+             "fails CLOSED (reeflex_hold_not_found) and needs no "
+             "canonicalisation. Bound to the envelope by canonical_hash, to a "
+             "resolution by status, to a different principal by "
+             "is_self_approval (RFX-84), and to the party the approval was "
+             "granted to by approval_actor_key (RFX-138).",
     ),
 
     # -- magnitude (SPEC §2) ------------------------------------------------
     "magnitude.count": Treatment(
         VALIDATE, "envelope.validate_and_fill_defaults (F2)",
         unverifiable_assertion=True,
+        approval_binding=BIND_HASH,
         note="int >= 1 or HTTP 400; absent -> 1. bool rejected (it subclasses "
              "int). Feeds every count dimension.",
     ),
@@ -234,6 +302,7 @@ TREATMENTS: dict[str, Treatment] = {
         VALIDATE, "envelope.is_money_amount + ledger.append_entry + "
                   "budgets.rego current_money_amount",
         unverifiable_assertion=True,
+        approval_binding=BIND_VALUE,
         note="FINITE number or HTTP 400; non-numeric contributes 0. abs() in "
              "both the ledger and the policy: the budget measures exposure, "
              "so a negative amount cannot subtract from cumulative spend. "
@@ -247,6 +316,7 @@ TREATMENTS: dict[str, Treatment] = {
         closed_set=frozenset(),  # alpha-3 shaped; not a list core maintains
         conservative_default=CURRENCY_UNDECLARED,
         unverifiable_assertion=True,
+        approval_binding=BIND_VALUE,
         note="READ BY THE LEDGER, NOT BY ANY .rego FILE — which is exactly "
              "why RFX-133 was invisible to a policy-only enumeration. "
              "Undeclared/unusable -> 'XXX', a real accumulating bucket, so "
@@ -254,12 +324,58 @@ TREATMENTS: dict[str, Treatment] = {
              "budget.",
     ),
 
+    # -- agent: WHO is acting -- RFX-138 / RFX-139, this PR -----------------
+    # These two were read by the decision path and declared NOWHERE: decide.py
+    # check 6 calls principal.is_self_approval(), which iterates
+    # ("id", "on_behalf_of", "session_id") -- so the four-eyes guard has always
+    # read them.  DECIDE_ENVELOPE_PATHS listed only session_id, so the
+    # "nothing undeclared" test passed by under-reporting, and the field that
+    # was never declared could never be bound by check 7's derived list.  That
+    # is the mechanism by which RFX-138 escaped a sweep designed to be
+    # exhaustive: not a wrong entry, a missing one.
+    "agent.id": Treatment(
+        CANONICALISE, "principal.normalize_identity (four-eyes compare + "
+                      "approval_actor_key)",
+        closed_set=frozenset(),  # open-valued: an adapter names its own agents
+        unverifiable_assertion=True,
+        approval_binding=BIND_ACTOR,
+        note="OPTIONAL in SPEC §2, which is why nothing may depend on it "
+             "alone. Read by the four-eyes guard at resolve AND resubmission, "
+             "and by check 8: an approval is granted to THIS agent, so a "
+             "different agent citing the hold_id is denied "
+             "(reeflex_hold_actor_mismatch) without consuming the hold. "
+             "Normalized, not validated: a case or zero-width difference must "
+             "not read as a different agent in either direction.",
+    ),
+    "agent.on_behalf_of": Treatment(
+        CANONICALISE, "principal.normalize_identity (four-eyes compare + "
+                      "approval_actor_key)",
+        closed_set=frozenset(),
+        unverifiable_assertion=True,
+        approval_binding=BIND_ACTOR,
+        note="The human the agent declares it acts FOR. Bound by check 8 "
+             "because the substitution it enables is the quietest one in the "
+             "envelope: same bot, same session, same action, one field "
+             "changed, and core's audit line for the resulting allow is "
+             "byte-identical to a legitimate resubmission. Core cannot check "
+             "the claim against anything (RESIDUAL 5); it can and now does "
+             "check that it is the SAME claim the human approved.",
+    ),
+
     # -- agent.session_id (SPEC §2, REQUIRED) -------------------------------
     "agent.session_id": Treatment(
         VALIDATE, "envelope.validate_and_fill_defaults (F3) + "
                   "decide.resolve_session_identity",
         unverifiable_assertion=True,
-        note="Non-empty string or HTTP 400. Keys the ledger AND the "
+        approval_binding=BIND_ACTOR,
+        note="BOUND ONLY AS A FALLBACK -- approval_actor_key() uses it when "
+             "the envelope names no agent.id and no on_behalf_of, so a "
+             "SPEC-minimal envelope (session_id is the only required agent "
+             "field) does not produce an empty, vacuous actor key. It is "
+             "deliberately NOT bound when the agent IS named: a hold lives "
+             "hours, and an agent that restarts before resubmitting gets a "
+             "new session -- binding it would deny an action a human already "
+             "approved. Non-empty string or HTTP 400. Keys the ledger AND the "
              "principal_budgets override lookup. NOT canonicalised on "
              "purpose: folding case would merge two adapters' distinct "
              "sessions into one ledger, which changes whose budget is whose. "
@@ -272,6 +388,7 @@ TREATMENTS: dict[str, Treatment] = {
         CANONICALISE, "envelope._delete_signal_from_ability + "
                       "ledger.append_entry",
         unverifiable_assertion=True,
+        approval_binding=BIND_HASH,
         note="No rule reads it directly today; it reaches the decision "
              "through the delete cross-check and through "
              "cumulative.count_by_ability. Split/normalised by _split_words "
@@ -366,34 +483,40 @@ def _truncate(parts: list[str]) -> str:
 #: narrowing what an approval binds.
 HASH_COVERED_BLOCKS: frozenset[str] = frozenset({"action", "axes", "magnitude", "target"})
 
-#: Blocks that carry a decision input but are NOT part of the envelope hash,
-#: and are therefore not bound to an approval by check 5.
-#:
-#: `params` is the whole list, and it is not an academic gap: the money budget
-#: is driven entirely by params.amount, so a hold raised for a EUR 6,000
-#: payment could be resubmitted as EUR 6,000,000 and the hash was byte-identical
-#: — the human approved one number and the agent executed another. Confirmed
-#: end to end during the RFX-127/133 sweep.
-#:
-#: `approval` is excluded because it is the thing being validated, and
-#: `agent`/`context`/`meta` because they are not decision inputs to a rule
-#: (agent.session_id keys the ledger, which is recomputed at resubmission
-#: time by design).
-_UNBOUND_DECISION_BLOCKS: frozenset[str] = frozenset({"params"})
-
-
 def approval_bound_paths() -> tuple[str, ...]:
-    """Caller-supplied decision inputs an approval must bind BEYOND the hash.
+    """Caller-supplied VALUES an approval must bind beyond the hash (check 7).
 
-    Derived from TREATMENTS, so a future declared field in one of these
-    blocks is bound automatically instead of being remembered.  This is the
-    enumeration doing the work: the fix is not "also check the amount", it is
-    "check everything the decision reads that the hash does not cover".
+    Derived from TREATMENTS, so a future declared field is bound by declaring
+    it rather than by anyone remembering.  This is the enumeration doing the
+    work: the fix is not "also check the amount", it is "check everything the
+    decision reads that the hash does not cover".
+
+    WHAT CHANGED IN RFX-138, AND WHY IT WAS THE TABLE'S FAULT.  This used to
+    select on a BLOCK list (`{"params"}`), with a comment excluding `agent`
+    on the grounds that it carried no decision input.  That was wrong twice
+    over: decide.py's check 6 does read agent.id and agent.on_behalf_of, and
+    a block list cannot express "bind this field, not that one in the same
+    block" — which is exactly what agent needs (id and on_behalf_of yes,
+    session_id only as a fallback).  A per-field declaration can, and an
+    exclusion now has to be WRITTEN DOWN as BIND_NONE with a reason instead
+    of being implied by a set nobody re-reads.
     """
     return tuple(sorted(
         path for path, t in TREATMENTS.items()
-        if t.kind != CORE_COMPUTED
-        and path.split(".")[0] in _UNBOUND_DECISION_BLOCKS
+        if t.approval_binding == BIND_VALUE
+    ))
+
+
+def approval_actor_paths() -> tuple[str, ...]:
+    """Envelope paths that make up WHO an approval was granted to (check 8).
+
+    Declarative counterpart to principal.approval_actor_key(), which does the
+    comparing.  Kept as a derivation so the table stays the single place the
+    question is answered, and so a test can assert the two agree.
+    """
+    return tuple(sorted(
+        path for path, t in TREATMENTS.items()
+        if t.approval_binding == BIND_ACTOR
     ))
 
 
@@ -471,3 +594,23 @@ def unverifiable_assertions() -> set[str]:
 #    same shape of defect one layer over (RFX-74 was precisely that: a report
 #    faithfully rendering an attestation nothing had verified). Worth its own
 #    sweep; this one does not cover it.
+#
+# 5. WHAT CHECK 8 DOES NOT BUY (RFX-138).  It binds an approval to the actor
+#    IDENTITY THE ENVELOPE ASSERTS.  Both agent.id and agent.on_behalf_of are
+#    still `unverifiable_assertion=True`: core has no way to know that
+#    "agent:alpha" is the process it claims to be, or that alice really asked
+#    for this.  What the check removes is the ability to change the claim
+#    BETWEEN the approval and the execution -- the human and the executor now
+#    see the same requester, and a substitution is a deny with its own reason
+#    code instead of an allow indistinguishable from a legitimate one.  Making
+#    the identity itself trustworthy is the same signed-envelope /
+#    authenticated-session work as RESIDUAL 1 and 2 (SPEC §6, RFX-9).
+#
+# 6. THE APPROVAL BINDING IS NOW PER-FIELD, AND THAT IS THE POINT.  It used to
+#    be a BLOCK list (`{"params"}`) with `agent` excluded by a comment that
+#    said agent carried no decision input.  It did, and a block list could not
+#    have expressed the fix anyway: agent.id and agent.on_behalf_of must be
+#    bound, agent.session_id must NOT be (an agent that restarts between the
+#    approval and the resubmission would otherwise be denied an action a human
+#    already approved). Every field now declares its binding and an exclusion
+#    has to be WRITTEN as BIND_NONE with a reason.

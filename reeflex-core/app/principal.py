@@ -164,6 +164,66 @@ def is_self_approval(envelope: dict, principal_type: str, principal_id: str) -> 
     return bool(actor_identities(envelope) & approver_identities(principal_type, principal_id))
 
 
+def approval_actor_key(envelope: dict) -> tuple[str, ...]:
+    """WHO an approval is granted TO -- comparable across two envelopes.
+
+    RFX-138.  `actor_identities()` above answers "is the approver one of the
+    raisers", which is a SET question and deliberately loose.  This answers a
+    different one: two envelopes, is this the same party acting for the same
+    person?  That has to be an ORDERED, EXACT comparison, because a set
+    intersection would let an agent that merely OVERLAPS the approved
+    identities spend the approval.
+
+    WHAT IS IN THE KEY, AND WHY NOT MORE
+      agent.id + agent.on_behalf_of   the party and the person it acts for.
+                                      Changing either means the human approved
+                                      one requester and a different one turned
+                                      up, which is the whole finding.
+      agent.session_id                ONLY as the fallback, when the envelope
+                                      names no agent at all.  SPEC §2 makes
+                                      agent.id optional and session_id
+                                      required, so without this fallback a
+                                      conformant minimal envelope would carry
+                                      an EMPTY key and the guard would be
+                                      vacuous for exactly the adapters least
+                                      likely to be watched.  Same reasoning as
+                                      actor_identities()'s session fallback.
+
+    WHY session_id IS NOT IN THE KEY WHEN THE AGENT IS NAMED.  A hold lives
+    for hours (REEFLEX_HOLD_TTL_SECONDS defaults to 4h) and an agent that
+    restarts between raising and resubmitting gets a new session.  Binding the
+    session would turn that restart into a DENY on an action a human already
+    approved -- a wrong deny on the one path where a human has explicitly said
+    yes.  The ledger is recomputed per session by design; identity is the
+    thing an approval is about.
+
+    Normalized (NFKC, control/format stripped, casefolded) so a case or
+    zero-width difference is not read as a different agent -- the same
+    treatment the four-eyes guard uses, for the same reason in reverse: there
+    it must not let a variant spelling through, here it must not refuse one.
+    Falls back to the raw string when normalization empties it, so an identity
+    made entirely of invisible characters is still COMPARED rather than
+    silently collapsing to "" on both sides.
+    """
+    agent = envelope.get("agent") or {}
+    if not isinstance(agent, dict):
+        agent = {}
+
+    def key_for(field: str) -> str:
+        raw = agent.get(field)
+        norm = normalize_identity(raw)
+        if norm:
+            return norm
+        return raw.strip() if isinstance(raw, str) else ""
+
+    named = (key_for("id"), key_for("on_behalf_of"))
+    if any(named):
+        return named
+    # No agent named at all: fall back to the session, and keep the tuple a
+    # different SHAPE so a session key can never compare equal to a named one.
+    return ("", "", key_for("session_id"))
+
+
 # ---------------------------------------------------------------------------
 # Credential -> principal binding
 # ---------------------------------------------------------------------------

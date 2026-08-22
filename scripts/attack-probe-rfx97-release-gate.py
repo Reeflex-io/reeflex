@@ -17,6 +17,26 @@ and it replays all five attacks and prints a verdict per evasion.
     RFX-127  R5 switched off entirely by approval:{present:true}, no hold_id       fix #92
     RFX-133  R5 money budget evaded by omitting params.currency                   fix #92
 
+    AND THE SIXTH, added when it was found the same way (A6)
+    RFX-138  a human's approval is spendable by a DIFFERENT agent, or by the
+             same agent claiming a different on_behalf_of                          fix: check 8
+
+A6 SCORES THREE OUTCOMES, NOT TWO, and that is the lesson of the row rather
+than a detail of it.  A fix here can fail in two opposite directions and both
+are release blockers:
+
+  * TOO LOOSE — the substitute spends the approval.  The evasion itself.
+  * TOO TIGHT — a legitimate resubmission is refused.  An agent that merely
+    RESTARTED inside the hold's 4h TTL, or whose id is spelled in a different
+    case, is a wrong DENY on the one path in this product where a human has
+    explicitly said yes.  Not an evasion; still not releasable.
+  * HALF DONE — the substitute is refused and the hold is consumed anyway.
+    The hijack is closed and the denial of service is kept: any caller holding
+    the hold_id can destroy a human's approval on demand, and the approved
+    agent has to go find a second human.  This is scored because the first
+    version of this row probed it only on the ALLOW branch and therefore
+    scored that build CLOSED.
+
 USAGE
 =====
     # against a container built from the commit under test
@@ -31,8 +51,11 @@ USAGE
     --json PATH   also write the machine-readable verdict table
     --only A1,A4  run a subset
 
-EXIT CODE = the number of evasions still exploitable.  0 means all five closed,
-so a release cut here closes RFX-97.  CI can gate on it directly.
+EXIT CODE = the number of evasions still exploitable.  0 means every evasion in
+the table above is closed, so a release cut here closes RFX-97.  CI can gate on
+it directly.  The list is deliberately APPEND-ONLY: an evasion that has been
+found once stays in the gate forever, because "we fixed that" is a claim about
+a commit and this file is the only thing that checks it against an artefact.
 
 THE DISCIPLINE THIS FILE ENCODES (and why a naive probe reports the opposite)
 ============================================================================
@@ -581,6 +604,200 @@ def attack_a5():
 
 
 # ---------------------------------------------------------------------------
+# A6 — RFX-138: the approval binds the ACTION, not the party it was granted to
+#
+# A3 asks "can the raiser approve itself".  A6 asks the other half, which no
+# check covered: once a human HAS approved, WHO may spend that approval?
+# canonical_hash() projects {action, axes, magnitude, target} and check 7 binds
+# `params` — the whole `agent` block is outside both, so an approval was
+# spendable by any caller that knew the hold_id.
+#
+# Two evasions and two OVER-BLOCK controls.  The over-block controls matter as
+# much as the evasions here: a fix that binds the agent block too tightly turns
+# an agent restart (new session_id) into a wrong DENY on an action a human
+# already approved, and a wrong DENY on an approved irreversible action is a
+# product failure of its own.  A6 fails either way round.
+# ---------------------------------------------------------------------------
+
+def _resubmit(session, hold_id, label, **agent_kw):
+    """Resubmit the A6 action against `hold_id`, varying ONLY the agent block.
+
+    Every other block is byte-identical to the raise, so check 5
+    (canonical_hash) and check 7 (params) both pass and the verdict is
+    attributable to the agent identity alone.
+    """
+    env_used = envelope(session, "delete", 1, env="production",
+                        reversibility="irreversible", blast="broad",
+                        approval={"present": True, "hold_id": hold_id},
+                        **agent_kw)
+    _, r = call("POST", "/v1/decide", env_used, label)
+    return r
+
+
+def _approved_hold(session, label, **agent_kw):
+    """Raise a hold as `agent_kw` and have a human approve it.
+
+    Returns (hold_id, ok).  The approver is a third party, so check 6
+    (actor_is_approver) cannot be what refuses any resubmission below.
+    """
+    hold_id, _ = _raise_hold(session, label=label, **agent_kw)
+    if not hold_id:
+        return None, False
+    st, r = _resolve(hold_id, "human", "a6-manager@rfx138.invalid",
+                     "%s: human approves" % label)
+    if st != 200:
+        print("  %-26s !! resolve refused HTTP %s %s — variant inconclusive"
+              % (label, st, r.get("error", "")))
+        return hold_id, False
+    return hold_id, True
+
+
+def attack_a6():
+    banner("A6  RFX-138 — a human's approval is spendable by a DIFFERENT agent")
+
+    ALPHA = "agent:a6-alpha"
+    BETA = "agent:a6-beta"
+
+    # CONTROL: the agent the human actually approved must be able to spend it.
+    # Without this an "allow" below is unreadable and a "deny" could just mean
+    # the hold chain is broken on this build.
+    s_ctl = sid("a6-ctl")
+    h_ctl, ok_ctl = _approved_hold(s_ctl, "A6 control", agent_id=ALPHA)
+    ctl_resp = _resubmit(s_ctl, h_ctl, "A6 control: the APPROVED agent resubmits",
+                         agent_id=ALPHA) if ok_ctl else {}
+    control_ok = ok_ctl and verdict(ctl_resp) == "allow"
+    print("  CONTROL approved agent spends -> %-16s %s"
+          % (verdict(ctl_resp), rule(ctl_resp)))
+    if not control_ok:
+        print("  !! the approved agent could not spend its own approval — the "
+              "hold chain is not in scope; A6 is inconclusive")
+
+    # ---- the evasions ------------------------------------------------------
+    # Each gets its OWN hold: a spent approval is consumed, so sharing one
+    # would make every variant after the first read as "consumed".
+    variants = [
+        # name, raise kwargs, resubmit kwargs, what it proves
+        ("agent-substitution",
+         dict(agent_id=ALPHA), dict(agent_id=BETA),
+         "a different agent, different session, spends it"),
+        ("obo-substitution",
+         dict(agent_id="agent:a6-shared-bot", on_behalf_of="alice@rfx138.invalid"),
+         dict(agent_id="agent:a6-shared-bot", on_behalf_of="bob@rfx138.invalid"),
+         "same bot, same session, acting for a DIFFERENT person"),
+        ("obo-added",
+         dict(agent_id="agent:a6-shared-bot"),
+         dict(agent_id="agent:a6-shared-bot", on_behalf_of="bob@rfx138.invalid"),
+         "an on_behalf_of the human never saw is added at resubmission"),
+        ("session-only-substitution",
+         dict(include_agent_id=False), dict(include_agent_id=False),
+         "SPEC-minimal envelope (session_id only): the guard must not be "
+         "vacuous when agent.id is absent"),
+    ]
+
+    # `burned` is scored separately from `evaded`: a build that refuses the
+    # substitute but consumes the hold anyway is not evadable, it is a build
+    # where any caller can destroy a human's approval on demand.
+    evaded, burned, detail = [], [], {}
+    for i, (name, raise_kw, sub_kw, _why) in enumerate(variants):
+        s_raise = sid("a6-%d-raise" % i)
+        # A different SESSION for the substitute is part of the attack for
+        # every variant except obo-substitution, where the point is that
+        # nothing at all changes except the person named.
+        s_sub = s_raise if name == "obo-substitution" else sid("a6-%d-sub" % i)
+        h, ok = _approved_hold(s_raise, "A6/%s" % name, **raise_kw)
+        if not ok:
+            print("  %-26s -> inconclusive (no approved hold)" % name)
+            continue
+        r = _resubmit(s_sub, h, "A6/%s: substitute spends the approval" % name,
+                      **sub_kw)
+        print("  %-26s -> %-16s %s" % (name, verdict(r), rule(r)))
+        if verdict(r) == "allow":
+            evaded.append(name)
+
+        # THE SECOND HALF OF THE DEFECT, AND IT IS PROBED WHETHER OR NOT THE
+        # FIRST HALF LANDED.  A hold is single-use, so the question "can the
+        # agent the human ACTUALLY approved still act?" has a different answer
+        # for each outcome above, and both answers matter:
+        #
+        #   substitution ALLOWED  -> the hijack also consumed the hold, so the
+        #                            approved agent is refused
+        #                            `reeflex_hold_consumed`.  The evasion is
+        #                            a denial of service against the
+        #                            legitimate actor as well as a hijack.
+        #   substitution DENIED   -> the refusal must return BEFORE
+        #                            mark_consumed().  A fix that refuses BETA
+        #                            and still burns the hold has closed the
+        #                            hijack and KEPT the denial of service: the
+        #                            human's decision is destroyed by an
+        #                            attacker's failed attempt, and the
+        #                            approved agent has to get a second human
+        #                            to approve the same action.
+        #
+        # An earlier version of this row only ran the follow-up on the ALLOW
+        # branch, which scored that half-fix CLOSED — a gate reporting "safe to
+        # cut a release" over an approval any caller can destroy at will.  It
+        # is a wrong DENY on an already-approved action, not an evasion, so it
+        # scores OVER-BLOCKING (which also fails the exit code) rather than
+        # being folded into the hijack count.
+        back = _resubmit(s_raise, h,
+                         "A6/%s: the APPROVED agent tries afterwards" % name,
+                         **raise_kw)
+        detail["%s_approved_agent_afterwards" % name] = "%s (%s)" % (
+            verdict(back), back.get("reason", ""))
+        print("      then the APPROVED agent          -> %-16s %s"
+              % (verdict(back), back.get("reason", "") or rule(back)))
+        if verdict(r) != "allow" and verdict(back) != "allow":
+            burned.append("%s(%s)" % (name, back.get("reason", "")))
+
+    # `fixed_in` names the GUARD, not a PR number: two competing PRs
+    # implemented this row's fix (#95 and #96, compared in dev-1--022) and a
+    # gate that hardcodes the losing number goes stale the moment one merges.
+    f = finding(
+        "A6", "RFX-138", "a human's approval is spendable by a different agent",
+        "check 8 (actor key)", control_ok, evaded, len(variants),
+        "a human approves agent A's irreversible production delete and agent B "
+        "executes it; core's audit line for that allow is byte-identical to a "
+        "legitimate resubmission, and A is locked out of what it was approved for",
+    )
+
+    # ---- OVER-BLOCK controls: legitimate resubmissions must still pass -----
+    # A fix that binds the agent block by raw equality fails these, and that
+    # failure is a wrong DENY on an approved irreversible action.
+    overblocked = []
+    for name, raise_kw, sub_kw, same_session in [
+        ("same-agent-new-session", dict(agent_id=ALPHA), dict(agent_id=ALPHA), False),
+        ("same-agent-case-folded", dict(agent_id="agent:A6-Mixed-Case"),
+         dict(agent_id="agent:a6-mixed-case"), True),
+    ]:
+        s_raise = sid("a6-ob-%s" % name)
+        s_sub = s_raise if same_session else sid("a6-ob-%s-2" % name)
+        h, ok = _approved_hold(s_raise, "A6-overblock/%s" % name, **raise_kw)
+        if not ok:
+            continue
+        r = _resubmit(s_sub, h, "A6-overblock/%s: legitimate resubmission" % name,
+                      **sub_kw)
+        print("  OVER-BLOCK %-16s -> %-16s %s" % (name, verdict(r), rule(r)))
+        if verdict(r) != "allow":
+            overblocked.append("%s(%s)" % (name, r.get("reason", "")))
+    detail["over_blocked_legitimate_resubmissions"] = overblocked
+    detail["hold_burned_by_a_refused_substitution"] = burned
+    if burned:
+        print("  !! a REFUSED substitution still consumed the hold: %s"
+              % ", ".join(burned))
+        print("     half a fix — the hijack is closed and the denial of "
+              "service against the approved agent is not: any caller holding "
+              "the hold_id can destroy a human's approval on demand")
+    if overblocked:
+        print("  !! a legitimate resubmission was REFUSED: %s"
+              % ", ".join(overblocked))
+        print("     that is a wrong DENY on an action a human already approved")
+    if overblocked or burned:
+        f["state"] = "STILL EXPLOITABLE" if evaded else "OVER-BLOCKING"
+    f["detail"] = detail
+    return f
+
+
+# ---------------------------------------------------------------------------
 # reporting
 # ---------------------------------------------------------------------------
 
@@ -597,7 +814,7 @@ def finding(code, ticket, name, fixed_in, control_ok, evaded, total, impact):
 
 
 ATTACKS = {"A1": attack_a1, "A2": attack_a2, "A3": attack_a3,
-           "A4": attack_a4, "A5": attack_a5}
+           "A4": attack_a4, "A5": attack_a5, "A6": attack_a6}
 
 
 def main():
@@ -609,7 +826,7 @@ def main():
     which = [c.strip().upper() for c in args.only.split(",") if c.strip()] \
         or list(ATTACKS)
 
-    print("reeflex-core RFX-97 release gate — all five evasions, one artefact")
+    print("reeflex-core RFX-97 release gate — every known evasion, one artefact")
     print("target : %s" % BASE)
     print("run    : %s" % RUN)
     print("attacks: %s" % ", ".join(which))
@@ -636,12 +853,17 @@ def main():
     for f in findings:
         prev = tickets.get(f["ticket"])
         # worst state wins for a ticket split across rows
-        rank = {"CLOSED": 0, "INCONCLUSIVE": 1, "STILL EXPLOITABLE": 2}
-        if prev is None or rank[f["state"]] > rank[prev]:
+        rank = {"CLOSED": 0, "INCONCLUSIVE": 1, "OVER-BLOCKING": 2,
+                "STILL EXPLOITABLE": 3}
+        if prev is None or rank[f["state"]] > rank.get(prev, 0):
             tickets[f["ticket"]] = f["state"]
     closed = [t for t, s in tickets.items() if s == "CLOSED"]
     open_ = [t for t, s in tickets.items() if s == "STILL EXPLOITABLE"]
     incon = [t for t, s in tickets.items() if s == "INCONCLUSIVE"]
+    # A fix that refuses a LEGITIMATE resubmission is its own release blocker:
+    # it is a wrong DENY on an action a human already approved.  It is not an
+    # evasion, so it gets its own row rather than being folded into either.
+    overblock = [t for t, s in tickets.items() if s == "OVER-BLOCKING"]
 
     print("\nA release cut from this artefact would close %d of %d:"
           % (len(closed), len(tickets)))
@@ -649,6 +871,9 @@ def main():
     print("  still exploitable : %s" % (", ".join(sorted(open_)) or "none"))
     if incon:
         print("  INCONCLUSIVE      : %s" % ", ".join(sorted(incon)))
+    if overblock:
+        print("  OVER-BLOCKING     : %s  (wrong DENY on an approved action)"
+              % ", ".join(sorted(overblock)))
     print("\nfingerprint: %s" % json.dumps(facts))
 
     if args.json_out:
@@ -658,8 +883,9 @@ def main():
                        "transcript": _TRANSCRIPT}, fh, indent=2)
         print("wrote %s (%d calls)" % (args.json_out, len(_TRANSCRIPT)))
 
-    # Exit code = evasions still exploitable, so CI can gate on it.
-    return len(open_)
+    # Exit code = evasions still exploitable + over-blocking fixes, so CI can
+    # gate on it: both are reasons not to cut a release from this artefact.
+    return len(open_) + len(overblock)
 
 
 if __name__ == "__main__":
