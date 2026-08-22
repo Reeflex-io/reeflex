@@ -251,6 +251,24 @@ class TestRFX145StrictModeMovesADecision(unittest.TestCase):
         loosened = [k for k in default if rank[strict[k]] < rank[default[k]]]
         self.assertEqual([], loosened, f"strict mode LOOSENED: {loosened}")
 
+    def test_strict_covers_the_gap_family_except_remote_execution(self):
+        """
+        The README tells an operator that strict mode is the only lever they
+        have over the commands the classifier cannot read (RFX-158). That is a
+        claim about behaviour, so it is asserted here rather than only written
+        down: five of the six `gap-` cases reach a human under strict mode
+        because they are unrecognised EXECUTE commands, and
+        `gap-remote-execution` does not because it is classified `emit`.
+        """
+        os.environ["REEFLEX_CLAUDE_STRICT"] = "1"
+        covered, uncovered = [], []
+        for case in conformance.cases(family="gap"):
+            verdict = policy_oracle(classify(case["tool"], case["input"]))
+            (covered if verdict == "ask" else uncovered).append(case["id"])
+        self.assertEqual(["gap-remote-execution"], uncovered,
+                         "the strict-mode claim in README.md no longer holds: "
+                         f"covered={covered} uncovered={uncovered}")
+
     def test_strict_sends_an_unknown_production_command_to_a_human(self):
         os.environ["REEFLEX_CLAUDE_STRICT"] = "1"
         cls = classify("Bash", {"command": "some-unrecognised-deploy-tool --go"})

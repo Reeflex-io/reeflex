@@ -153,7 +153,18 @@ def fingerprint() -> bool:
     return True
 
 
-def walk(cases, strict=False, label="default"):
+def walk(cases, strict=False, label="default", baseline=None):
+    """
+    Replay the corpus and print one line per case.
+
+    `baseline` is the default-config verdict per case id, passed on the STRICT
+    walk.  The corpus' `expect` describes the DEFAULT configuration, so on a
+    strict walk `pytest -> ask` is the knob working exactly as documented --
+    printing that as `MISS` would make a correct transcript read like a broken
+    gate, to the one audience that reads these transcripts.  On the strict walk
+    the marks are `moved`/`same` against the baseline instead, and the strict
+    rows are excluded from the exit code either way (see main()).
+    """
     rows = []
     for case in cases:
         r = run_hook(case["id"], case["tool"], case["input"], strict=strict)
@@ -165,8 +176,14 @@ def walk(cases, strict=False, label="default"):
             "actual": r["decision"], "reason": r["reason"],
             "residual": case["residual"], "ok": ok,
         })
-        mark = "ok  " if ok else ("RESID" if case["residual"] else "MISS")
-        print(f'  [{mark:5}] {r["decision"]:6} (want {case["expect"]:5})  '
+        if baseline is not None:
+            was = baseline.get(case["id"])
+            mark = "moved" if was != r["decision"] else "same"
+            note = f"(was {was})" if was != r["decision"] else " " * (len(str(was)) + 6)
+        else:
+            mark = "ok  " if ok else ("RESID" if case["residual"] else "MISS")
+            note = f'(want {case["expect"]:5})'
+        print(f'  [{mark:5}] {r["decision"]:6} {note}  '
               f'{str(case["input"].get("command") or case["input"].get("file_path"))[:64]}')
         time.sleep(PACE)
     return rows
@@ -249,9 +266,11 @@ def main() -> int:
         exit_code += 1
 
     if args.strict:
-        print("\n--- the corpus, REEFLEX_CLAUDE_STRICT=1 ---")
-        srows = walk(cases, strict=True, label="strict")
+        print("\n--- the corpus, REEFLEX_CLAUDE_STRICT=1 "
+              "(marks are moved/same vs the default walk, not pass/fail: the "
+              "corpus' `expect` describes the DEFAULT configuration) ---")
         by_id = {r["id"]: r["actual"] for r in rows}
+        srows = walk(cases, strict=True, label="strict", baseline=by_id)
         changed = [r for r in srows if by_id.get(r["id"]) != r["actual"]]
         print(f"\nRFX-145: strict mode changed {len(changed)} of {len(srows)} verdicts")
         for r in changed[:10]:
