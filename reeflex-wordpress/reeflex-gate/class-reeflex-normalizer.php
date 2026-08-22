@@ -41,16 +41,33 @@
  *   through, read them from $args in wrap_permission_callback and pass them
  *   as a trusted parameter — never from agent-supplied input.
  *
- *   blast_radius:
- *     systemic signals in name               -> systemic (overrides count)
- *     bulk signals in name (bulk/batch/-all) -> broad (overrides count)
- *     ids array length > 20                  -> broad
- *     ids array length > 1                   -> scoped
- *     ids array length == 1                  -> single
- *     no ids, no bulk signal                 -> single
- *     agent-supplied 'count' may RAISE risk but never lower it (P1-6):
- *       used only when ids is absent; clamped so it cannot assert 'single'
- *       for a bulk-signalling ability.
+ *   blast_radius: derived per SPEC §4.2 from the shape of the AFFECTED SET.
+ *     Applied in order, first match wins:
+ *       1. container claim (declared reeflex_scope, or a SYSTEMIC_SEGMENTS
+ *          name signal)                        -> systemic
+ *       2. affected set NOT enumerated -- declared 'predicate', or no ids
+ *          array in $input                     -> broad
+ *       3. affected set enumerated -- count( $input['ids'] ) decides:
+ *            >= BROAD_MIN (20)                 -> broad
+ *            2 .. 19                           -> scoped
+ *            1                                 -> single
+ *
+ *     RFX-131 changed two things here, and both are SPEC §4.2 MUSTs:
+ *       - "no ids" was 'single'; it is now 'broad'. Absence of an enumeration is
+ *         a predicate over an unknown-size set -- the BROADEST signal available,
+ *         not the narrowest. `core/truncate-postmeta` (a table wipe, matching no
+ *         substring in either list) used to normalize to irreversible+single and
+ *         ALLOW in production.
+ *       - BULK_SEGMENTS no longer raises above an enumeration. Where $input holds
+ *         a real list of affected ids, its cardinality is authoritative: an
+ *         enumeration is evidence, a name is not. `delete-all-revisions-of-post`
+ *         with ids=[7] used to read 'broad' off the substring "all-".
+ *
+ *     An agent-supplied 'count' is NOT an enumeration and no longer affects this
+ *     axis at all (it still sets magnitude.count, where core's budgets validate
+ *     it). Under the old rule it was the only thing standing between "no ids" and
+ *     'single', which is precisely why "no ids" defaulting to 'single' was
+ *     load-bearing and wrong.
  *
  *   externality:
  *     emit verb / outbound signals           -> outbound
@@ -133,14 +150,48 @@ final class Reeflex_Normalizer {
 	);
 
 	/**
-	 * Ability name segments (lowercase) that imply a bulk (broad) blast radius.
-	 * Overrides count; cannot be lowered by an absent ids array.
+	 * Ability name segments (lowercase) that imply a bulk blast radius.
+	 *
+	 * NO LONGER READ BY resolve_blast_radius() (RFX-131 / SPEC §4.2): a name may
+	 * make a container claim (step 1) but MUST NOT make a cardinality claim, and
+	 * every case this list used to catch is now reached without it —
+	 *   - with no ids array, step 2 already returns 'broad';
+	 *   - with an ids array, the enumeration is authoritative and this list would
+	 *     have raised above it, which §4.2 forbids.
+	 * It is retained because resolve_reversibility() and infer_kind() still read
+	 * bulk signals for their own purposes, where a name IS the available evidence.
 	 *
 	 * @var array<int,string>
 	 */
 	private const BULK_SEGMENTS = array(
 		'bulk', 'batch', 'mass', 'every', 'all',
 	);
+
+	/**
+	 * Cardinality at which an enumerated affected set becomes 'broad'.
+	 *
+	 * INCLUSIVE: exactly BROAD_MIN entities is 'broad'. Carried as `broad_min` in
+	 * reeflex-spec/conformance/blast-radius.json, which is what caught the two
+	 * reference adapters disagreeing here — this adapter used `> 20`, the Claude
+	 * Code adapter `>= 20`, so a 20-entity delete was 'scoped' in WordPress and
+	 * 'broad' in Claude Code (RFX-131). The conservative reading wins, and it also
+	 * lines up with resolve_reversibility()'s own `$count >= 20` threshold, which
+	 * this class previously contradicted one axis over.
+	 */
+	private const BROAD_MIN = 20;
+
+	/**
+	 * Accepted values for the registration-time scope declaration (SPEC §4.2).
+	 *
+	 * Supplied by the operator who REGISTERS the ability (via the `reeflex_scope`
+	 * arg, captured in Reeflex_Gate::wrap_permission_callback exactly like
+	 * `reeflex_verb`), never from agent-supplied $input. It exists for the two
+	 * facts the call site cannot see: an action whose affected set is not the
+	 * parameter it receives, and a container change carrying no name signal.
+	 *
+	 * @var array<int,string>
+	 */
+	private const SCOPE_DECLARATIONS = array( 'container', 'predicate', 'enumerated' );
 
 	// ------------------------------------------------------------------
 	// Public entry point
@@ -184,6 +235,12 @@ final class Reeflex_Normalizer {
 	 *                                        hold-creation time. Set ONLY by
 	 *                                        Reeflex_Gate::resubmit_hold(). Null = derive identity
 	 *                                        from the live request (normal path, unchanged).
+	 * @param string      $trusted_scope      Optional: registration-time scope declaration from
+	 *                                        $args (reeflex_scope key), one of
+	 *                                        container|predicate|enumerated — SPEC §4.2. Like
+	 *                                        $trusted_verb it is captured at REGISTRATION time and
+	 *                                        is NEVER read from agent-supplied $input. Empty =
+	 *                                        derive the shape from the call (RFX-131).
 	 * @return array  A fully-populated Action Envelope (SPEC §2).
 	 */
 	public static function normalize(
@@ -191,7 +248,8 @@ final class Reeflex_Normalizer {
 		array $input,
 		string $trusted_verb = '',
 		?string $approval_hold_id = null,
-		?array $agent_override = null
+		?array $agent_override = null,
+		string $trusted_scope = ''
 	): array {
 		$ability_lower    = strtolower( $ability );
 		$ability_segments = self::split_segments( $ability_lower );
@@ -234,7 +292,7 @@ final class Reeflex_Normalizer {
 
 		// -- AXES ---------------------------------------------------------
 		$reversibility = self::resolve_reversibility( $ability_lower, $ability_segments, $verb, $input, $count );
-		$blast_radius  = self::resolve_blast_radius( $ability_lower, $ability_segments, $input, $count );
+		$blast_radius  = self::resolve_blast_radius( $ability_lower, $input, $trusted_scope );
 		$externality   = self::resolve_externality( $ability_segments, $verb );
 
 		// -- TARGET -------------------------------------------------------
@@ -560,71 +618,85 @@ final class Reeflex_Normalizer {
 	// ------------------------------------------------------------------
 
 	/**
-	 * Estimate how many entities are affected.
+	 * Derive how much is affected, per SPEC §4.2.
 	 *
-	 * Resolution order (most-restrictive wins; P1-6):
-	 *   1. Systemic signals in ability name → systemic (overrides everything).
-	 *   2. Bulk signals in ability name (bulk/batch/-all/all-/every/mass) → broad
-	 *      (overrides agent-supplied count; cannot be lowered).
-	 *   3. ids array present → use its length: >20=broad, >1=scoped, 1=single.
-	 *   4. No ids, no bulk signal, agent-supplied count:
-	 *      - count > 20 → broad
-	 *      - count > 1  → scoped
-	 *      - count == 1 → single (accepted here because no conflicting bulk signal)
-	 *   5. Fallback: single.
+	 * The axis is read off the SHAPE OF THE AFFECTED SET, not off the ability's
+	 * name. Resolution order, first match wins:
 	 *
-	 * @param string            $ability_lower
-	 * @param array<int,string> $ability_segments
-	 * @param array             $input
-	 * @param int               $count
+	 *   1. CONTAINER — the target is the system's own structure or control plane
+	 *      (schema, site-wide configuration, the access-control model) → systemic.
+	 *      Reached by an explicit `reeflex_scope: 'container'` declaration, or by a
+	 *      SYSTEMIC_SEGMENTS name signal. A name is allowed to make this claim
+	 *      because it is a claim about KIND, made by whoever registered the
+	 *      ability, and it can only raise.
+	 *   2. PREDICATE — the affected set is described by a filter rather than
+	 *      enumerated: `reeflex_scope: 'predicate'`, or no `ids` array at all
+	 *      → broad. §4.2: an adapter that cannot enumerate the affected set MUST
+	 *      NOT emit 'single' or 'scoped'.
+	 *   3. ENUMERATED — count( $input['ids'] ) is authoritative:
+	 *      >= BROAD_MIN → broad, 2..BROAD_MIN-1 → scoped, 1 → single. A name
+	 *      signal MUST NOT raise above this: an enumeration is evidence, a name
+	 *      is not.
+	 *
+	 * What changed in RFX-131 and why it is not a tuning tweak: "no ids" used to
+	 * return 'single', so `core/truncate-postmeta` — a table wipe whose name
+	 * matches nothing in either substring list — normalized to
+	 * irreversible + single + production and was ALLOWED by R4's default. Absence
+	 * of an enumeration is the broadest signal available, not the narrowest.
+	 *
+	 * $count is deliberately absent from this method now. It can be agent-supplied
+	 * (infer_count reads $input['count']), and a caller-supplied number is not an
+	 * enumeration. It still populates magnitude.count, where reeflex-core validates
+	 * and budgets it.
+	 *
+	 * @param string $ability_lower  Lowercased ability name.
+	 * @param array  $input          Ability input (agent-supplied).
+	 * @param string $trusted_scope  Registration-time declaration; '' if none.
+	 *                               NEVER read from $input.
 	 * @return string  'single'|'scoped'|'broad'|'systemic'
 	 */
 	private static function resolve_blast_radius(
 		string $ability_lower,
-		array $ability_segments,
 		array $input,
-		int $count
+		string $trusted_scope = ''
 	): string {
-		// 1. Systemic signals: whole site / all users / all options.
+		$declared = in_array( $trusted_scope, self::SCOPE_DECLARATIONS, true )
+			? $trusted_scope
+			: '';
+
+		// 1. CONTAINER → systemic.
+		if ( 'container' === $declared ) {
+			return 'systemic';
+		}
 		foreach ( self::SYSTEMIC_SEGMENTS as $signal ) {
 			if ( false !== strpos( $ability_lower, $signal ) ) {
 				return 'systemic';
 			}
 		}
 
-		// 2. Bulk signals in ability name → always broad, regardless of count.
-		foreach ( self::BULK_SEGMENTS as $bulk_seg ) {
-			if ( in_array( $bulk_seg, $ability_segments, true ) ) {
-				return 'broad';
-			}
-		}
-		// Also catch hyphenated bulk patterns ('-all', 'all-') not caught by segment split.
-		if (
-			false !== strpos( $ability_lower, '-all' ) ||
-			false !== strpos( $ability_lower, 'all-' )
-		) {
+		// 2. PREDICATE → broad. Either the ability says so, or there is no
+		//    enumeration of affected entities in the call.
+		//
+		//    An EMPTY ids array counts as no enumeration, not as a small one. WP
+		//    handlers routinely read an empty selection as "everything", and an
+		//    agent that wants 'single' would otherwise just send `ids: []` —
+		//    reintroducing the exact fail-open this method was rewritten to close.
+		$has_enumeration = isset( $input['ids'] )
+			&& is_array( $input['ids'] )
+			&& count( $input['ids'] ) > 0;
+		if ( 'predicate' === $declared || ! $has_enumeration ) {
 			return 'broad';
 		}
 
-		// 3. ids array length is the most trustworthy count signal.
-		if ( isset( $input['ids'] ) && is_array( $input['ids'] ) ) {
-			$ids_count = count( $input['ids'] );
-			if ( $ids_count > 20 ) {
-				return 'broad';
-			}
-			if ( $ids_count > 1 ) {
-				return 'scoped';
-			}
-			return 'single';
-		}
-
-		// 4. No ids array: use $count (which may come from agent-supplied 'count').
-		//    Agent count may raise risk but never lower it.  At this point there is
-		//    no conflicting bulk signal, so 'single' is acceptable when count == 1.
-		if ( $count > 20 ) {
+		// 3. ENUMERATED → cardinality decides. BROAD_MIN is inclusive.
+		//    A 'declared' value of 'enumerated' lands here too; it asserts nothing
+		//    beyond what the ids array already shows, which is the point of the
+		//    monotonic rule — a declaration may raise, never lower.
+		$ids_count = count( $input['ids'] );
+		if ( $ids_count >= self::BROAD_MIN ) {
 			return 'broad';
 		}
-		if ( $count > 1 ) {
+		if ( $ids_count > 1 ) {
 			return 'scoped';
 		}
 		return 'single';

@@ -283,6 +283,16 @@ final class Reeflex_Gate {
 	 *   The key is stripped from $args so WP_Ability::prepare_properties() does
 	 *   not reject it as an unknown property.
 	 *
+	 * Scope declaration (RFX-131 / SPEC §4.2):
+	 *   'reeflex_scope' — one of container|predicate|enumerated — is captured the
+	 *   same way, for the two facts the call site cannot see: an action whose
+	 *   affected set is not the parameter it receives (delete-all-revisions-of a
+	 *   post enumerates one id and affects an unenumerated set of revisions), and a
+	 *   container change carrying no name signal. Undeclared abilities still fail
+	 *   closed — normalize() derives 'predicate' from the absence of an ids array —
+	 *   so this is an accuracy improvement for annotated abilities, not the guard
+	 *   itself.
+	 *
 	 * Exception safety (NEW-2):
 	 *   The gating body is wrapped in try/catch(\Throwable). Any exception in
 	 *   normalize(), decide(), audit(), or dispatch_obligations() fails CLOSED:
@@ -327,10 +337,22 @@ final class Reeflex_Gate {
 			unset( $args['reeflex_verb'] );
 		}
 
+		// Capture the scope declaration at registration time (RFX-131 / SPEC §4.2).
+		// Same trust model as reeflex_verb and for the same reason: it comes from
+		// whoever REGISTERED the ability, so it is operator-supplied, not
+		// agent-supplied. An agent putting 'reeflex_scope' in $input has no effect —
+		// $input is never consulted for it.
+		$trusted_scope = '';
+		if ( isset( $args['reeflex_scope'] ) && is_string( $args['reeflex_scope'] ) ) {
+			$trusted_scope = $args['reeflex_scope'];
+			unset( $args['reeflex_scope'] );
+		}
+
 		$args['permission_callback'] = static function ( $input = null ) use (
 			$original_callback,
 			$ability_name,
-			$trusted_verb
+			$trusted_verb,
+			$trusted_scope
 		) {
 			// Step 1: run the original permission check.
 			$original_result = $original_callback( $input );
@@ -368,7 +390,8 @@ final class Reeflex_Gate {
 					$input_arr,
 					$trusted_verb,
 					self::$active_resubmission_hold_id,
-					self::$active_resubmission_agent
+					self::$active_resubmission_agent,
+					$trusted_scope
 				);
 
 				// Step 3a.1 (fan-out fix, 0.1.7): compute the request-scoped memo key
