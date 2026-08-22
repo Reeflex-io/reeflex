@@ -19,7 +19,23 @@ and it replays all five attacks and prints a verdict per evasion.
 
     AND THE SIXTH, added when it was found the same way (A6)
     RFX-138  a human's approval is spendable by a DIFFERENT agent, or by the
-             same agent claiming a different on_behalf_of                          fix #96
+             same agent claiming a different on_behalf_of                          fix: check 8
+
+A6 SCORES THREE OUTCOMES, NOT TWO, and that is the lesson of the row rather
+than a detail of it.  A fix here can fail in two opposite directions and both
+are release blockers:
+
+  * TOO LOOSE — the substitute spends the approval.  The evasion itself.
+  * TOO TIGHT — a legitimate resubmission is refused.  An agent that merely
+    RESTARTED inside the hold's 4h TTL, or whose id is spelled in a different
+    case, is a wrong DENY on the one path in this product where a human has
+    explicitly said yes.  Not an evasion; still not releasable.
+  * HALF DONE — the substitute is refused and the hold is consumed anyway.
+    The hijack is closed and the denial of service is kept: any caller holding
+    the hold_id can destroy a human's approval on demand, and the approved
+    agent has to go find a second human.  This is scored because the first
+    version of this row probed it only on the ALLOW branch and therefore
+    scored that build CLOSED.
 
 USAGE
 =====
@@ -678,7 +694,10 @@ def attack_a6():
          "vacuous when agent.id is absent"),
     ]
 
-    evaded, detail = [], {}
+    # `burned` is scored separately from `evaded`: a build that refuses the
+    # substitute but consumes the hold anyway is not evadable, it is a build
+    # where any caller can destroy a human's approval on demand.
+    evaded, burned, detail = [], [], {}
     for i, (name, raise_kw, sub_kw, _why) in enumerate(variants):
         s_raise = sid("a6-%d-raise" % i)
         # A different SESSION for the substitute is part of the attack for
@@ -694,20 +713,48 @@ def attack_a6():
         print("  %-26s -> %-16s %s" % (name, verdict(r), rule(r)))
         if verdict(r) == "allow":
             evaded.append(name)
-            # THE SECOND HALF OF THE DEFECT: the substitution CONSUMED the
-            # hold, so the agent the human did approve is now locked out of
-            # the action it was approved for.
-            back = _resubmit(s_raise, h,
-                             "A6/%s: the APPROVED agent tries afterwards" % name,
-                             **raise_kw)
-            detail["%s_approved_agent_afterwards" % name] = "%s (%s)" % (
-                verdict(back), back.get("reason", ""))
-            print("      the approved agent afterwards -> %s (%s)"
-                  % (verdict(back), back.get("reason", "")))
 
+        # THE SECOND HALF OF THE DEFECT, AND IT IS PROBED WHETHER OR NOT THE
+        # FIRST HALF LANDED.  A hold is single-use, so the question "can the
+        # agent the human ACTUALLY approved still act?" has a different answer
+        # for each outcome above, and both answers matter:
+        #
+        #   substitution ALLOWED  -> the hijack also consumed the hold, so the
+        #                            approved agent is refused
+        #                            `reeflex_hold_consumed`.  The evasion is
+        #                            a denial of service against the
+        #                            legitimate actor as well as a hijack.
+        #   substitution DENIED   -> the refusal must return BEFORE
+        #                            mark_consumed().  A fix that refuses BETA
+        #                            and still burns the hold has closed the
+        #                            hijack and KEPT the denial of service: the
+        #                            human's decision is destroyed by an
+        #                            attacker's failed attempt, and the
+        #                            approved agent has to get a second human
+        #                            to approve the same action.
+        #
+        # An earlier version of this row only ran the follow-up on the ALLOW
+        # branch, which scored that half-fix CLOSED — a gate reporting "safe to
+        # cut a release" over an approval any caller can destroy at will.  It
+        # is a wrong DENY on an already-approved action, not an evasion, so it
+        # scores OVER-BLOCKING (which also fails the exit code) rather than
+        # being folded into the hijack count.
+        back = _resubmit(s_raise, h,
+                         "A6/%s: the APPROVED agent tries afterwards" % name,
+                         **raise_kw)
+        detail["%s_approved_agent_afterwards" % name] = "%s (%s)" % (
+            verdict(back), back.get("reason", ""))
+        print("      then the APPROVED agent          -> %-16s %s"
+              % (verdict(back), back.get("reason", "") or rule(back)))
+        if verdict(r) != "allow" and verdict(back) != "allow":
+            burned.append("%s(%s)" % (name, back.get("reason", "")))
+
+    # `fixed_in` names the GUARD, not a PR number: two competing PRs
+    # implemented this row's fix (#95 and #96, compared in dev-1--022) and a
+    # gate that hardcodes the losing number goes stale the moment one merges.
     f = finding(
         "A6", "RFX-138", "a human's approval is spendable by a different agent",
-        "#96", control_ok, evaded, len(variants),
+        "check 8 (actor key)", control_ok, evaded, len(variants),
         "a human approves agent A's irreversible production delete and agent B "
         "executes it; core's audit line for that allow is byte-identical to a "
         "legitimate resubmission, and A is locked out of what it was approved for",
@@ -733,10 +780,18 @@ def attack_a6():
         if verdict(r) != "allow":
             overblocked.append("%s(%s)" % (name, r.get("reason", "")))
     detail["over_blocked_legitimate_resubmissions"] = overblocked
+    detail["hold_burned_by_a_refused_substitution"] = burned
+    if burned:
+        print("  !! a REFUSED substitution still consumed the hold: %s"
+              % ", ".join(burned))
+        print("     half a fix — the hijack is closed and the denial of "
+              "service against the approved agent is not: any caller holding "
+              "the hold_id can destroy a human's approval on demand")
     if overblocked:
         print("  !! a legitimate resubmission was REFUSED: %s"
               % ", ".join(overblocked))
         print("     that is a wrong DENY on an action a human already approved")
+    if overblocked or burned:
         f["state"] = "STILL EXPLOITABLE" if evaded else "OVER-BLOCKING"
     f["detail"] = detail
     return f
