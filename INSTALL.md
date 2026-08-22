@@ -94,6 +94,9 @@ when you run commands from the repo root.
 | `REEFLEX_POLICY_DIR` | `<repo>/reeflex-core/policy` | Directory containing `reeflex.rego` |
 | `REEFLEX_AUDIT_LOG` | `<repo>/reeflex-core/audit/decisions.jsonl` | Path where the append-only JSONL audit log is written |
 | `REEFLEX_WINDOW_SECONDS` | `3600` | Rolling window (seconds) for the per-session cumulative action ledger used by fragmentation-resistance rules |
+| `REEFLEX_LEDGER_PATH` | `<repo>/reeflex-core/audit/ledger.jsonl` | Path to the append-only per-session cumulative ledger. **This file is enforcement state, not a log** — see [below](#the-session-ledger-must-be-shared-and-must-survive-a-restart) |
+| `REEFLEX_LEDGER_PERSIST` | `true` | Set to `0`/`false`/`no`/`off` to make the ledger in-memory only. **Turning this off disables cumulative budgets across restarts and replicas** — any other value, including a typo, keeps it durable |
+| `REEFLEX_LEDGER_SCAN_BYTES` | `67108864` | Bytes of the ledger tail read at boot. Everything inside the rolling window is at the tail; if the cap is hit while still inside the window, the boot record says `scan_truncated: true` |
 | `REEFLEX_OPA_TIMEOUT` | `10` | Seconds before an OPA subprocess call is killed |
 
 **Note on the demo:** the demo (`reeflex-mock/demo.py`) starts its own
@@ -186,11 +189,67 @@ curl http://127.0.0.1:8080/healthz
 Expected response:
 
 ```json
-{"status":"ok"}
+{"status":"ok","ledger":{"durable":true,"path":"/app/audit/ledger.jsonl",
+ "epoch_id":"73a2133af21f448982cbb08c87898a7e","window_seconds":3600,
+ "restored_sessions":0,"restored_entries":0,"scan_truncated":false}}
 ```
+
+`ledger` describes the cumulative session state this core is enforcing budgets
+against: whether it survives a restart (`durable`), where it lives (`path`),
+and what it restored at boot. See the section below before you run more than
+one core.
 
 Stop the server with `Ctrl+C` before running the demo (which starts its own
 instance on a different port).
+
+---
+
+## The session ledger must be shared, and must survive a restart
+
+Reeflex's R5 rules are **cumulative**: they hold an action because of what the
+session already did. That history is the per-session ledger, and it is
+**enforcement state, not a log** — if it is lost, the budget is not "missing
+some data", it is *reset*, and the session may spend its whole allowance again.
+
+`docker-compose.yml` mounts a named volume at `/app/audit` for exactly this
+reason. It holds two files:
+
+| File | What it is |
+|---|---|
+| `decisions.jsonl` | the append-only audit log (evidence) |
+| `ledger.jsonl` | the per-session cumulative ledger (**enforcement**) |
+
+**What is guaranteed.** One core: spend survives a restart, an image upgrade
+and a container replacement. Several cores that mount the **same** volume:
+they enforce **one** budget between them, because the file is the ledger and
+every read re-synchronises from it before deciding.
+
+**What is not.** Cores that do **not** share storage each keep their own
+ledger, and each therefore grants a full budget — so *N* replicas multiply
+every cumulative budget by *N*. That covers:
+
+- replicas on separate hosts with no shared filesystem;
+- Kubernetes pods with a `ReadWriteOnce` volume each (use `ReadWriteMany`, or
+  keep a single replica);
+- **removing the volume** from `docker-compose.yml`, which silently returns the
+  product to this behaviour.
+
+A shared-store ledger (Postgres) is the planned fix for the no-shared-filesystem
+case — see [docs/roadmap.md](docs/roadmap.md). Until then, this is *checkable
+rather than assumed*:
+
+```bash
+# every replica must report durable:true and agree on path
+curl -s http://replica-1:8080/healthz | python -c "import json,sys; print(json.load(sys.stdin)['ledger'])"
+curl -s http://replica-2:8080/healthz | python -c "import json,sys; print(json.load(sys.stdin)['ledger'])"
+```
+
+Each core also writes one `ledger_epoch` record to the audit stream at boot,
+saying what it restored and from where, and stamps every decision record with
+the `ledger_epoch` it was decided under. So a cumulative counter that drops
+inside its own declared window is traceable to the boot that caused it —
+instead of being, as it was before, a contradiction sitting in the evidence
+with nothing to explain it.
 
 ---
 
