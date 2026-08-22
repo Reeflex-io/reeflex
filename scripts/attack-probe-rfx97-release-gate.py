@@ -21,7 +21,7 @@ and it replays all five attacks and prints a verdict per evasion.
     RFX-138  a human's approval is spendable by a DIFFERENT agent, or by the
              same agent claiming a different on_behalf_of                          fix: check 8
 
-A6 SCORES THREE OUTCOMES, NOT TWO, and that is the lesson of the row rather
+A6 SCORES FOUR OUTCOMES, NOT TWO, and that is the lesson of the row rather
 than a detail of it.  A fix here can fail in two opposite directions and both
 are release blockers:
 
@@ -36,6 +36,13 @@ are release blockers:
     agent has to go find a second human.  This is scored because the first
     version of this row probed it only on the ALLOW branch and therefore
     scored that build CLOSED.
+  * REFUSED BY SOMETHING ELSE — the substitution is denied, but not with
+    `reeflex_hold_actor_mismatch`.  The hijack did not land; the guard this row
+    names in its `fixed_in` column was not shown to be what stopped it, and may
+    not have been reached at all.  Scored INCONCLUSIVE, because "was it blocked"
+    and "was the guard exercised" are different questions and qa--016 already
+    answered the first one for the second on A3: five self-approval variants
+    scored CLOSED on a 403 that was `principal_type_not_allowed`.
 
 USAGE
 =====
@@ -652,6 +659,9 @@ def _approved_hold(session, label, **agent_kw):
     return hold_id, True
 
 
+ACTOR_MISMATCH = "reeflex_hold_actor_mismatch"
+
+
 def attack_a6():
     banner("A6  RFX-138 — a human's approval is spendable by a DIFFERENT agent")
 
@@ -697,7 +707,17 @@ def attack_a6():
     # `burned` is scored separately from `evaded`: a build that refuses the
     # substitute but consumes the hold anyway is not evadable, it is a build
     # where any caller can destroy a human's approval on demand.
-    evaded, burned, detail = [], [], {}
+    # `wrong_reason` exists because THE VERDICT ALONE DOES NOT SCORE THIS ROW.
+    # The `fixed_in` column claims a specific guard — "check 8 (actor key)" —
+    # and a `deny` for any other reason satisfies `verdict(r) != "allow"` while
+    # proving nothing about that guard: `reeflex_hold_consumed` from a
+    # mis-sequenced chain, `reeflex_hold_expired` from a clock, a validation
+    # refusal that never reached the actor compare at all.  That is the same
+    # trap qa--016 hit on A3, where five self-approval variants scored CLOSED on
+    # a 403 that was `principal_type_not_allowed` — the guard was never
+    # exercised and the pass was invented.  So the reason is asserted, and a
+    # refusal from somewhere else makes the row INCONCLUSIVE rather than green.
+    evaded, burned, wrong_reason, detail = [], [], [], {}
     for i, (name, raise_kw, sub_kw, _why) in enumerate(variants):
         s_raise = sid("a6-%d-raise" % i)
         # A different SESSION for the substitute is part of the attack for
@@ -710,9 +730,12 @@ def attack_a6():
             continue
         r = _resubmit(s_sub, h, "A6/%s: substitute spends the approval" % name,
                       **sub_kw)
-        print("  %-26s -> %-16s %s" % (name, verdict(r), rule(r)))
+        print("  %-26s -> %-16s %-34s %s"
+              % (name, verdict(r), r.get("reason", "") or rule(r), rule(r)))
         if verdict(r) == "allow":
             evaded.append(name)
+        elif r.get("reason") != ACTOR_MISMATCH:
+            wrong_reason.append("%s(%s)" % (name, r.get("reason", "") or "no reason"))
 
         # THE SECOND HALF OF THE DEFECT, AND IT IS PROBED WHETHER OR NOT THE
         # FIRST HALF LANDED.  A hold is single-use, so the question "can the
@@ -781,6 +804,14 @@ def attack_a6():
             overblocked.append("%s(%s)" % (name, r.get("reason", "")))
     detail["over_blocked_legitimate_resubmissions"] = overblocked
     detail["hold_burned_by_a_refused_substitution"] = burned
+    detail["refused_but_not_by_check_8"] = wrong_reason
+    if wrong_reason:
+        print("  !! a substitution was refused for a DIFFERENT reason: %s"
+              % ", ".join(wrong_reason))
+        print("     the hijack did not land, but this row's `fixed_in` column "
+              "claims check 8 closed it and that is now unproven — the actor "
+              "compare may not have been reached at all")
+        f["state"] = "INCONCLUSIVE" if f["state"] == "CLOSED" else f["state"]
     if burned:
         print("  !! a REFUSED substitution still consumed the hold: %s"
               % ", ".join(burned))
