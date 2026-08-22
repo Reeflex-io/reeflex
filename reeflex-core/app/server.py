@@ -927,9 +927,12 @@ def _max_pending(workers: int) -> int:
 def _overloaded_wire() -> bytes:
     """The shed response, pre-rendered.
 
-    Written straight to the socket because shedding happens in the accept
-    loop, BEFORE a handler instance exists — the whole point is not to spend a
-    worker on it. Kept byte-identical in shape to _respond(): same
+    Pre-rendered and written straight to the socket, because a shed must not
+    cost what a decision costs: no handler instance, no parsing, no policy
+    engine. It is delivered on the small shed pool rather than on the accept
+    thread — see _shed_conn, which had to wait for the client's request to
+    arrive before answering, and measured why. Kept byte-identical in shape to
+    _respond(): same
     Content-Type, same nosniff/no-store headers, JSON body with an `error`
     key, so an adapter parses it the same way it parses every other refusal.
     """
@@ -966,8 +969,16 @@ class PooledHTTPServer(http.server.HTTPServer):
     connection. See the RFX-198 block above for why bounded.
     """
 
-    # Workers must not outlive the process on shutdown.
-    daemon_threads = True
+    # NO `daemon_threads = True` here, deliberately. That attribute is read by
+    # socketserver.ThreadingMixIn, which this class does not use, so setting it
+    # would look like a shutdown guarantee and provide none. The real behaviour
+    # is ThreadPoolExecutor's: its workers are non-daemon and registered with
+    # threading._register_atexit, so the interpreter waits for an in-flight
+    # decision to finish rather than killing it halfway through the
+    # read-decide-write cycle. That is what we want -- a decision cut off
+    # between the OPA eval and ledger.append_entry() would be enforced and
+    # unrecorded -- but see server_close() for the shutdown(wait=False) that
+    # keeps a closing server from blocking on a slow SIEM.
 
     def __init__(
         self,
