@@ -376,10 +376,15 @@ class TestWebTools(unittest.TestCase):
 class TestUnknownTool(unittest.TestCase):
 
     def test_unknown(self):
+        # RFX-206: this used to assert blast_radius == "scoped".  Measured
+        # against reeflex-core 759b83f, "scoped" was the one value of this
+        # envelope the shipped policy pack ALLOWED in production -- so the
+        # assertion was pinning a fail-open in place as if it were the design.
+        # See test_unknown_tool_envelope.py for the full argument.
         r = _c("SomeCustomTool", {"param": "value"})
         self.assertEqual(r["verb"], "execute")
         self.assertEqual(r["reversibility"], "irreversible")
-        self.assertEqual(r["blast_radius"], "scoped")
+        self.assertEqual(r["blast_radius"], "broad")
         self.assertEqual(r["externality"], "internal")
 
     def test_empty_tool_name(self):
