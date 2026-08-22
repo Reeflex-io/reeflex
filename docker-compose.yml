@@ -11,6 +11,20 @@ services:
       REEFLEX_HOST: "0.0.0.0"
       REEFLEX_PORT: "8080"
       # ---------------------------------------------------------------------------
+      # WHO MAY SAY "A HUMAN APPROVED THIS" (RFX-84).
+      # The image already sets REEFLEX_REQUIRE_VERIFIED_APPROVER=true, so a hold
+      # cannot be resolved by an approver core cannot authenticate. To make an
+      # approver verifiable, bind each one's bearer token to the principal it IS
+      # (JSON inline, or a path to a JSON file; re-read per request, no restart):
+      #
+      # REEFLEX_RESOLVER_TOKENS: '{"tok_live_alice": {"type": "human", "id": "alice@example.com"}}'
+      #
+      # ESCAPE HATCH — upgrading from 0.1.x and not yet wired up? This restores the
+      # old behaviour: holds resolve on a self-asserted approver, and every record
+      # says decided_by_verified=false, so the report cannot claim four-eyes.
+      # REEFLEX_REQUIRE_VERIFIED_APPROVER: "false"
+      # ---------------------------------------------------------------------------
+      # ---------------------------------------------------------------------------
       # SIEM / syslog telemetry — disabled by default.
       # Uncomment and set REEFLEX_SYSLOG_ADDRESS to enable.
       # Full guide: docs/siem.md

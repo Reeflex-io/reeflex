@@ -301,12 +301,34 @@ class TestA3SelfAssertedApprover(_AttackCase):
             {"agent": {"id": "svc-bot", "session_id": "s1"}},
             "human", "alice@example.com"))
 
-    def test_a3_an_unverifiable_approver_is_never_recorded_as_verified(self):
-        """The forgery-of-evidence half: core must not mint a record that
-        says a named human exercised oversight when nothing checked."""
-        from app.principal import resolve_approver
+    def test_a3_an_unverifiable_approver_is_refused_at_the_shipped_default(self):
+        """RFX-84, 0.2.0: out of the box, core does not accept it at all.
+
+        This assertion is the whole of the RFX-84 default flip, at the unit
+        the release gate exercises over HTTP: with NOTHING configured, an
+        approver core cannot tie to the calling credential is refused, not
+        recorded.
+        """
+        from app.principal import PrincipalRefused, resolve_approver
         for key in ("REEFLEX_RESOLVER_TOKENS", "REEFLEX_REQUIRE_VERIFIED_APPROVER"):
             os.environ.pop(key, None)
+        with self.assertRaises(PrincipalRefused) as ctx:
+            resolve_approver("any-token", "human", "leo.david")
+        self.assertEqual("principal_not_verified", ctx.exception.error)
+
+    def test_a3_the_opt_out_still_never_mints_verified_looking_evidence(self):
+        """The forgery-of-evidence half: core must not mint a record that
+        says a named human exercised oversight when nothing checked.
+
+        Now reachable only via the documented escape hatch -- and it has to
+        keep holding there, because that is the configuration a 0.1.x
+        deployment lands on when it takes the one-liner rather than wiring up
+        credentials. Downgrading the default must not also downgrade the
+        provenance.
+        """
+        from app.principal import resolve_approver
+        os.environ.pop("REEFLEX_RESOLVER_TOKENS", None)
+        os.environ["REEFLEX_REQUIRE_VERIFIED_APPROVER"] = "false"
         got = resolve_approver("any-token", "human", "leo.david")
         self.assertFalse(got["verified"])
         self.assertEqual("asserted", got["source"])

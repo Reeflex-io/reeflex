@@ -1,0 +1,11 @@
+{
+  "_comment": "Bearer token -> the approving principal that token IS. Read by BOTH sides of the WordPress live-core harnesses: reeflex-core is started with REEFLEX_RESOLVER_TOKENS pointed at this file (core accepts a path as well as inline JSON), and wp-stubs.php's reeflex_harness_token_for() looks up the token to send for whichever principal a scenario approves as. One file so the two sides cannot drift; adding a principal to a harness means adding one line here. Synthetic fixture credentials for a throwaway local core -- never deploy this file.",
+
+  "harness-tok-conformance-tester": {"type": "human", "id": "conformance-tester"},
+  "harness-tok-admin-tester": {"type": "human", "id": "admin-tester"},
+  "harness-tok-fanout-tester": {"type": "human", "id": "fanout-regression-tester"},
+  "harness-tok-dedup-tester": {"type": "human", "id": "dedup-regression-tester"},
+
+  "_comment_actor": "conformance-demo.php's H10 proves the four-eyes guard (check 5) refuses a resolve where the approver IS the raising agent. Since 0.2.0 check 4 runs first, so without a credential bound to that identity H10 would be refused principal_not_verified and would never reach the guard it exists to test -- a 403 for the wrong reason, scored as a pass. This binding exists so H10 keeps testing what it claims to.",
+  "harness-tok-wordpress-agent": {"type": "human", "id": "agent:wordpress"}
+}

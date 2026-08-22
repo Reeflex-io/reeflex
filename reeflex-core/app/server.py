@@ -64,16 +64,21 @@ it:
                                   -> 403 principal_mismatch, and a token with
                                   no binding -> 403 principal_not_verified.
   REEFLEX_REQUIRE_VERIFIED_APPROVER
-                                  true/1/yes -> an unverifiable approver is
-                                  refused outright (403 principal_not_verified).
-                                  A deployment that CLAIMS four-eyes must set
-                                  this (or the token map above).
+                                  ON BY DEFAULT SINCE 0.2.0.  An unverifiable
+                                  approver is refused outright (403
+                                  principal_not_verified, carrying a `remedy`
+                                  object that names the principal and the two
+                                  settings that would change the answer).
+                                  `=false` restores the 0.1.x behaviour.
 
-With neither set, resolution still works — but the hold record, the
-hold.resolved webhook and the Art.14 audit line now carry
-`decided_by_verified: false` / `principal_source: "asserted"`, so an
-unverified claim is no longer indistinguishable from a real human decision,
-and core warns on stderr.  The `decided_by` "{type}:{id}" shape is unchanged.
+So OUT OF THE BOX a hold cannot be resolved by an approver core cannot
+authenticate: the deployment either binds credentials (REEFLEX_RESOLVER_TOKENS)
+or says, explicitly, that it does not want them bound.  With the opt-out set,
+resolution still works — but the hold record, the hold.resolved webhook and
+the Art.14 audit line carry `decided_by_verified: false` / `principal_source:
+"asserted"`, so an unverified claim is not indistinguishable from a real human
+decision, and core warns on stderr.  The `decided_by` "{type}:{id}" shape is
+unchanged in every case.
 
 NON_RESOLVABLE_RULES: {"irreversible_systemic_prod"}.  Defensive guard:
 systemic is a terminal deny and should never be a hold, but we guard anyway.
@@ -177,12 +182,36 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
     # Auth
     # ------------------------------------------------------------------
 
-    def _authorized(self) -> bool:
+    def _authorized(self, *, allow_resolver_tokens: bool = False) -> bool:
         """Return True if the request is authorized.
 
         Auth is OPTIONAL: if REEFLEX_AUTH_TOKEN is unset or empty the method
         always returns True (backward-compatible).  When set, the request must
         supply a matching bearer token.  Comparison is constant-time.
+
+        `allow_resolver_tokens` — A RESOLVER CREDENTIAL IS ALSO A CREDENTIAL.
+        Measured while flipping REEFLEX_REQUIRE_VERIFIED_APPROVER on by default
+        (RFX-84): with REEFLEX_AUTH_TOKEN set, the ONLY bearer that gets past
+        this method is that one shared string — so the only principal a
+        deployment could bind in REEFLEX_RESOLVER_TOKENS was the one mapped to
+        the gate's own token.  Every other approver's credential was refused
+        401 at the door and never reached the verification it was created for.
+        A deployment with auth enabled therefore could not have two verified
+        approvers, which is to say it could not have four-eyes at all.
+
+        That was a latent limitation of an OPT-IN feature.  Making verified
+        approvers the default puts it on the default path, so it is closed
+        here: on the hold-resolution routes ONLY, a bearer that
+        `REEFLEX_RESOLVER_TOKENS` binds to a principal is accepted as
+        authenticated.  It is a secret the operator issued, for exactly this
+        purpose, and it names who it belongs to — strictly more identifying
+        than the shared token it is being accepted alongside.
+
+        SCOPED TO THE HOLDS ROUTES, DELIBERATELY.  An approver's credential
+        does NOT become a key to `POST /v1/decide`: the party that approves
+        actions and the party that submits them are different roles, and this
+        default exists to keep them apart.  So `/v1/decide` still takes the
+        gate token and nothing else.
         """
         expected = os.environ.get("REEFLEX_AUTH_TOKEN")
         if not expected:
@@ -192,7 +221,15 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
         if not header.startswith(prefix):
             return False
         provided = header[len(prefix):].strip()
-        return hmac.compare_digest(provided, expected)
+        if hmac.compare_digest(provided, expected):
+            return True
+        if allow_resolver_tokens:
+            # principal_for_token() is itself a constant-time compare against
+            # every configured token (app/principal.py), so this does not
+            # become a timing oracle for the resolver map.
+            from .principal import principal_for_token  # type: ignore[import]
+            return principal_for_token(provided) is not None
+        return False
 
     # ------------------------------------------------------------------
     # GET — /healthz + /v1/holds routes
@@ -372,8 +409,11 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
 
     def _handle_resolve_hold(self, hold_id: str) -> None:
-        # Auth
-        if not self._authorized():
+        # Auth. A resolver credential counts here (see _authorized): an
+        # approver whose token REEFLEX_RESOLVER_TOKENS binds to a principal
+        # must be able to reach the endpoint that verifies it, or the map can
+        # only ever hold the one principal bound to the shared gate token.
+        if not self._authorized(allow_resolver_tokens=True):
             self._respond(
                 401,
                 {"error": "unauthorized"},
@@ -513,14 +553,19 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
         try:
             approver = resolve_approver(_bearer, principal_type, principal_id)
         except PrincipalRefused as refused:
-            self._respond(
-                403,
-                {
-                    "error": refused.error,
-                    "reason": refused.reason,
-                    "hold_id": hold_id,
-                },
-            )
+            # `remedy` is additive (see principal.PrincipalRefused): a refusal
+            # this core ships as a DEFAULT has to carry its own instructions,
+            # and a dashboard should not have to string-match `reason` to
+            # render them. Omitted entirely when empty, so the response shape
+            # for a refusal with nothing useful to say is unchanged.
+            body = {
+                "error": refused.error,
+                "reason": refused.reason,
+                "hold_id": hold_id,
+            }
+            if refused.remedy:
+                body["remedy"] = refused.remedy
+            self._respond(403, body)
             return
 
         # The verified principal is authoritative from here on -- the rest of

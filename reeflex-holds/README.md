@@ -79,6 +79,20 @@ expected -- check the originating adapter for its own resubmission /
 > unification (accepting `REEFLEX_CORE_TOKEN` with `REEFLEX_TOKEN` as a
 > fallback) is a candidate for a future 0.1.1, not implemented here.
 
+> **`REEFLEX_TOKEN` stopped being optional for `approve`/`reject` against a
+> reeflex-core 0.2.0+ default deployment (RFX-84).** Core now defaults to
+> `REEFLEX_REQUIRE_VERIFIED_APPROVER=true`, which means it takes the approving
+> principal from the **credential**, not from `REEFLEX_PRINCIPAL`. A resolve
+> made with no bearer token — or with one core has no binding for — is refused
+> `403 principal_not_verified`, and this client surfaces core's own `reason`
+> verbatim, which names the principal and the two settings that would change
+> the answer. To resolve holds against such a core, ask its operator for the
+> bearer token bound to your principal in core's `REEFLEX_RESOLVER_TOKENS` and
+> put it in `REEFLEX_TOKEN`. `REEFLEX_PRINCIPAL` must then *agree* with that
+> binding: assert someone else's identity and core answers `403
+> principal_mismatch` rather than silently substituting. `list_holds` /
+> `get_hold` / `get_freeze_status` are unaffected.
+
 ## Why the `mcp` SDK
 
 This package's *only* dependency is the official

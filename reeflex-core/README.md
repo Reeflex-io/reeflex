@@ -412,9 +412,11 @@ Two environment variables close this:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `REEFLEX_RESOLVER_TOKENS` | _(unset)_ | JSON string or file path mapping a bearer token to the principal that token **is**: `{"tok_alice": {"type":"human","id":"alice@example.com"}}`. When set, the approver is taken from the **credential**. A body principal that disagrees → `403 principal_mismatch`; a token with no binding → `403 principal_not_verified`. Re-read per request, so the map rotates without a restart. |
-| `REEFLEX_REQUIRE_VERIFIED_APPROVER` | _(unset / false)_ | `true`/`1`/`yes` → an approver core cannot verify is refused outright (`403 principal_not_verified`). |
+| `REEFLEX_REQUIRE_VERIFIED_APPROVER` | **`true`** (default since 0.2.0) | An approver core cannot verify is refused outright (`403 principal_not_verified`), with a `remedy` object naming the principal and what would change the answer. `false`/`0`/`no`/`off` opts out; anything unrecognised reads as the default, so a typo cannot silently disable the guard. |
 
-**A deployment that claims four-eyes MUST set one of these.** With neither set, resolution still works — but the hold record, the `hold.resolved` webhook and the `hold_resolution` audit line carry:
+**Since 0.2.0 a deployment that does NOT want four-eyes must say so.** The default refuses, so the question is answered out of the box rather than inherited. **This is a breaking change for anyone upgrading from 0.1.x with self-asserted approvals** — see the CHANGELOG entry for who it breaks and the one-line escape hatch.
+
+With the opt-out set (`REEFLEX_REQUIRE_VERIFIED_APPROVER=false`) resolution still works — but the hold record, the `hold.resolved` webhook and the `hold_resolution` audit line carry:
 
 ```jsonc
 "decided_by": "human:leo.david",     // unchanged wire shape
@@ -536,7 +538,7 @@ Consumers (Camunda, Flowable, n8n, SOAR playbooks) are documented as integration
 | `REEFLEX_HOLD_TTL_SECONDS` | `14400` (4 hours) | Time-to-live for a pending hold. A hold past this TTL evaluates to `deny`. |
 | `REEFLEX_FREEZE` | _(unset / false)_ | Set to `true`, `1`, or `yes` to deny all non-read verbs immediately. Hot-reloadable without restart. |
 | `REEFLEX_RESOLUTION_POLICY` | _(unset)_ | JSON string or file path. Shape: `{"default":["human"],"<rule_short_name>":["human","agent"]}`. Absent = human-only everywhere. |
-| `REEFLEX_RESOLVER_TOKENS` | _(unset)_ | JSON string or file path binding a bearer token to the principal it **is**: `{"tok": {"type":"human","id":"alice"}}`. Absent = the asserted approver cannot be verified and is recorded `decided_by_verified: false`. See [Approver verification](#approver-verification-rfx-core-2). |
-| `REEFLEX_REQUIRE_VERIFIED_APPROVER` | _(unset / false)_ | `true`/`1`/`yes` = refuse to resolve a hold whose approver core cannot verify (`403 principal_not_verified`). |
+| `REEFLEX_RESOLVER_TOKENS` | _(unset)_ | JSON string or file path binding a bearer token to the principal it **is**: `{"tok": {"type":"human","id":"alice"}}`. Absent = the asserted approver cannot be verified, and since 0.2.0 that is a refusal rather than a `decided_by_verified: false` record. See [Approver verification](#approver-verification-rfx-core-2). |
+| `REEFLEX_REQUIRE_VERIFIED_APPROVER` | **`true`** (default since 0.2.0) | Refuse to resolve a hold whose approver core cannot verify (`403 principal_not_verified`). Set `false`/`0`/`no`/`off` for the 0.1.x behaviour; an unrecognised value reads as the default. |
 | `REEFLEX_WEBHOOK_URL` | _(unset)_ | Outbound webhook endpoint. Absent = no webhook, no background thread. |
 | `REEFLEX_WEBHOOK_QUEUE_SIZE` | `1000` | Max in-memory queue depth before events are dropped. |

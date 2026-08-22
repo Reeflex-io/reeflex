@@ -18,6 +18,7 @@ Run:
 
 from __future__ import annotations
 
+import contextlib
 import http.server
 import json
 import os
@@ -40,6 +41,53 @@ if str(_repo_root) not in sys.path:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# THESE TESTS RUN THE SHIPPED CONFIGURATION, NOT A RELAXED ONE (RFX-84, 0.2.0).
+#
+# `REEFLEX_REQUIRE_VERIFIED_APPROVER` now defaults to TRUE, so a resolve made
+# with a credential core cannot tie to an approving principal is refused 403
+# `principal_not_verified`. Every resolve test below used to POST with no
+# Authorization header at all, which is precisely the case the new default
+# refuses.
+#
+# There were two ways to keep them green and only one of them is honest:
+#
+#   * set REEFLEX_REQUIRE_VERIFIED_APPROVER=false for the module — green, and
+#     the suite would then never exercise the configuration we actually ship.
+#     The default would be tested by nothing.
+#   * give the caller a credential that IS bound to the principal it approves
+#     as — which is what a deployment that wants four-eyes does, and what the
+#     tests were always implicitly pretending.
+#
+# The second. `_as_credential()` binds a one-off bearer token to one principal
+# for the duration of one call (`REEFLEX_RESOLVER_TOKENS` is re-read per
+# request, so no restart and no server fixture change), and `_post(...,
+# token=...)` sends it. A test that wants the REFUSAL passes no token, and
+# there are now tests for both postures — see TestVerifiedApproverDefault.
+
+_BOUND_TOKEN = "tok-test-bound-credential"
+
+
+@contextlib.contextmanager
+def _as_credential(principal: dict | None):
+    """Bind `_BOUND_TOKEN` to `principal` for the duration of the block.
+
+    `principal` is {"type": ..., "id": ...} — the principal the credential IS,
+    which core takes as authoritative. None leaves the map absent, i.e. the
+    caller holds a credential bound to nobody.
+    """
+    saved = os.environ.get("REEFLEX_RESOLVER_TOKENS")
+    if principal is None:
+        os.environ.pop("REEFLEX_RESOLVER_TOKENS", None)
+    else:
+        os.environ["REEFLEX_RESOLVER_TOKENS"] = json.dumps({_BOUND_TOKEN: principal})
+    try:
+        yield _BOUND_TOKEN if principal is not None else None
+    finally:
+        if saved is None:
+            os.environ.pop("REEFLEX_RESOLVER_TOKENS", None)
+        else:
+            os.environ["REEFLEX_RESOLVER_TOKENS"] = saved
 
 def _fresh_session() -> str:
     return f"hil_sess_{uuid.uuid4().hex[:12]}"
@@ -1230,16 +1278,28 @@ class TestHoldsAPI(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read().decode("utf-8"))
 
-    def _post(self, path: str, body: dict) -> tuple[int, dict]:
+    def _post(self, path: str, body: dict, token: str | None = None) -> tuple[int, dict]:
         payload = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(f"{self._base_url}{path}", data=payload, method="POST")
         req.add_header("Content-Type", "application/json; charset=utf-8")
         req.add_header("Content-Length", str(len(payload)))
+        if token:
+            req.add_header("Authorization", "Bearer " + token)
         try:
             with urllib.request.urlopen(req) as resp:
                 return resp.status, json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    def _resolve_as(self, hold_id: str, body: dict) -> tuple[int, dict]:
+        """POST a resolve with a credential BOUND to the principal in `body`.
+
+        The shipped posture (RFX-84): the approver is established from the
+        credential, not from the request body. Tests that want the refusal
+        call `_post` directly with no token.
+        """
+        with _as_credential(body["principal"]) as token:
+            return self._post(f"/v1/holds/{hold_id}/resolve", body, token=token)
 
     def _create_hold(self) -> dict:
         """Directly create a hold in the store and return the record."""
@@ -1292,8 +1352,8 @@ class TestHoldsAPI(unittest.TestCase):
 
     def test_resolve_approve_returns_200(self) -> None:
         rec = self._create_hold()
-        status, body = self._post(
-            f"/v1/holds/{rec['id']}/resolve",
+        status, body = self._resolve_as(
+            rec["id"],
             {
                 "decision": "approve",
                 "principal": {"type": "human", "id": "supervisor:leo"},
@@ -1307,8 +1367,8 @@ class TestHoldsAPI(unittest.TestCase):
 
     def test_resolve_reject_returns_200(self) -> None:
         rec = self._create_hold()
-        status, body = self._post(
-            f"/v1/holds/{rec['id']}/resolve",
+        status, body = self._resolve_as(
+            rec["id"],
             {
                 "decision": "reject",
                 "principal": {"type": "human", "id": "supervisor:leo"},
@@ -1344,13 +1404,13 @@ class TestHoldsAPI(unittest.TestCase):
     def test_resolve_already_approved_returns_409(self) -> None:
         rec = self._create_hold()
         # First resolution
-        self._post(
-            f"/v1/holds/{rec['id']}/resolve",
+        self._resolve_as(
+            rec["id"],
             {"decision": "approve", "principal": {"type": "human", "id": "leo"}},
         )
         # Second resolution attempt
-        status, body = self._post(
-            f"/v1/holds/{rec['id']}/resolve",
+        status, body = self._resolve_as(
+            rec["id"],
             {"decision": "approve", "principal": {"type": "human", "id": "leo"}},
         )
         self.assertEqual(status, 409, f"expected 409 for double-resolve, got {status}: {body}")
@@ -1377,8 +1437,12 @@ class TestHoldsAPI(unittest.TestCase):
         env = _base_envelope(agent_id="agent:test-hil")
         rec = holds_mod.create_hold(env, "reeflex.policy/irreversible_broad_prod")
 
-        status, body = self._post(
-            f"/v1/holds/{rec['id']}/resolve",
+        # Bound credential on purpose: check 4 must PASS so that check 5 is the
+        # thing that refuses. A 403 for `principal_not_verified` here would say
+        # nothing about the four-eyes guard -- the exact wrong-reason trap the
+        # RFX-97 gate scores as INCONCLUSIVE rather than as a pass.
+        status, body = self._resolve_as(
+            rec["id"],
             {
                 "decision": "approve",
                 "principal": {"type": "human", "id": "agent:test-hil"},  # same as agent.id
@@ -1401,8 +1465,8 @@ class TestHoldsAPI(unittest.TestCase):
         }
         os.environ["REEFLEX_RESOLUTION_POLICY"] = json.dumps(policy)
         try:
-            status, body = self._post(
-                f"/v1/holds/{rec['id']}/resolve",
+            status, body = self._resolve_as(
+                rec["id"],
                 {
                     "decision": "approve",
                     "principal": {"type": "agent", "id": "auto-approver:ci"},
@@ -1880,13 +1944,15 @@ class TestGapB_FullHttpE2E(unittest.TestCase):
 
     # ---- HTTP helpers (all calls have explicit timeout=3s) ----
 
-    def _post(self, path: str, body: dict) -> tuple[int, dict]:
+    def _post(self, path: str, body: dict, token: str | None = None) -> tuple[int, dict]:
         payload = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
             f"{self._base_url}{path}", data=payload, method="POST"
         )
         req.add_header("Content-Type", "application/json; charset=utf-8")
         req.add_header("Content-Length", str(len(payload)))
+        if token:
+            req.add_header("Authorization", "Bearer " + token)
         try:
             with urllib.request.urlopen(req, timeout=3) as resp:
                 return resp.status, json.loads(resp.read().decode("utf-8"))
@@ -1955,7 +2021,12 @@ class TestGapB_FullHttpE2E(unittest.TestCase):
             "decision": "approve",
             "principal": {"type": "human", "id": "leo"},
         }
-        status2, resp2 = self._post(f"/v1/holds/{hold_id}/resolve", resolve_body)
+        # The approving human holds a credential bound to them (RFX-84, 0.2.0):
+        # this is the four-step path a deployment that claims four-eyes runs,
+        # so the E2E walks it rather than the opt-out.
+        with _as_credential(resolve_body["principal"]) as _tok:
+            status2, resp2 = self._post(
+                f"/v1/holds/{hold_id}/resolve", resolve_body, token=_tok)
 
         print(f"[GAP_B/step2] status={status2} hold_status={resp2.get('status')}")
 
@@ -2110,6 +2181,138 @@ class TestGapC_ExpiredHoldResubmit(unittest.TestCase):
             "reeflex_hold_expired", resp.get("reason", ""),
             f"GAP C: reason must contain 'reeflex_hold_expired', got: {resp.get('reason')!r}"
         )
+
+
+# ===========================================================================
+# T5 — A RESOLVER CREDENTIAL IS ALSO A CREDENTIAL (RFX-84, 0.2.0)
+# ===========================================================================
+
+class TestResolverTokenIsAlsoAuth(unittest.TestCase):
+    """With REEFLEX_AUTH_TOKEN set, a bound approver must reach /resolve.
+
+    MEASURED WHILE FLIPPING THE DEFAULT, and this is why the class exists.
+    `_authorized()` compared the bearer against the ONE shared
+    REEFLEX_AUTH_TOKEN, so every approver credential in REEFLEX_RESOLVER_TOKENS
+    except the one that happened to equal the gate token was refused 401 at the
+    door -- before reaching the verification it was created for. An
+    authenticated deployment could therefore bind exactly one approver, which
+    is to say it could not have four-eyes at all.
+
+    Latent while verified approvers were opt-in; on the default path the
+    moment REEFLEX_REQUIRE_VERIFIED_APPROVER defaults to true. So:
+
+      * a resolver-bound token is accepted on /v1/holds/{id}/resolve,
+      * an unknown token is still 401 there,
+      * and it is NOT accepted on /v1/decide -- the party that approves
+        actions and the party that submits them stay different roles.
+    """
+
+    _srv: http.server.HTTPServer
+    _base_url: str
+
+    AUTH = "gate-shared-token"
+    APPROVER_TOKEN = "tok-approver-not-the-gate-token"
+    APPROVER = {"type": "human", "id": "alice@example.com"}
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from app.server import _DecideHandler
+        cls._tmp = tempfile.NamedTemporaryFile(
+            suffix=".jsonl", delete=False, prefix="reeflex_hil_authmix_")
+        cls._tmp.close()
+        os.unlink(cls._tmp.name)
+        cls._saved = {k: os.environ.get(k) for k in
+                      ("REEFLEX_AUTH_TOKEN", "REEFLEX_RESOLVER_TOKENS",
+                       "REEFLEX_HOLDS_PATH")}
+        os.environ["REEFLEX_HOLDS_PATH"] = cls._tmp.name
+        os.environ["REEFLEX_AUTH_TOKEN"] = cls.AUTH
+        os.environ["REEFLEX_RESOLVER_TOKENS"] = json.dumps(
+            {cls.APPROVER_TOKEN: cls.APPROVER})
+
+        import app.holds as holds_mod
+        holds_mod._reset(cls._tmp.name)
+
+        cls._srv = http.server.HTTPServer(("127.0.0.1", 0), _DecideHandler)
+        cls._base_url = "http://127.0.0.1:%d" % cls._srv.server_address[1]
+        threading.Thread(target=cls._srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._srv.shutdown()
+        for k, v in cls._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        try:
+            os.unlink(cls._tmp.name)
+        except FileNotFoundError:
+            pass
+
+    def _post(self, path: str, body: dict, token: str | None) -> tuple[int, dict]:
+        payload = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(f"{self._base_url}{path}", data=payload,
+                                     method="POST")
+        req.add_header("Content-Type", "application/json; charset=utf-8")
+        if token:
+            req.add_header("Authorization", "Bearer " + token)
+        try:
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8")
+            return exc.code, (json.loads(raw) if raw else {})
+
+    def _hold(self) -> str:
+        import app.holds as holds_mod
+        env = _base_envelope(verb="delete", environment="production",
+                             agent_id="agent:some-other-bot")
+        return holds_mod.create_hold(env, "reeflex.policy/irreversible_broad_prod")["id"]
+
+    def test_a_bound_approver_token_is_accepted_on_resolve(self) -> None:
+        hold_id = self._hold()
+        status, body = self._post(
+            f"/v1/holds/{hold_id}/resolve",
+            {"decision": "approve", "principal": self.APPROVER,
+             "reason": "the approver holds their own credential"},
+            token=self.APPROVER_TOKEN)
+        print(f"\n[T_authmix/bound_approver] status={status} body={json.dumps(body)}")
+        self.assertEqual(status, 200,
+                         f"a bound approver must not be 401'd at the door: {body}")
+        self.assertEqual(body.get("status"), "approved")
+        self.assertTrue(body.get("decided_by_verified"),
+                        "the approver came from the credential; it is verified")
+
+    def test_the_shared_gate_token_still_works_on_resolve(self) -> None:
+        """No regression: the existing credential is still a credential.
+
+        It is unbound, so the resolve is refused -- but by the VERIFICATION
+        check, not by auth. 403, not 401, is the whole distinction.
+        """
+        hold_id = self._hold()
+        status, body = self._post(
+            f"/v1/holds/{hold_id}/resolve",
+            {"decision": "approve", "principal": self.APPROVER},
+            token=self.AUTH)
+        self.assertEqual(status, 403, f"expected the verification refusal: {body}")
+        self.assertEqual(body.get("error"), "principal_not_verified")
+
+    def test_an_unknown_token_is_still_401_on_resolve(self) -> None:
+        hold_id = self._hold()
+        status, body = self._post(
+            f"/v1/holds/{hold_id}/resolve",
+            {"decision": "approve", "principal": self.APPROVER},
+            token="tok-nobody-issued-this")
+        self.assertEqual(status, 401, f"auth must not be widened to anything: {body}")
+
+    def test_an_approver_token_is_NOT_a_key_to_decide(self) -> None:
+        """The role separation this default exists to keep."""
+        status, body = self._post("/v1/decide",
+                                  _base_envelope(verb="read"),
+                                  token=self.APPROVER_TOKEN)
+        print(f"\n[T_authmix/decide_with_approver_token] status={status}")
+        self.assertEqual(status, 401,
+                         "an approver's credential must not submit actions")
 
 
 # ===========================================================================

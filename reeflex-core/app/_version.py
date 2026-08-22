@@ -6,4 +6,8 @@
 #
 # Convention: bump this together with the CHANGELOG [x.y.z] entry.
 
-CORE_VERSION: str = "0.1.13"
+# 0.2.0 and not 0.1.16: REEFLEX_REQUIRE_VERIFIED_APPROVER now defaults to true,
+# which CHANGES WHAT GETS ALLOWED for anyone running the OSS core with
+# self-asserted approvals. A default that moves the allow/refuse line is not a
+# patch, whatever the size of the diff. See CHANGELOG [0.2.0].
+CORE_VERSION: str = "0.2.0"

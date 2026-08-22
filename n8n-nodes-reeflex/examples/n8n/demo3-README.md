@@ -53,6 +53,17 @@ in the workflow.
    `REEFLEX_RESOLUTION_POLICY`; and (b) the id (`demo3-approver`) **must
    differ from the acting agent** (`agent:n8n-demo3-approval-loop`) or core
    returns `403 actor_is_approver` — the approver can never be the actor.
+
+   **Against a reeflex-core 0.2.0+ default deployment this node also needs a
+   credential bound to `human:demo3-approver`.** Core now defaults to
+   `REEFLEX_REQUIRE_VERIFIED_APPROVER=true` and takes the approver from the
+   **credential**, not the body: with no binding the resolve is refused `403
+   principal_not_verified`, and with a binding for a *different* principal it
+   is refused `403 principal_mismatch`. Ask the core operator for the bearer
+   token bound to your approver in `REEFLEX_RESOLVER_TOKENS` and put it in the
+   node's `Authorization: Bearer …` header. Cores still running 0.1.x, or
+   started with `REEFLEX_REQUIRE_VERIFIED_APPROVER=false`, accept the body
+   assertion as before — and record `decided_by_verified: false` for it.
    This step records the approval; it does **not** re-run the guarded action.
 4. **Resubmit to /v1/decide** — a second HTTP Request node reuses
    `reeflex.envelope` from the Reeflex Gate node (spreads it, then sets
