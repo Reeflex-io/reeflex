@@ -335,13 +335,26 @@ drops cases from its own total reads as "covered everything".
   this covered needs a policy-side rule.
 - **Stub signing**: `meta.signature = "ed25519:stub:..."`.  UPGRADE: Vault-backed
   ed25519 signing once the key management path is implemented (SPEC §6 note).
+- **Four families the classifier cannot see at all** (RFX-158): the program
+  arrives on stdin (`curl … | sh`), the program is in a file (`bash deploy.sh`,
+  `python3 deploy.py`), the command word is expanded by the shell
+  (`$RM -rf …`, `$(echo rm) …`), or the destruction runs on another host
+  (`ssh prod 'rm -rf /srv/data'`, priced as the outbound `emit` it is).  The
+  destruction is not in the command string, so no string-matching classifier
+  can price it.  **`REEFLEX_CLAUDE_STRICT=1` does cover five of the six** —
+  measured, not asserted: they are all unrecognised *execute* commands, which
+  strict mode prices `irreversible`+`broad`.  The `ssh` case is not one of
+  them (it is classified `emit`, not unrecognised).
 - **REEFLEX_CLAUDE_STRICT**: unset by default so coding agents are not blocked on
   every `npm install`.  When set, every UNRECOGNISED command is priced
-  irreversible + broad, so in production it reaches a human — measured on the
-  conformance corpus, that moves `pytest`, `npm install` and `make build`
-  from `allow` to `ask`.  That is the whole point of the knob: it is the noisy
-  setting, and before RFX-145 it was neither noisy nor safe, just differently
-  worded.  UPGRADE: use a per-command allow-list in policy instead.
+  irreversible + broad, so in production it reaches a human — measured live on
+  the conformance corpus, **it moves 23 of 82 verdicts**, including `pytest`,
+  `npm install` and `make build` from `allow` to `ask`, and five of the six
+  RFX-158 gaps above.  That is the whole point of the knob: it is the noisy
+  setting, and it is the only lever that covers the commands the classifier
+  cannot read.  Before RFX-145 it was neither noisy nor safe — it moved
+  **zero** verdicts and only changed a word in the audit log.
+  UPGRADE: use a per-command allow-list in policy instead.
 - **approval re-submission**: the hook sets `approval.present = false` at
   interception.  Re-submission with `approval.present = true` after human
   approval is the caller's responsibility (Claude Code surfaces the `ask` dialog;
