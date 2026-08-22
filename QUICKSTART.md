@@ -386,11 +386,15 @@ the most-restrictive option (never omitted).
 
 The three axes are the load-bearing output of normalization:
 
-| Axis | Values (least to most restrictive) |
+| Axis | Values (ascending real-world severity) |
 |---|---|
 | `reversibility` | `reversible` → `recoverable` → `irreversible` |
 | `blast_radius` | `single` → `scoped` → `broad` → `systemic` |
 | `externality` | `internal` → `outbound` → `physical` |
+
+Severity order is not restriction order. In the base pack `externality`'s
+`physical` is read by no rule (RFX-129) — `outbound` is the member that
+restricts, and it is what an unrecognised value coerces to.
 
 The normalized verb (`read`, `create`, `update`, `delete`, `execute`,
 `transact`, `emit`) is also required. The backend-specific operation id is

@@ -211,14 +211,24 @@ from what you know about the action. Map your backend operations to:
   (e.g. `wordpress/delete-post`).
 - All three axes (SPEC §4):
 
-  | Axis | Values (least to most restrictive) |
-  |---|---|
-  | `reversibility` | `reversible` → `recoverable` → `irreversible` |
-  | `blast_radius` | `single` → `scoped` → `broad` → `systemic` |
-  | `externality` | `internal` → `outbound` → `physical` |
+  | Axis | Values (ascending real-world severity) | Most restrictive **in the base pack** |
+  |---|---|---|
+  | `reversibility` | `reversible` → `recoverable` → `irreversible` | `irreversible` |
+  | `blast_radius` | `single` → `scoped` → `broad` → `systemic` | `systemic` |
+  | `externality` | `internal` → `outbound` → `physical` | `outbound` |
 
-  When uncertain, default to the most restrictive value — never omit an
-  axis or guess permissive.
+  When uncertain, default to the value in the **third** column — the one the
+  shipped rules actually restrict on — never omit an axis and never guess
+  permissive.
+
+  Those two columns differ for `externality` and the difference is not
+  cosmetic: `physical` is the most severe thing that can happen in the world
+  and is read by **no rule in the base pack** (RFX-129), while `outbound` is
+  the only member with a restrictive effect (R5's `external_sends` budget). An
+  adapter that "played it safe" by defaulting to `physical` was defaulting to
+  *uncharged* — core itself did exactly that until RFX-129. Read the rules
+  before you decide which member is conservative; severity prose is not a
+  decision effect.
 
 - A stable `agent.session_id` (**required**). Core uses this key to track
   cumulative action budgets for fragmentation resistance (SPEC §4.1). A

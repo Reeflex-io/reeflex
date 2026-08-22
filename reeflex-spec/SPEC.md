@@ -132,7 +132,13 @@ Every action is priced on three axes. This is what makes coverage intrinsic inst
 **`externality`** — does it reach beyond the system?
 - `internal` — stays inside the controlled system
 - `outbound` — reaches third parties (email, API, publish)
-- `physical` — affects the physical world (SCADA, robotics, energy)
+- `physical` — affects the physical world (SCADA, robotics, energy).
+  **The base policy pack does not read this member** (RFX-129): it is a
+  reserved enum value for extension packs, and an action declared `physical`
+  is decided exactly as the same action declared `internal` would be. Do not
+  cite it as coverage. What the base pack reads is `outbound` (R5's
+  `external_sends` budget) and `internal` (R1's label). Whether the base pack
+  should gain a rule of its own for `physical` is open on RFX-129.
 
 Policy reasons in these axes. A rule like *"irreversible + broad + production → require human approval"* protects Postgres, S3, and WordPress identically.
 
@@ -142,6 +148,14 @@ An axis value core does not recognise — absent, misspelled, or a member of no
 closed enum — coerces to the **most-guarded** member (§7's fail-closed bias).
 Core also **records that it did so**, per field, in a core-computed
 `provenance.undeclared` list on the envelope it evaluates.
+
+**"Most-guarded" means what the rules do with a member, not where this section
+lists it.** RFX-129: `externality` coerced to `physical` — last in the list
+above, and read by no rule — so every envelope that landed on the default was
+exempt from the one budget the axis feeds. The coercion target is now
+`outbound`, the member that is measurably most-restrictive. When you add an
+axis or a member, the default belongs to whichever member the pack actually
+reads; `reeflex-core/tests/test_externality_default_rfx129.py` asserts that.
 
 That list is what lets a rule distinguish two things the coerced values look
 identical for:

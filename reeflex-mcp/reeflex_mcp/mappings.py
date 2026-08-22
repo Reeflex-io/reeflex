@@ -16,10 +16,18 @@ PARTIAL AXES (design doc section 8 item 2): a mapping entry may specify only
 SOME of the three axes. Whichever axis it does NOT specify is filled with
 `CORE_AXIS_DEFAULTS` -- deliberately the EXACT SAME restrictive floor
 reeflex-core's own `app/envelope.py` `_AXIS_DEFAULTS` applies to a genuinely
-missing axis value (irreversible / systemic / physical). This is NOT a
+missing axis value (irreversible / systemic / outbound). This is NOT a
 different, gateway-invented "conservative" guess -- it is chosen specifically
 so an operator's partial mapping behaves predictably: an axis you don't set
 here ends up exactly where core would have coerced it anyway, no surprises.
+
+The externality entry was `physical` until RFX-129, on both sides. That is the
+one enum member no rule in the shipped policy pack reads, so a partial mapping
+that omitted `externality` produced an envelope core charged against NOTHING --
+and because THIS module fills the axis before the envelope is sent, core saw
+the value as affirmatively DECLARED and its own coercion never got a look in.
+A gateway that fills an axis owns that axis: the mirror is not decoration, it
+is the only thing standing between a partial mapping and an uncharged budget.
 
 GIGO honesty (design doc section 8, verbatim): "Mapping quality is adapter
 quality. A tool the gateway maps wrong is governed wrong. The starter
@@ -52,12 +60,15 @@ _AXIS_ALLOWED: dict[str, frozenset[str]] = {
     "externality": frozenset({"internal", "outbound", "physical"}),
 }
 
-# MUST match reeflex-core/app/envelope.py `_AXIS_DEFAULTS` exactly (verified
-# while building this package) -- see module docstring "PARTIAL AXES".
+# MUST match reeflex-core/app/envelope.py `_AXIS_DEFAULTS` exactly. That is now
+# CHECKED against core's source rather than asserted here -- see
+# tests/test_mappings.py::test_core_axis_defaults_match_core_envelope_py, whose
+# predecessor compared this dict to a literal in its own file and so could not
+# have detected the drift its docstring promised to catch.
 CORE_AXIS_DEFAULTS: dict[str, str] = {
     "reversibility": "irreversible",
     "blast_radius": "systemic",
-    "externality": "physical",
+    "externality": "outbound",
 }
 
 # The package's own bundled starter mappings (filesystem/github/postgres).

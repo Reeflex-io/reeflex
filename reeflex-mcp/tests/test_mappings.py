@@ -7,11 +7,46 @@ mapping files (filesystem/github/postgres).
 
 from __future__ import annotations
 
+import ast
 import os
+import pathlib
 import tempfile
 import unittest
 
 from reeflex_mcp import mappings
+
+
+def _find_core_envelope_py() -> pathlib.Path | None:
+    """Locate reeflex-core/app/envelope.py by walking up to the monorepo root.
+
+    Returns None when it is not there -- a standalone reeflex-mcp install has
+    no core source tree and there is nothing to cross-check.
+    """
+    for parent in pathlib.Path(__file__).resolve().parents:
+        candidate = parent / "reeflex-core" / "app" / "envelope.py"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _parse_axis_defaults(path: pathlib.Path) -> dict[str, str]:
+    """Read `_AXIS_DEFAULTS` out of core's source with `ast` -- parse, never
+    import: this test must not depend on core being importable, and must not
+    execute core's module-level code to learn one dict literal."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        targets = (
+            [node.target] if isinstance(node, ast.AnnAssign)
+            else node.targets if isinstance(node, ast.Assign)
+            else []
+        )
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id == "_AXIS_DEFAULTS":
+                return ast.literal_eval(node.value)
+    raise AssertionError(
+        "_AXIS_DEFAULTS not found as a module-level assignment in %s -- the "
+        "cross-check cannot silently pass on a parse miss" % (path,)
+    )
 
 
 def _write_yaml(text: str) -> str:
@@ -126,12 +161,47 @@ tools:
         self.assertEqual(cls["externality"], mappings.CORE_AXIS_DEFAULTS["externality"])
 
     def test_core_axis_defaults_match_core_envelope_py(self) -> None:
-        # Pinned literal values verified against reeflex-core/app/envelope.py
-        # `_AXIS_DEFAULTS` while building this package -- if core's defaults
-        # ever change, THIS test should fail loudly rather than silently drift.
+        """The pinned intent -- what this package believes core's floor is.
+
+        This half is a statement of intent, not a drift detector: both sides of
+        the comparison live in reeflex-mcp. The version of this test that
+        shipped before RFX-129 was ONLY this half, while its docstring claimed
+        "if core's defaults ever change, THIS test should fail loudly rather
+        than silently drift" -- it could not, and when core's externality
+        default moved it would have stayed green. The detector is the second
+        test below, which reads core.
+        """
         self.assertEqual(
             mappings.CORE_AXIS_DEFAULTS,
-            {"reversibility": "irreversible", "blast_radius": "systemic", "externality": "physical"},
+            {"reversibility": "irreversible", "blast_radius": "systemic", "externality": "outbound"},
+        )
+
+    def test_core_axis_defaults_are_read_out_of_core_source_not_asserted(self) -> None:
+        """RFX-129: actually READ reeflex-core/app/envelope.py and compare.
+
+        The two packages are not installed together, so this locates core's
+        source by walking up to the monorepo root and parses the assignment
+        with `ast` -- no import of core, no execution of it. Outside the
+        monorepo (a standalone wheel) core's source is genuinely absent and
+        there is nothing to compare, which is the one case where skipping is
+        honest; the pinned-literal test above still runs there.
+        """
+        core_envelope = _find_core_envelope_py()
+        if core_envelope is None:
+            self.skipTest(
+                "reeflex-core/app/envelope.py not present (standalone install, "
+                "not the monorepo) -- nothing to cross-check against"
+            )
+        core_defaults = _parse_axis_defaults(core_envelope)
+        self.assertEqual(
+            core_defaults,
+            mappings.CORE_AXIS_DEFAULTS,
+            "reeflex_mcp.mappings.CORE_AXIS_DEFAULTS has drifted from "
+            "reeflex-core/app/envelope.py _AXIS_DEFAULTS (%s). This gateway "
+            "FILLS the axes it does not have a mapping for, so core never sees "
+            "the axis as missing and never applies its own coercion -- a drift "
+            "here is a partial mapping silently governed by the wrong floor "
+            "(RFX-129)." % (core_envelope,),
         )
 
 
