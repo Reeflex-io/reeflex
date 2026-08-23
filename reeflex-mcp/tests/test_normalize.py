@@ -10,12 +10,44 @@ MCP-annotations tier) -- see normalize.py's module docstring.
 
 from __future__ import annotations
 
+import pathlib
+import re
 import tempfile
 import unittest
 
 import mcp.types as types
 
 from reeflex_mcp import mappings, normalize
+
+# RFX-214: read the value R5's external_sends budget actually charges out of
+# the policy pack instead of mirroring it here. Parse, never invoke -- a regex
+# over source text, no `opa` on PATH required and no import of core.
+_EXTERNAL_SENDS_BLOCK_RE = re.compile(
+    r'dimension\s*==\s*"external_sends".*?input\.axes\.externality\s*==\s*"([a-z_]+)"',
+    re.DOTALL)
+
+
+def _external_sends_counted_value() -> str | None:
+    """The single externality value budgets.rego charges to external_sends, or
+    None when the policy pack is not on disk (a standalone reeflex-mcp install).
+    Raises if the pack cannot be read unambiguously: an instrument that guesses
+    here would turn real drift into a green test."""
+    path = None
+    for parent in pathlib.Path(__file__).resolve().parents:
+        candidate = parent / "reeflex-core" / "policy" / "budgets.rego"
+        if candidate.is_file():
+            path = candidate
+            break
+    if path is None:
+        return None
+    found = set(_EXTERNAL_SENDS_BLOCK_RE.findall(path.read_text(encoding="utf-8")))
+    if len(found) != 1:
+        raise AssertionError(
+            "cannot read the external_sends dimension out of %s: expected "
+            'exactly one `input.axes.externality == "..."` comparison in an '
+            "external_sends block, found %r. The budget's shape changed -- "
+            "update this helper rather than letting it skip." % (path, sorted(found)))
+    return found.pop()
 
 
 def _mapping_registry(yaml_text: str, system: str = "sys1") -> mappings.MappingRegistry:
@@ -172,7 +204,39 @@ class TestClassifyHeuristic(unittest.TestCase):
         self.assertEqual(cls["verb"], "execute")
         self.assertEqual(cls["reversibility"], "irreversible")
         self.assertEqual(cls["blast_radius"], "systemic")
-        self.assertEqual(cls["externality"], "internal")
+        self.assertEqual(cls["externality"], "outbound")
+
+    def test_unmatched_externality_is_a_value_external_sends_charges(self) -> None:
+        """RFX-214: the unmapped floor must not declare the one externality
+        R5's external_sends budget does not count.
+
+        The expected value is READ OUT OF budgets.rego rather than pinned here.
+        A literal in this file would be another unchecked mirror of core -- the
+        defect RFX-216 records -- and would stay green if a policy author
+        renamed the value the budget charges. The invariant is what is asserted:
+        whatever external_sends charges, that is what a tool no tier could
+        identify declares.
+        """
+        counted = _external_sends_counted_value()
+        if counted is None:
+            self.skipTest(
+                "reeflex-core/policy/budgets.rego not present -- standalone "
+                "reeflex-mcp install, nothing to cross-check against")
+        cls = normalize.classify("frobnicate_widget", {})
+        self.assertEqual(
+            cls["externality"], counted,
+            "the unmapped floor declares %r, but R5's external_sends budget "
+            "charges %r -- an operator's send budget cannot bound traffic this "
+            "gateway could not identify (RFX-214)" % (cls["externality"], counted))
+
+    def test_identified_buckets_did_not_move(self) -> None:
+        """RFX-214 is scoped to the ignorance path. A bucket a name prefix DID
+        match keeps the externality it was designed with -- otherwise every
+        `get_*` read would consume the operator's send budget, and R1
+        (verb==read AND externality==internal) would stop matching."""
+        self.assertEqual(normalize.classify("get_widget", {})["externality"], "internal")
+        self.assertEqual(normalize.classify("delete_widget", {})["externality"], "internal")
+        self.assertEqual(normalize.classify("send_widget", {})["externality"], "outbound")
 
     def test_unmatched_blast_radius_is_fixed_not_magnitude_derived(self) -> None:
         # brief section 8: the execute floor is FIXED at systemic, regardless

@@ -163,7 +163,7 @@ Unknown tool -- INCLUDING EVERY mcp__* TOOL (RFX-206):
     verb:          execute
     reversibility: irreversible
     blast_radius:  broad          <-- was `scoped`; see "why broad" below
-    externality:   internal
+    externality:   outbound       <-- was `internal`; RFX-214, see below
     magnitude:     1
 
   Measured on 2026-08-22 against reeflex-core at 759b83f with the shipped
@@ -218,8 +218,16 @@ Unknown tool -- INCLUDING EVERY mcp__* TOOL (RFX-206):
                 This is what makes R5's per-verb budgets able to count these
                 calls at all -- a delete priced `execute` never lands in
                 cumulative.count_by_verb.delete.
-    externality `outbound` for money and send/publish, else `internal`.
-                Feeds R5's external_sends budget.
+    externality `outbound` -- for money and send/publish, and ALSO as the
+                floor (RFX-214).  Feeds R5's external_sends budget.
+                The floor is `outbound` and not `internal` because `internal`
+                is the one value that budget does not charge, and this branch
+                fires precisely when the adapter cannot say what the tool
+                does: an operator's send budget must not be bounded by
+                traffic we failed to identify.  A tool this adapter KNOWS to
+                be internal still declares `internal` -- the change is scoped
+                to the ignorance path, or every file read would consume the
+                send budget.
     magnitude   the largest bounded set the arguments name (a list length, or a
                 count/limit/batch_size), floored at 1.  Feeds R5's
                 objects_touched budget, which weighs EVERY action.
@@ -1347,8 +1355,15 @@ def _classify_unknown(tool_name: str, tool_input: dict) -> dict:
     args = tool_input if isinstance(tool_input, dict) else {}
 
     # --- verb + externality: the floor, escalated by the strongest signal ----
+    # RFX-214: the externality floor is `outbound`, not `internal`.  `internal`
+    # is the one value R5's external_sends budget does not charge, and this
+    # function is exactly the branch that runs when we could not identify the
+    # tool -- so declaring `internal` here told the operator's send budget to
+    # ignore precisely the traffic it cannot vouch for.  The money and emit
+    # branches below now only confirm this value; they no longer have to raise
+    # it, and they are kept because they still set the VERB.
     verb = "execute"
-    externality = "internal"
+    externality = "outbound"
     money = _unknown_money(args)
 
     if money is not None or tokens & _UNKNOWN_MONEY_TOKENS:

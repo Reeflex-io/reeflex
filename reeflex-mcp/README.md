@@ -79,8 +79,17 @@ for the competitive positioning. Track 7 (PyPI publication) is done:
    `send_*`/`get_*`/etc. prefixes (see `reeflex_mcp/normalize.py`). Source
    tag: `heuristic:<bucket>`.
 3. **conservative default** -- nothing above matched; axes are forced to the
-   restrictive floor (`irreversible`/`systemic`/`internal`). Source tag:
+   restrictive floor (`irreversible`/`systemic`/`outbound`). Source tag:
    `heuristic:default`.
+
+   `externality` here is `outbound` because R5's `external_sends` budget
+   counts `outbound` and only that: on the one bucket that exists because the
+   gateway could not identify the tool, declaring `internal` was the single
+   value that charged an operator's send budget nothing (RFX-214). Measured:
+   an unmapped tool at `staging` ran 200 calls against an `external_sends`
+   limit of 50 before `objects_touched` stopped it. Tell the gateway what a
+   tool is -- a mapping or an annotation -- and this floor stops applying to
+   it.
 
 Every envelope carries which tier fired at `context.classification_source`,
 and the gateway logs it to stderr on every call

@@ -193,8 +193,11 @@ resolution**, highest precedence first:
    (→ `create`, outbound), or `get_*`/`list_*`/`read_*`/`search_*` (→ `read`)
    prefix. Source tag: `heuristic:<bucket>`.
 3. **Conservative default** — nothing above matched; axes are forced to the
-   restrictive floor (`irreversible`/`systemic`/`internal`), same fail-closed
+   restrictive floor (`irreversible`/`systemic`/`outbound`), same fail-closed
    spirit as core's own axis coercion. Source tag: `heuristic:default`.
+   `externality` is `outbound` and not `internal` because `internal` is the
+   one value R5's `external_sends` budget does not charge, and this is the
+   bucket for a tool the gateway could not identify at all (RFX-214).
 
 Every envelope carries which tier fired at `context.classification_source`,
 and the gateway logs it to stderr on every call
