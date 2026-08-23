@@ -85,12 +85,36 @@ _LEDGER_PY = _repo_root / "app" / "ledger.py"
 
 
 def _rego_sources() -> dict[str, str]:
-    """Every non-test .rego in the policy dir, by filename."""
-    return {
+    """Every non-test .rego in the policy dir, by filename.
+
+    RFX-217 -- the floor lives here, at the choke point, because four
+    assertions read this and two of them were satisfied by it returning
+    nothing. Measured on 759b83f with `_POLICY_DIR` pointed at an empty
+    directory:
+
+      test_decide_declares_the_paths_only_it_reads     GREEN (vacuous)
+      test_the_policy_is_not_the_only_reader           GREEN (vacuous)
+      test_every_policy_read_is_declared               RED   (already floored)
+      test_no_stale_declarations                       RED   (already floored)
+
+    The two that went red are why the floor is here rather than in each test:
+    they only fail because their assertion happens to point the other way, and
+    the next assertion added over this set inherits nothing from that. A glob
+    that stops matching is what a directory rename, a `.rego` -> `.rego.tmpl`
+    move, or `_POLICY_DIR` resolving one level off looks like from here.
+    """
+
+    sources = {
         p.name: p.read_text(encoding="utf-8")
         for p in sorted(_POLICY_DIR.glob("*.rego"))
         if not p.name.endswith("_test.rego")
     }
+    assert len(sources) >= 2, (
+        f"found {len(sources)} policy file(s) in {_POLICY_DIR} — the canon is "
+        f"reeflex.rego plus budgets.rego, so every assertion over this set is "
+        f"about the glob, not about the policy"
+    )
+    return sources
 
 
 def _envelope(**over) -> dict:
