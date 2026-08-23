@@ -139,7 +139,15 @@ instead of executing. These routes list and resolve holds. All require auth.
 |---|---|
 | `GET /v1/holds?status=&limit=&cursor=` | List holds, filterable by status, paged. |
 | `GET /v1/holds/{id}` | Full detail for one hold. |
-| `POST /v1/holds/{id}/resolve` | Approve or reject a pending hold. |
+| `POST /v1/holds/{id}/resolve` | Approve or reject a pending hold. `decision` is `approve` or `reject`. |
+
+**The list parameters refuse a value they do not recognise (400); they do not
+degrade.** `status` accepts `pending`, `approved`, `rejected`, `expired`,
+`consumed` or `all` (= no filter); `limit` accepts 1–1000; `cursor` must be a
+`next_cursor` still present in the same result set. Until RFX-211 each answered
+HTTP 200 with a wrong result instead — an unrecognised `status` returned an
+empty list that read as "nothing is held", an unrecognised `cursor` silently
+re-served page 1, and an unparseable `limit` silently became 100.
 
 A hold is **single-use** and **time-bound**. Core enforces `actor != approver`
 (the agent that raised the hold can never resolve it), the TTL, and

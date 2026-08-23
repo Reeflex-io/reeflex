@@ -84,6 +84,67 @@ from .appendlog import AppendVerifyError  # noqa: F401  (re-exported for callers
 
 _DEFAULT_TTL_SECONDS = 4 * 3600  # 4 hours
 
+# ---------------------------------------------------------------------------
+# The closed vocabularies of this module (RFX-211, RFX-218)
+# ---------------------------------------------------------------------------
+#
+# WHY THESE ARE CONSTANTS AND NOT LITERALS AT THE CALL SITES.  Every parsed
+# parameter on this store's surface used to answer a word it did not know with
+# a CONFIDENT WRONG ANSWER rather than a refusal:
+#
+#   * list_holds(status=<unrecognised>) filtered by `==`, so an unknown word
+#     yielded an empty list -- the instrument read zero when the answer was not
+#     zero (RFX-211).  `all` and `resolved`, both VALID on reeflex-app's own
+#     holds API, were among the words that read as an all-clear here.
+#   * resolve_hold(decision=<anything but "approve">) fell to an else branch and
+#     REJECTED the hold, so the literal this function's own docstring
+#     documented ("approved") silently recorded the opposite of what the caller
+#     asked for (RFX-218).
+#
+# The same service canonicalizes and fails CLOSED on non-canonical *envelope*
+# input (app/envelope.py F1/F5/F6) precisely so a typo cannot buy a weaker
+# answer.  These two vocabularies are the query-side half of that discipline.
+#
+# HOLD_STATUSES is not a hand-maintained inventory.  tests/test_holds_vocabulary
+# _rfx211_rfx218.py EXERCISES every state transition this module implements,
+# collects the statuses actually written, and asserts the observed set EQUALS
+# this constant -- so adding a sixth status makes that test fail until it is
+# declared here, and the API then accepts it.  A guard pointed at a short
+# inventory is green about the thing it never looked at (qa--018 on RFX-87).
+HOLD_STATUSES: tuple[str, ...] = ("pending", "approved", "rejected", "expired", "consumed")
+
+# The two words resolve_hold() accepts.  Deliberately the SAME vocabulary the
+# HTTP handler validates (server.py `decision not in ("approve", "reject")`) and
+# the same one the published reeflex-holds client raises on: RFX-218's fix shape
+# is "the endpoint already validates; the helper should not disagree with it
+# about the vocabulary."
+RESOLVE_DECISIONS: tuple[str, ...] = ("approve", "reject")
+
+# What `GET /v1/holds?status=` accepts. The five real statuses plus the explicit
+# synonym "all" (= no filter). "all" is accepted rather than refused for one
+# measured reason: it is VALID vocabulary on reeflex-app's own holds API
+# (reeflex_app/api/dashboard.py validates status against
+# {pending, resolved, expired, resolution_failed, all} and 422s anything else),
+# and the published reeflex-holds MCP `list_holds` tool forwards this parameter
+# with NO validation of its own -- so "all" is the word an agent asking "what is
+# held?" reaches for first. Note the two surfaces still do not share a
+# vocabulary: `resolved` is the app's word and `approved`/`rejected`/`consumed`
+# are core's. That divergence is real and is NOT papered over here -- an
+# unrecognised word now names the set it is being checked against.
+LIST_STATUS_FILTERS: tuple[str, ...] = HOLD_STATUSES + ("all",)
+
+# Upper bound on one page. Was applied as a silent clamp in the HTTP handler;
+# now a caller who asks for more is told so.
+MAX_LIST_LIMIT = 1000
+
+
+class UnknownCursor(ValueError):
+    """`list_holds(cursor=...)` was given a cursor absent from the result set.
+
+    A distinct type so the HTTP handler can answer 400 with its own reason code
+    without string-matching a message.
+    """
+
 
 def _holds_path() -> pathlib.Path:
     env_path = os.environ.get("REEFLEX_HOLDS_PATH", "")
@@ -596,16 +657,72 @@ def list_holds(
 
     Parameters
     ----------
-    status : optional filter (pending|approved|rejected|expired|consumed)
-    limit  : max records to return (default 100)
-    cursor : opaque pagination token (hold_id of the last item on the previous page)
+    status : optional filter.  One of LIST_STATUS_FILTERS -- the five
+        HOLD_STATUSES plus the explicit synonym "all", which means NO FILTER
+        (accepted because it is valid vocabulary on reeflex-app's own holds API
+        and is the word an agent driving the published reeflex-holds MCP tool
+        reaches for first).  None also means no filter.  ANYTHING ELSE RAISES
+        ValueError -- see below.
+    limit  : max records to return, 1..MAX_LIST_LIMIT.  Anything else raises.
+    cursor : the `next_cursor` from the previous page -- the id of the last hold
+        on it.  A cursor that is not present in THIS result set raises.
 
     Returns
     -------
     (items, next_cursor)
         items       : list of hold dicts (copies)
         next_cursor : hold_id of the last item if there are more, else None
+
+    WHY THESE RAISE INSTEAD OF DEGRADING (RFX-211 and two siblings found with
+    it).  This is the call an operator -- or an agent holding the published
+    `reeflex-holds` MCP tools -- makes to ask the gate "what is held?", and
+    every one of its parameters used to answer a word it did not know with the
+    most reassuring answer available:
+
+      * status=<unrecognised> filtered by `==` against a value no hold carries,
+        so the reply was `{"items": [], "count": 0}` with HTTP 200 --
+        INDISTINGUISHABLE FROM A GENUINELY EMPTY QUEUE.  Measured false
+        all-clears included "all" and "resolved" (both valid on the app's holds
+        API), "Pending", and "pending " with a trailing space.  RFX-65's
+        month-long invisible pending holds are the precedent for why this
+        matters: something has to look, and a lookup that answers "nothing" to
+        a typo is worse than one that errors.  RFX-211.
+      * cursor=<unrecognised> was applied as `if cursor_positions:` with no
+        else, so a cursor matching no hold was DROPPED and the caller was
+        served PAGE 1 AGAIN -- identical on the wire to a valid first page.  A
+        client paging a large queue therefore either re-reads page 1 forever or
+        concludes it has enumerated everything.  Unfiled when found.
+      * limit=<unparseable> became 100 and limit=0 became 1, silently, in the
+        handler.  Unfiled when found.
+
+    Nothing here changes which actions are allowed -- this is an instrument,
+    not a gate.  What it changes is whether the instrument can report zero when
+    the answer is not zero.
+
+    THE COST, STATED.  A cursor can legitimately fall out of a FILTERED result
+    set between pages: page with status=pending, and if the hold at the cursor
+    is approved before the next request, that id is no longer in the snapshot.
+    That case now raises rather than silently restarting at page 1.  Erroring
+    is the deliberate choice -- a caller told "your cursor is no longer in this
+    result set" can restart on purpose, whereas silent restarting re-serves
+    rows it already processed and can loop forever -- but it IS a behaviour
+    change for that race, so the two cases carry distinguishable messages.
     """
+    if status is not None and status not in LIST_STATUS_FILTERS:
+        raise ValueError(
+            f"status must be one of {list(LIST_STATUS_FILTERS)} or omitted, got "
+            f"{status!r}. Refusing rather than returning an empty list: an "
+            f"unrecognised filter used to read as an all-clear (RFX-211)."
+        )
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_LIST_LIMIT:
+        raise ValueError(
+            f"limit must be an int in 1..{MAX_LIST_LIMIT}, got {limit!r}."
+        )
+
+    # "all" is a synonym for no filter, not a status any hold carries.
+    if status == "all":
+        status = None
+
     with _lock:
         _ensure_loaded()
         all_ids = list(_index.keys())
@@ -628,11 +745,25 @@ def list_holds(
     if status is not None:
         snapshot = [h for h in snapshot if h.get("status") == status]
 
-    # Apply cursor (start AFTER the cursor item)
+    # Apply cursor (start AFTER the cursor item). An unmatched cursor is an
+    # ERROR, not a silent restart at page 1 -- the two failure messages are
+    # distinguishable so a client can tell a typo from the filtered-set race
+    # documented above.
     if cursor:
         cursor_positions = [i for i, h in enumerate(snapshot) if h.get("id") == cursor]
-        if cursor_positions:
-            snapshot = snapshot[cursor_positions[0] + 1:]
+        if not cursor_positions:
+            with _lock:
+                _ensure_loaded()
+                known = cursor in _index
+            raise UnknownCursor(
+                f"cursor {cursor!r} is not in this result set "
+                f"(status={status!r}): "
+                + ("the hold exists but no longer matches this filter -- restart "
+                   "the enumeration"
+                   if known else
+                   "no hold has that id")
+            )
+        snapshot = snapshot[cursor_positions[0] + 1:]
 
     # Apply limit
     has_more = len(snapshot) > limit
@@ -659,7 +790,33 @@ def resolve_hold(
     (T3: status==pending, not expired, non-resolvable guard, actor!=approver);
     this function only writes the state-change record.
 
-    decision : "approved" | "rejected"
+    decision : "approve" | "reject" -- exactly RESOLVE_DECISIONS, which is
+        exactly what server.py's resolve handler and the published
+        reeflex-holds client validate.  ANYTHING ELSE RAISES ValueError.
+
+        THIS DOCSTRING USED TO SAY `"approved" | "rejected"` AND THAT WAS THE
+        BUG (RFX-218).  The implementation was
+        `new_status = "approved" if decision == "approve" else "rejected"`, so
+        the documented literal fell to the else branch and the hold was
+        REJECTED -- no error, no warning, and a return value indistinguishable
+        from a deliberate rejection.  A later resubmission then denied with
+        `reeflex_hold_rejected`, which reads as "the human said no".  The
+        failure direction was safe for the product and wrong for the operator:
+        an Art.14 human-oversight record said a hold was rejected when the
+        integration meant to approve it.
+
+        WHY RAISING, RATHER THAN ALSO ACCEPTING "approved"/"rejected".  A
+        two-valued parameter whose second arm is "everything else" is the
+        defect, not the particular spelling that hit it -- accepting both
+        spellings would leave "Approve", "approve " and "" landing on the same
+        arm.  One vocabulary, and a caller outside it gets an exception at its
+        own call site instead of a wrong record downstream.
+
+        NOT A WIRE CHANGE: server.py rejects anything but approve|reject with
+        400 before reaching here, and reeflex_holds.client.resolve_hold raises
+        ValueError on the same set, so no HTTP caller's behaviour moves.  This
+        closes the in-process path -- tests, and any future caller that trusts
+        the docstring.
 
     verified / principal_source (RFX-CORE-2, keyword-only, additive):
         WHETHER `decided_by` IS EVIDENCE OR MERELY A CLAIM.  The resolve
@@ -681,6 +838,13 @@ def resolve_hold(
         UNCHANGED; this is an additive sibling field, not a reformatting, so
         the holds API, the CLI, the dashboard and Attest all keep parsing it.
     """
+    if decision not in RESOLVE_DECISIONS:
+        raise ValueError(
+            f"decision must be one of {list(RESOLVE_DECISIONS)}, got {decision!r}. "
+            f"Refusing rather than coercing: the previous behaviour silently "
+            f"REJECTED anything that was not exactly 'approve' (RFX-218)."
+        )
+
     decided_ts = _iso_now()
     decided_by = f"{principal_type}:{principal_id}"
     new_status = "approved" if decision == "approve" else "rejected"

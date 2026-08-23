@@ -5,6 +5,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+### Fixed
+
+- **A budget dimension no longer prices an unbounded action as the smallest possible one (RFX-143).**
+
+  `magnitude.count` is an integer `>= 1` with no member meaning "I cannot enumerate the affected set", and an absent count was filled with `1` — the *minimum* of its domain — under the comment "conservative default". Every dimension in `budgets.rego` charges that number and `objects_touched` charges it on every action, so R5's deletions budget was measuring the caller's candour rather than its deletions. Measured on `759b83f`, one session, `irreversible`/`scoped`/`production`, R2 and R3 unable to fire:
+
+  ```
+  ONE call, count=45         -> require_approval  session_delete_budget
+  ONE call, count=1          -> allow
+  ONE call, magnitude absent -> allow   (and 20 more before a human is asked)
+  ```
+
+  **What changes.** Each dimension now charges `max(magnitude.count, count_floor[axes.blast_radius])` — a count may raise the charge above the floor its own blast radius implies, never lower it. `count: 1` next to `blast_radius: broad` is a self-contradiction (SPEC §4 defines `broad` as "a large set / whole table / bucket") and the fail-closed reading of a contradiction is the larger one. Core also now records the fill: `magnitude.count` joins `provenance.undeclared`, the block it always belonged in — its own docstring says "anything a rule reads to decide WHAT KIND OF ACTION this is belongs here".
+
+  **Who this affects.** Repeated recoverable deletes under one session, trip point before → after: `single` 21 → 21, `scoped` 21 → 21, `broad` 21 → 12, `systemic` 21 → 2. `single` and `scoped` are floor `1` in the shipped pack *deliberately* — those values assert a bounded set, and `scoped` is what the reference adapters emit for ordinary work, so flooring it would retune every everyday session instead of the unbounded ones. No verdict changes for any caller that states a count at or above its axis floor.
+
+  **What is NOT fixed.** `ledger.py` records the raw `magnitude.count`, so the floor applies to the action being decided and not to the history it is compared against — which is why `broad` lands on 12 rather than 3. The floors are policy data in `budgets.rego` next to the limits, and are illustrative defaults an operator must review. See SPEC §4.1.2.
+- **The holds surface no longer answers a word it does not know with a confident wrong answer (RFX-211, RFX-218, + two siblings found with them).** `GET /v1/holds` is the call that answers *"what is held?"*, and every one of its parameters used to degrade rather than refuse. Measured on `759b83f` with three real holds in the store — **16 of 16 arms** gave a wrong answer, and each is now a named `400`:
+
+  | request | before | now |
+  |---|---|---|
+  | `?status=all` | `200 {"items":[],"count":0}` | `200`, the full set (explicit synonym for no filter) |
+  | `?status=resolved` / `Pending` / `pending ` / `banana` | `200 {"items":[],"count":0}` | `400 status: unrecognised`, naming the accepted set |
+  | `?cursor=<bogus>` | `200`, **page 1 again**, silently | `400 cursor: unknown` |
+  | `?limit=banana` / `0` / `-5` | `200`, limit silently 100 / 1 / 1 | `400 limit: …` |
+  | `holds.resolve_hold(id, "approved", …)` | hold **rejected**, silently | `ValueError`, hold untouched |
+
+  **Why the read half matters.** No action gets through — this is the instrument, not the gate — but it is the instrument human oversight depends on, and it could report zero when the answer was not zero. `all` and `resolved` are not invented near-misses: both are **valid vocabulary on the Reeflex portal's own holds API** (which `422`s an unknown status), and the published `reeflex-holds` MCP `list_holds` tool forwards `status` **with no validation of its own** — so an agent asking what is held could get an empty list and reasonably report "nothing is pending" while holds were pending. RFX-65's month-long invisible pending holds are the precedent: something has to look, and a lookup that answers "nothing" to a typo is worse than one that errors. The two surfaces still do not share a vocabulary (`resolved` is the portal's word; `approved`/`rejected`/`consumed` are core's), which is why the refusal names the set it checked against instead of guessing.
+
+  **Why the write half matters.** `resolve_hold()` implemented `new_status = "approved" if decision == "approve" else "rejected"`, so the literal its own docstring documented (`"approved"`) fell to the else branch and **rejected** the hold — no error, and a return value indistinguishable from a human's deliberate rejection. A later resubmission then denied with `reeflex_hold_rejected`, which reads as *"the human said no"*: an Art. 14 oversight record saying a hold was rejected when the integration meant to approve it. **Not reachable from the wire** — `server.py` and the published `reeflex-holds` client both validate `approve|reject` first — so this closes the in-process path and any future caller that trusts the docstring. It raises rather than also accepting `"approved"`, because a two-valued parameter whose second arm is *"everything else"* is the defect, not the particular spelling that hit it.
+
+  **The cost, stated.** A `cursor` can legitimately fall out of a *filtered* result set between pages (page with `status=pending`, and the hold at the cursor gets approved). That now errors rather than silently restarting at page 1. Erroring is the deliberate choice — a caller told its cursor is stale can restart on purpose, whereas a silent restart re-serves rows it already processed and can loop forever — and the two cases carry distinguishable messages. `--status all` is now also accepted by the `reeflex-holds` CLI, for the operator who learned the portal's screen.
+
+  **The guard is a partition, not an inventory.** `HOLD_STATUSES` is not hand-maintained: `test_holds_vocabulary_rfx211_rfx218.py` drives every state transition `holds.py` implements, collects the statuses actually written, and asserts the observed set **equals** the declared one — so a sixth status fails the suite until it is declared, and the API then accepts it. That shape is deliberate: qa--018's finding on RFX-87 is that a sound assertion pointed at a short inventory is green about the value it never looked at. 22 tests, `unittest.TestCase` (a pytest-style file here collects **zero** tests under the gate and still reports OK — RFX-87). All six behavioural lines of the fix were reverted one at a time and the suite went red for each (`scripts/bite-check-rfx211-rfx218.py`).
+
+  **No decision path, policy or rule changed.** `/v1/decide` is untouched; no verdict, rule id or reason moves.
+
 ### Changed — BREAKING
 
 - **`REEFLEX_REQUIRE_VERIFIED_APPROVER` now defaults to `true`, and `reeflex-core` is `0.2.0` because of it (RFX-84, RFX-97).**
