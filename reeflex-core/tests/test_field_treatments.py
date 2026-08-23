@@ -258,27 +258,58 @@ class TestEnumerationIsTotal(unittest.TestCase):
             % sorted(missing),
         )
 
+    #: Which of the two non-policy readers currently contribute a path the
+    #: policy scan does not see.
+    #:
+    #: RFX-128 emptied ledger.py's contribution, and it is worth saying why in
+    #: the place the test reads rather than in a commit message. `action.ability`
+    #: was the last path only the ledger read; R7 (authority.rego) now reads it
+    #: too, so the ledger's set became a subset of the policy's. That is the
+    #: gap CLOSING, not the enumeration rotting -- the ticket's whole point was
+    #: that no rule read the ability.
+    #:
+    #: Pinned as an exact set, both directions, DELIBERATELY. Asserting only
+    #: "at least one reader contributes something" would go quiet if ledger.py
+    #: later regained a policy-invisible path, which is the state RFX-133
+    #: shipped through.
+    EXPECTED_POLICY_INVISIBLE_READERS = {"decide.py"}
+
     def test_the_policy_is_not_the_only_reader(self):
         """Scanning policy/*.rego alone is not an enumeration.
 
         RFX-133 and RFX-127 both lived in fields no .rego file mentions
         (params.currency at the time, approval.hold_id still). This asserts
-        the general form of that lesson so it cannot rot: each of the other
-        two readers must contribute at least one path the policy does not,
-        and every such path must be declared.
+        the general form of that lesson so it cannot rot: the other readers
+        must between them contribute at least one path the policy does not,
+        every such path must be declared, and WHICH readers contribute is
+        pinned so that a change in the shape is a visible edit.
         """
         policy = policy_input_paths(_rego_sources())
-        for name, paths in (("ledger.py", LEDGER_ENVELOPE_PATHS),
-                            ("decide.py", DECIDE_ENVELOPE_PATHS)):
-            only = set(paths) - policy
-            self.assertTrue(
-                only,
-                "%s contributes no path the policy scan misses — if that is "
-                "genuinely true now, this test is the place to say so "
-                "deliberately rather than by accident" % name,
-            )
+        contributions = {
+            name: set(paths) - policy
+            for name, paths in (("ledger.py", LEDGER_ENVELOPE_PATHS),
+                                ("decide.py", DECIDE_ENVELOPE_PATHS))
+        }
+        for name, only in contributions.items():
             self.assertEqual(set(), undeclared(only),
                              "%s-only path(s) undeclared: %s" % (name, sorted(only)))
+
+        contributors = {n for n, only in contributions.items() if only}
+        # The floor: if this ever empties, the test is asserting nothing and
+        # "the policy IS the only reader" has to be argued, not assumed.
+        self.assertTrue(
+            contributors,
+            "no reader contributes a path the policy scan misses — this test "
+            "has gone vacuous; either a reader lost its paths or the scan is "
+            "over-matching",
+        )
+        self.assertEqual(
+            self.EXPECTED_POLICY_INVISIBLE_READERS, contributors,
+            "which readers the policy scan cannot see has changed (%s). If "
+            "that is deliberate, update EXPECTED_POLICY_INVISIBLE_READERS and "
+            "say why there; if it is not, a reader has gained or lost an "
+            "undeclared field." % sorted(contributors),
+        )
 
     def test_no_stale_declarations(self):
         """Every declared path must be read by one of the three readers."""

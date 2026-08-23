@@ -16,6 +16,7 @@ package reeflex.policy
 #   require_approval  when R2 fires and neither R3 nor R0 does
 #   require_approval  when R5 fires and none of R3/R2/R0 do
 #   require_approval  when R6 fires and none of R3/R2/R5/R0 do
+#   require_approval  when R7 fires and none of R3/R2/R5/R6/R0 do
 #   allow             otherwise (R1 read-only internal, or R4 default)
 #
 # R6 IS DELIBERATELY LAST AMONG THE HOLDS.  It could equally have been placed
@@ -310,6 +311,56 @@ decision := {
 	not r0_unclassified
 }
 
+# require_approval (R7) — the action changes WHO MAY ACT, how an identity is
+# proved, or what code runs, in production. authority.rego (same package,
+# loaded from the same policy dir) holds the three operator-editable signal
+# lists and the tokenizer; this predicate only asks "did any of them match".
+#
+# Fires only when R3, R2, R5, R6 and R0 do not, so precedence stays total and
+# exactly one decision is produced. R5 winning a tie is arbitrary and harmless:
+# both are require_approval, and R5's reason names a budget the operator
+# configured while R7's names a signal, so keeping the configured one visible is
+# the better of two holds.
+#
+# THE R6 AND R0 GUARDS ARE A REBASE DECISION, NOT AN INHERITED ONE (dev-3 round
+# 039, rebased onto #100 `be8fe8e` and #106). R7 was written against a tree
+# where neither R6 (protected assets, #100) nor R0 (#106) existed. Without these
+# two lines OPA raises `eval_conflict_error` — "complete rules must not produce
+# multiple outputs" — and core answers HTTP 500 on a decision each rule alone
+# gets right. Both pairs are reachable, not theoretical:
+#   * R6 x R7: verb=delete ability=iam/revoke-role environment=production
+#     ref=/srv/prod/iam/roles.db reversibility=irreversible — `/srv/` is in
+#     #100's shipped protected_assets and `iam`/`revoke`/`role` are all
+#     authority_signals.
+#   * R0 x R7: the same envelope with provenance.undeclared=["target.environment"].
+# R6 wins the first because its reason names the operator's own declared asset;
+# R0 wins the second for the reason in the R0-vs-R6 note above — a verdict that
+# rests on a field core GUESSED is reported as a coverage gap, not as a control.
+# The VERDICT is `require_approval` either way; only the rule id moves. Pinned by
+# tests/test_authority_family_rfx128.py's co-fire cases.
+#
+# R7 IS RESOLVABLE. `authority_change_prod` is deliberately not in core's
+# NON_RESOLVABLE_RULES — see the "why require_approval and never deny" block in
+# authority.rego. R1 needs no `not r7_authority_change` guard because
+# r7_authority_change requires `verb != "read"` and r1_allow requires
+# `verb == "read"`; the guard is written there anyway so that relaxing one of
+# them later cannot silently produce a complete-rule conflict.
+decision := {
+	"decision": "require_approval",
+	"reason": sprintf(
+		"this action changes authority, credentials or what code runs in production (%s) -- a human decides",
+		[concat(", ", r7_matched_signals)],
+	),
+	"rule": "reeflex.policy/authority_change_prod",
+} if {
+	r7_authority_change
+	not r3_deny
+	not r2_require_approval
+	not budget_require_approval
+	not r6_require_approval
+	not r0_unclassified
+}
+
 # allow (R1) — read-only internal, when no higher-risk rule applies.
 #
 # R6 OUTRANKS R1 ON PURPOSE.  A `read` declared `irreversible` on a protected
@@ -329,6 +380,7 @@ decision := {
 	not r3_deny
 	not budget_require_approval
 	not r6_require_approval
+	not r7_authority_change
 }
 
 # allow (R4) — default: nothing high-risk matched and R1 did not apply.
@@ -342,4 +394,5 @@ decision := {
 	not r3_deny
 	not budget_require_approval
 	not r6_require_approval
+	not r7_authority_change
 }
