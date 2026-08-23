@@ -68,6 +68,104 @@ default_budgets := {
 	"objects_touched": {"limit": 200},
 }
 
+# ---- what an UNCOUNTABLE action costs (RFX-143) ------------------------
+#
+# THE DEFECT. `magnitude.count` has no way to say "I cannot enumerate the
+# affected set". Its domain is int >= 1 (envelope.py F2 rejects 0, negatives,
+# floats and bools) and an ABSENT count is filled with 1 -- the MINIMUM of that
+# domain. Every dimension below charges that number, so before this table:
+#
+#   ONE call, count=45, irreversible/scoped/production  -> require_approval
+#                                                          (session_delete_budget)
+#   ONE call, count=1,  same axes                       -> allow
+#   ONE call, magnitude OMITTED, same axes               -> allow, and 20 more
+#
+# The adapter that says how many objects it is about to destroy was charged for
+# all of them; the adapter that said nothing, or said `1` while declaring the
+# blast radius a whole table, was charged one. R5's deletions budget was
+# measuring the caller's CANDOUR, not its deletions -- and the incentive ran
+# the wrong way, which is the RFX-165/RFX-174 shape (supplying less information
+# buys a lower price).
+#
+# THE SEMANTICS, one sentence: A COUNT MAY ONLY EVER RAISE THE CHARGE ABOVE THE
+# FLOOR ITS OWN BLAST RADIUS IMPLIES, NEVER LOWER IT -- charged_count is
+# max(count, floor[blast_radius]). This is deliberately keyed on the axis the
+# adapter DID declare rather than on whether the count was declared, because
+# every adapter shipped in this repo already defaults its own count to 1
+# (reeflex-claude envelope.py:97, reeflex-mcp normalize.py, the WordPress
+# normalizer, the n8n node) -- so a floor that fired only on an ABSENT count
+# would fire on none of our own traffic. See SPEC §4.1.
+#
+# THE FLOORS BELOW ARE ILLUSTRATIVE DEFAULTS AN OPERATOR MUST REVIEW, exactly
+# like the limits above. What is NOT a matter of taste is the ordering and the
+# max(): those carry the invariant.
+#
+#   single   1  SPEC §4: "one entity". The axis already implies the count; 1 is
+#               not a guess here, so there is nothing to floor.
+#   scoped   1  SPEC §4: "a bounded set". DELIBERATELY LEFT AT 1. `scoped` is
+#               the everyday value our adapters emit for ordinary work (a
+#               `bash deploy.sh` is priced recoverable/scoped), so a floor here
+#               would retune every session and buy a gate that asks on a build
+#               -- switched off within a day, which is the RFX-158 trade in the
+#               other direction. Stated as a deliberate non-change, not an
+#               oversight.
+#   broad   10  SPEC §4: "a large set / whole table / bucket". `count: 1` and
+#               "whole table" contradict each other; the higher reading is the
+#               fail-closed one.
+#   systemic 20 SPEC §4: "could affect the system itself". Largely moot for
+#               irreversible production work, which R3 already denies outright
+#               -- it matters for the RECOVERABLE systemic action no other rule
+#               reads.
+#
+# WHAT THIS ACTUALLY BUYS, MEASURED, AND THE HALF IT DOES NOT CLOSE.
+# Repeated `delete` under one session, recoverable so R2/R3 cannot fire, on
+# 759b83f vs this file (fresh core per cell, fresh session ids):
+#
+#   blast_radius    before   after
+#   single           21       21     unchanged, by design
+#   scoped           21       21     unchanged, by design
+#   broad            21       12
+#   systemic         21        2
+#
+# Before this change the trip point was 21 for ALL FOUR values -- the declared
+# blast radius was worth nothing to the budget.
+#
+# `broad` lands on 12 and not on 3 because THE FLOOR APPLIES TO THE ACTION
+# BEING DECIDED AND NOT TO THE LEDGER'S HISTORY. ledger.py::append_entry
+# records the RAW `magnitude.count`, so the cumulative term keeps summing 1s
+# while the current term is charged 10: the trip is the first i where
+# 10 + (i-1) > 20, i.e. 12. Charging the floor on the cumulative side too would
+# put it at 3, and that is a ledger.py change -- deliberately NOT made here,
+# because the single source of truth for these floors is this file and a Python
+# copy of the table would be exactly the unchecked mirror RFX-216 is about. The
+# sound version routes the policy's own charged_count back into append_entry
+# (decide.py already appends AFTER evaluating, so the seam exists). Filed
+# rather than bodged; see the RFX-143 report.
+#
+# An unrecognised blast_radius cannot reach this table: envelope.py matches
+# `_AXIS_ALLOWED` exactly and coerces anything else to the most-guarded member.
+# The lookup is still written fail-closed (unknown -> the systemic floor) so
+# that this file does not silently depend on that.
+count_floor := {
+	"single": 1,
+	"scoped": 1,
+	"broad": 10,
+	"systemic": 20,
+}
+
+#: The floor implied by THIS action's declared blast radius. Fail-closed: a
+#: blast_radius this table does not name is charged the strictest floor.
+current_count_floor := f if {
+	f := count_floor[input.axes.blast_radius]
+} else := f if {
+	f := count_floor.systemic
+}
+
+#: What the budget dimensions actually charge for this action. `magnitude.count`
+#: is read defensively (absent -> 1) so this file behaves identically for an
+#: envelope built by a path that predates F2's default.
+charged_count := max([object.get(input, ["magnitude", "count"], 1), current_count_floor])
+
 # Empty by default; a deployment adds entries like:
 #   "agent:some-session-id": {"objects_touched": {"limit": 10}}
 # to tighten (or loosen) one dimension for one principal without touching
@@ -108,13 +206,17 @@ cumulative_for(dimension) := n if {
 # current_for: THIS action's contribution to a dimension, added to the
 # prior cumulative before comparing to the limit (same "prior + current"
 # shape as the original R5).
+#
+# Every count dimension charges `charged_count`, not `input.magnitude.count`
+# directly (RFX-143): a count may raise the charge above the floor its declared
+# blast radius implies, never lower it.
 current_for(dimension) := c if {
 	dimension == "objects_touched"
-	c := input.magnitude.count
+	c := charged_count
 } else := c if {
 	dimension == "deletions"
 	input.action.verb == "delete"
-	c := input.magnitude.count
+	c := charged_count
 } else := c if {
 	dimension == "deletions"
 	input.action.verb != "delete"
@@ -122,7 +224,7 @@ current_for(dimension) := c if {
 } else := c if {
 	dimension == "external_sends"
 	input.axes.externality == "outbound"
-	c := input.magnitude.count
+	c := charged_count
 } else := c if {
 	dimension == "external_sends"
 	input.axes.externality != "outbound"

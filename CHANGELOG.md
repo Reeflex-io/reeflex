@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+### Fixed
+
+- **A budget dimension no longer prices an unbounded action as the smallest possible one (RFX-143).**
+
+  `magnitude.count` is an integer `>= 1` with no member meaning "I cannot enumerate the affected set", and an absent count was filled with `1` — the *minimum* of its domain — under the comment "conservative default". Every dimension in `budgets.rego` charges that number and `objects_touched` charges it on every action, so R5's deletions budget was measuring the caller's candour rather than its deletions. Measured on `759b83f`, one session, `irreversible`/`scoped`/`production`, R2 and R3 unable to fire:
+
+  ```
+  ONE call, count=45         -> require_approval  session_delete_budget
+  ONE call, count=1          -> allow
+  ONE call, magnitude absent -> allow   (and 20 more before a human is asked)
+  ```
+
+  **What changes.** Each dimension now charges `max(magnitude.count, count_floor[axes.blast_radius])` — a count may raise the charge above the floor its own blast radius implies, never lower it. `count: 1` next to `blast_radius: broad` is a self-contradiction (SPEC §4 defines `broad` as "a large set / whole table / bucket") and the fail-closed reading of a contradiction is the larger one. Core also now records the fill: `magnitude.count` joins `provenance.undeclared`, the block it always belonged in — its own docstring says "anything a rule reads to decide WHAT KIND OF ACTION this is belongs here".
+
+  **Who this affects.** Repeated recoverable deletes under one session, trip point before → after: `single` 21 → 21, `scoped` 21 → 21, `broad` 21 → 12, `systemic` 21 → 2. `single` and `scoped` are floor `1` in the shipped pack *deliberately* — those values assert a bounded set, and `scoped` is what the reference adapters emit for ordinary work, so flooring it would retune every everyday session instead of the unbounded ones. No verdict changes for any caller that states a count at or above its axis floor.
+
+  **What is NOT fixed.** `ledger.py` records the raw `magnitude.count`, so the floor applies to the action being decided and not to the history it is compared against — which is why `broad` lands on 12 rather than 3. The floors are policy data in `budgets.rego` next to the limits, and are illustrative defaults an operator must review. See SPEC §4.1.2.
+
 ### Changed — BREAKING
 
 - **`REEFLEX_REQUIRE_VERIFIED_APPROVER` now defaults to `true`, and `reeflex-core` is `0.2.0` because of it (RFX-84, RFX-97).**
