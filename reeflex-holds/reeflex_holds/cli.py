@@ -126,9 +126,14 @@ def build_parser() -> argparse.ArgumentParser:
     list_p = sub.add_parser("list", help="List Reeflex holds.")
     list_p.add_argument(
         "--status",
-        choices=("pending", "approved", "rejected", "expired", "consumed"),
+        # `all` is here for the operator who learned the Reeflex portal's holds
+        # screen, where it is valid vocabulary. Core accepts it as an explicit
+        # synonym for no filter (RFX-211); argparse already refuses anything
+        # outside this set, loudly, which is the behaviour core now matches.
+        choices=("pending", "approved", "rejected", "expired", "consumed", "all"),
         default=None,
-        help="Filter by status (default: no filter, core's most-recent-first order).",
+        help="Filter by status (default: no filter, core's most-recent-first "
+             "order). `all` is an explicit synonym for no filter.",
     )
     list_p.add_argument("--json", action="store_true", help="Print raw JSON instead of a table.")
     list_p.set_defaults(func=cmd_list)

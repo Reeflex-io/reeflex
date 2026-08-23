@@ -24,7 +24,7 @@ the CLI as a non-zero exit with the reason printed to stderr.
 
 | Tool                | Arguments                              | Calls                              |
 |---------------------|-----------------------------------------|-------------------------------------|
-| `list_holds`        | `status?` (pending\|approved\|rejected\|expired\|consumed) | `GET /v1/holds?status=`            |
+| `list_holds`        | `status?` (pending\|approved\|rejected\|expired\|consumed\|all) | `GET /v1/holds?status=`            |
 | `get_hold`          | `id`                                    | `GET /v1/holds/{id}`               |
 | `resolve_hold`      | `id`, `decision` (approve\|reject), `reason?` | `POST /v1/holds/{id}/resolve`      |
 | `get_freeze_status` | (none)                                  | `GET /healthz` (best-effort; see below) |
