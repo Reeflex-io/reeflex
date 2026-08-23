@@ -57,6 +57,18 @@
  *     everything else                        -> internal
  *     physical (none in WP)                  -> n/a (never produced)
  *
+ *   ability refinement for security-governing options (RFX-219):
+ *     `core/update-option` is ONE ability covering every setting WordPress has,
+ *     so disabling two-factor auth and renaming the site produced identical
+ *     envelopes outside `params` — and `params` is an open bag no rule may
+ *     match. For the options listed in SECURITY_OPTION_FAMILIES the reported
+ *     ability becomes `<ability>/<family>/<option_name>`, e.g.
+ *     `core/update-option/mfa/two_factor_enabled`. The family word is what a
+ *     rule reads; the option name is what the human resolving the hold reads.
+ *     REPORTED ONLY: the verb, all three axes, the target kind and the count
+ *     are still derived from the ability WordPress registered, so an
+ *     agent-supplied option name cannot move an axis. See refine_ability().
+ *
  *   approval (HIL Phase 2 — SPEC §5.1):
  *     Schema is {present, hold_id} — matches core's validation contract exactly
  *     (holds.py / decide.py in reeflex-core). present:true is emitted ONLY when
@@ -120,6 +132,112 @@ final class Reeflex_Normalizer {
 	private const OUTBOUND_SEGMENTS = array(
 		'publish', 'send', 'email', 'notify', 'webhook', 'broadcast', 'mail', 'outbound', 'api',
 	);
+
+	// ------------------------------------------------------------------
+	// Security-governing options (RFX-219).
+	// ------------------------------------------------------------------
+
+	/**
+	 * WordPress option names whose VALUE governs who may act, how an identity is
+	 * proved, or what code runs — mapped to the family word that says which.
+	 *
+	 * WHY THIS EXISTS AT ALL. `core/update-option` is one ability covering every
+	 * setting WordPress has. Measured on a real core: disabling two-factor auth
+	 * and renaming the site produce byte-identical envelopes outside `params`
+	 * (same ability, same verb, same three axes, same target kind, ref null on
+	 * both) and therefore the same verdict — `allow` / `default_allow`. The
+	 * option name is the whole difference between them and it never left
+	 * `params`, which SPEC §2 defines as an open backend-specific bag that no
+	 * rule may pattern-match. So core cannot derive this. The adapter is the only
+	 * layer that knows `two_factor_enabled` is not `blogname`.
+	 *
+	 * WHY THE FAMILY WORD AND NOT A BOOLEAN. The family is spliced into
+	 * `action.ability` (see refine_ability()), and core's authority rule reads
+	 * `action.ability` — tokenised, whole-token, never substring. The words below
+	 * are drawn from THAT rule's own vocabulary (`role`, `membership` name who may
+	 * act; `mfa` names how identity is proved; `plugin`, `theme`, `cron` name what
+	 * code runs). A word outside it would be an honest label that no rule can
+	 * read, which is what the first draft of this ticket proposed and what
+	 * measurement rejected: `core/update-security-option` tokenises to
+	 * {core, update, security, option} and `security` is in none of the lists.
+	 *
+	 * WHY `action.ability` AND NOT `target.ref`. Two measurements, not a
+	 * preference. (1) The audit record carries `action.{namespace, verb, ability,
+	 * environment, target_system}` and does NOT carry `target.ref` or `params` —
+	 * so a ref would be invisible to the auditor, and the option name would still
+	 * be missing from the one artefact an Art.14 reader gets. (2) `target.ref`
+	 * has an established meaning for the other adapters (a filesystem path for
+	 * reeflex-claude, matched by prefix against declared production assets), and
+	 * minting a new ref shape for options would reach a rule this ticket has no
+	 * business changing.
+	 *
+	 * WHAT THIS IS NOT. It is not a boundary and it cannot be complete: an option
+	 * a plugin invents tomorrow is not in it, and an agent that writes such an
+	 * option is not seen. It is a FLOOR, and the property that makes an admittedly
+	 * incomplete list safe to ship is that it is RAISE-ONLY — a name in this list
+	 * can turn an `allow` into a hold and can never do the reverse, so being wrong
+	 * costs an approval prompt and never a missed refusal.
+	 *
+	 * Operators extend it through the `reeflex_security_option_families` filter,
+	 * which is additive only (see security_option_families()).
+	 *
+	 * @var array<string,string>  lowercase option name => family word
+	 */
+	private const SECURITY_OPTION_FAMILIES = array(
+		// -- how an identity is proved ---------------------------------
+		'two_factor_enabled'   => 'mfa',
+		'two_factor_forced'    => 'mfa',
+		'two_factor_providers' => 'mfa',
+		'wp_2fa_settings'      => 'mfa',
+
+		// -- who may act -----------------------------------------------
+		// `default_role` decides what every self-registered account becomes;
+		// `users_can_register` decides whether there are any. Neither is a
+		// cosmetic setting and both read as one in the envelope today.
+		'default_role'         => 'role',
+		'users_can_register'   => 'membership',
+
+		// -- what code runs --------------------------------------------
+		// Writing `active_plugins` activates PHP. Writing `template` or
+		// `stylesheet` switches which theme's PHP runs. Writing `cron` schedules
+		// it. All three are ordinary option writes to WordPress.
+		'active_plugins'       => 'plugin',
+		'template'             => 'theme',
+		'stylesheet'           => 'theme',
+		'cron'                 => 'cron',
+	);
+
+	/**
+	 * Option-name suffixes that carry a family regardless of the table prefix.
+	 *
+	 * WordPress stores the role definitions under `{$table_prefix}user_roles`, so
+	 * the literal name is `wp_user_roles` on a default install and something else
+	 * on every install that changed the prefix. An exact-name map fails OPEN on
+	 * exactly the installs that hardened their prefix, which is the wrong
+	 * population to miss.
+	 *
+	 * Matched as a plain suffix, with no word boundary, and that is the
+	 * deliberate direction: a boundary would exclude `superuser_roles`, which is
+	 * an authority-governing name by any reading, in exchange for precision this
+	 * list does not need. The match is RAISE-ONLY — its whole cost when wrong is
+	 * one approval prompt — so the loose form is the safe one.
+	 *
+	 * @var array<string,string>  lowercase suffix => family word
+	 */
+	private const SECURITY_OPTION_SUFFIXES = array(
+		'user_roles' => 'role',
+	);
+
+	/**
+	 * Input keys that may carry the name of the option being operated on.
+	 *
+	 * Read ONLY when the ability is itself an option operation (target kind
+	 * `option`), so a generic `name` on some other ability is never mistaken for
+	 * an option name.
+	 *
+	 * @var array<int,string>
+	 */
+	private const OPTION_NAME_KEYS = array( 'option_name', 'option', 'name' );
 
 	/**
 	 * Ability name segments (lowercase) that imply a systemic blast radius.
@@ -241,6 +359,18 @@ final class Reeflex_Normalizer {
 		$kind = self::infer_kind( $ability_segments );
 		$ref  = self::infer_ref( $input, $count, $kind );
 
+		// -- ABILITY REFINEMENT (RFX-219) ---------------------------------
+		// Computed LAST, from the ORIGINAL ability, and used for NOTHING except
+		// the string reported in action.ability. That ordering is load-bearing,
+		// not tidiness: the verb table, the systemic/bulk blast-radius signals
+		// and infer_kind() all read the ability name, and every family word this
+		// splices in is also a word one of those tables knows. `role` is an
+		// 'update' verb token; an option named `alloptions` would trip the
+		// `all-`/`-all` systemic substring test. Deriving the axes from the
+		// refined name would let the option name move an axis it has no business
+		// moving, which is the RFX-131 defect in a new costume.
+		$reported_ability = self::refine_ability( $ability, $kind, $input );
+
 		// -- AGENT --------------------------------------------------------
 		// LOCKED DECISION (HIL Phase 2 T1.2): when $agent_override is supplied
 		// (resubmission path only), it is used verbatim — the ORIGINAL agent
@@ -306,7 +436,7 @@ final class Reeflex_Normalizer {
 			'action'          => array(
 				'namespace' => 'wordpress',
 				'verb'      => $verb,
-				'ability'   => $ability,
+				'ability'   => $reported_ability,
 			),
 			'target'          => array(
 				'kind'        => $kind,
@@ -721,6 +851,169 @@ final class Reeflex_Normalizer {
 		}
 
 		return null;
+	}
+
+	// ------------------------------------------------------------------
+	// Ability refinement for security-governing options (RFX-219)
+	// ------------------------------------------------------------------
+
+	/**
+	 * The option-family map, after the operator's additive filter.
+	 *
+	 * ADDITIVE ONLY, and for the same reason the trusted verb override is
+	 * raise-only (NEW-3): a hook that can DELETE a built-in entry is a documented
+	 * way to switch a control off from inside the audited system, and the
+	 * governing principle at the top of this file is that nothing reachable from
+	 * the site may lower risk. A filter may add option names and may not remove
+	 * or overwrite the ones shipped here; an attempt to overwrite keeps the
+	 * shipped family and logs under WP_DEBUG.
+	 *
+	 * Entries whose key or value is not a non-empty string are dropped rather
+	 * than trusted.
+	 *
+	 * @return array<string,string>  lowercase option name => family word
+	 */
+	private static function security_option_families(): array {
+		$shipped = self::SECURITY_OPTION_FAMILIES;
+
+		if ( ! function_exists( 'apply_filters' ) ) {
+			return $shipped;
+		}
+
+		$filtered = apply_filters( 'reeflex_security_option_families', $shipped );
+		if ( ! is_array( $filtered ) ) {
+			return $shipped;
+		}
+
+		$merged = $shipped;
+		foreach ( $filtered as $name => $family ) {
+			if ( ! is_string( $name ) || ! is_string( $family ) ) {
+				continue;
+			}
+			$name   = strtolower( trim( $name ) );
+			$family = strtolower( trim( $family ) );
+			if ( '' === $name || '' === $family ) {
+				continue;
+			}
+			if ( isset( $shipped[ $name ] ) ) {
+				// Shipped entry: keep ours. Only complain if they differ.
+				if ( $shipped[ $name ] !== $family && defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Intentional debug-gated diagnostic; the authoritative record is the JSONL audit log.
+					error_log( sprintf(
+						'[reeflex] RFX-219: reeflex_security_option_families tried to change shipped option "%s" from family "%s" to "%s" — IGNORED; the filter is additive only.',
+						$name,
+						$shipped[ $name ],
+						$family
+					) );
+				}
+				continue;
+			}
+			$merged[ $name ] = $family;
+		}
+
+		return $merged;
+	}
+
+	/**
+	 * Read the name of the option this call operates on, if there is one.
+	 *
+	 * Normalisation is the security-relevant part. `update_option()` trims its
+	 * option name, so ' two_factor_enabled' and 'two_factor_enabled' write the
+	 * SAME row — an untrimmed lookup would let one leading space walk past the
+	 * gate. Lowercasing is a separate, deliberately RAISE-ONLY choice: WordPress
+	 * option names are case-sensitive, so 'Two_Factor_Enabled' is a different row
+	 * and folding it here can only ever cause an extra hold, never a miss.
+	 *
+	 * @param array $input
+	 * @return string|null  Normalised option name, or null if none is present.
+	 */
+	private static function resolve_option_name( array $input ): ?string {
+		foreach ( self::OPTION_NAME_KEYS as $key ) {
+			if ( ! isset( $input[ $key ] ) || ! is_string( $input[ $key ] ) ) {
+				continue;
+			}
+			$name = strtolower( trim( $input[ $key ] ) );
+			if ( '' !== $name ) {
+				return $name;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Which family, if any, a normalised option name belongs to.
+	 *
+	 * Exact name first, then the prefix-independent suffixes.
+	 *
+	 * @param string $option_name  Already normalised by resolve_option_name().
+	 * @return string|null  Family word, or null.
+	 */
+	private static function match_option_family( string $option_name ): ?string {
+		$families = self::security_option_families();
+		if ( isset( $families[ $option_name ] ) ) {
+			return $families[ $option_name ];
+		}
+
+		foreach ( self::SECURITY_OPTION_SUFFIXES as $suffix => $family ) {
+			$at = strlen( $option_name ) - strlen( $suffix );
+			if ( $at >= 0 && substr( $option_name, $at ) === $suffix ) {
+				return $family;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Splice the family word and the option name into the reported ability.
+	 *
+	 *     core/update-option  +  two_factor_enabled  ->  core/update-option/mfa/two_factor_enabled
+	 *
+	 * Both halves are load-bearing and they serve different readers:
+	 *
+	 *   - the FAMILY WORD is what a rule can read. Core's authority rule
+	 *     tokenises `action.ability` on non-alphanumerics and matches whole
+	 *     tokens, so `mfa` reaches its credential list. Without it the write is
+	 *     indistinguishable from renaming the site.
+	 *   - the OPTION NAME is what a HUMAN reads. The audit record carries the
+	 *     ability and neither `params` nor `target.ref`, so if the option name is
+	 *     not in this string it is in no artefact an approver or an auditor ever
+	 *     sees — they would be asked to approve "an MFA change" with no way to
+	 *     learn which one.
+	 *
+	 * The original ability is left as a literal PREFIX, so an operator's existing
+	 * `core/update-option` grep, dashboard filter or rule still finds these rows.
+	 * Nothing is renamed and nothing is hidden.
+	 *
+	 * Only abilities whose own target kind is `option` are considered, so a
+	 * `name` key on some unrelated ability is never read as an option name.
+	 *
+	 * Applies to every verb, including `read`. That is deliberate: a read of a
+	 * security option is worth naming in the record, and it cannot be held —
+	 * core's authority rule is structurally `verb != "read"`, and R1 (read-only
+	 * internal) still allows it. Pinned as a test rather than left to trust.
+	 *
+	 * @param string $ability  The ability name exactly as WordPress registered it.
+	 * @param string $kind     Target kind from infer_kind().
+	 * @param array  $input
+	 * @return string  The ability to report, refined or unchanged.
+	 */
+	private static function refine_ability( string $ability, string $kind, array $input ): string {
+		if ( 'option' !== $kind ) {
+			return $ability;
+		}
+
+		$option_name = self::resolve_option_name( $input );
+		if ( null === $option_name ) {
+			return $ability;
+		}
+
+		$family = self::match_option_family( $option_name );
+		if ( null === $family ) {
+			return $ability;
+		}
+
+		return $ability . '/' . $family . '/' . $option_name;
 	}
 
 	// ------------------------------------------------------------------

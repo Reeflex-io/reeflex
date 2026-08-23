@@ -65,14 +65,38 @@
 #    having anyway is that it is RAISE-ONLY (see below): being wrong costs an
 #    approval prompt, never a missed deny.
 #
-# 4. IT CANNOT SEE A SENSITIVE SETTING BEHIND A GENERIC ABILITY.  RFX-128's own
-#    third example — disabling 2FA through `core/update-option` — is NOT closed
-#    here and cannot be closed in core: the WordPress adapter's `infer_ref()`
-#    returns null for a non-numeric id, so the option name never leaves
-#    `params` and no field in the envelope distinguishes
-#    `option_name: two_factor_enabled` from `option_name: blogname`.  Matching
-#    the ability `core/update-option` itself would hold EVERY option write.
-#    Measured and filed separately rather than papered over.
+# 4. IT CANNOT, BY ITSELF, SEE A SENSITIVE SETTING BEHIND A GENERIC ABILITY —
+#    AND THAT HALF IS NOW CLOSED IN THE ADAPTER, NOT HERE (RFX-219).  RFX-128's
+#    third example, disabling 2FA through `core/update-option`, still cannot be
+#    closed in core: `params` is an open backend-specific bag by SPEC §2 and no
+#    rule may pattern-match inside it, so `option_name: two_factor_enabled` and
+#    `option_name: blogname` reach this file identical.  Matching the ability
+#    `core/update-option` itself would hold EVERY option write, which is the
+#    "asks on a build" mistake in a different costume.
+#
+#    What changed is on the WordPress side: the normalizer now splices the
+#    security FAMILY and the option NAME into the ability for the options it
+#    recognises —
+#
+#        core/update-option  ->  core/update-option/mfa/two_factor_enabled
+#
+#    — so `mfa` reaches `credential_signals` below and this rule fires on it
+#    with no change to core at all.  Two consequences worth stating here, where
+#    the next person edits the lists:
+#
+#      * THE THREE LISTS BELOW ARE NOW ALSO AN ADAPTER-FACING VOCABULARY.  The
+#        WordPress map deliberately labels its options with words FROM these
+#        lists (`mfa`, `role`, `membership`, `plugin`, `theme`, `cron`).  A
+#        first draft used `security`, which is an honest label that no rule can
+#        read — it tokenises to {core, update, security, option} and matches
+#        nothing.  Renaming a signal here silently un-wires that adapter, so
+#        rename by adding the new word rather than replacing the old one.
+#      * IT IS STILL A FLOOR.  An option a plugin invents tomorrow is in no
+#        list.  Being wrong costs an approval prompt, never a missed refusal.
+#
+#    Verified end to end in `reeflex-wordpress/tests/conformance-security-
+#    options.php` against a live core: 21 assertions red before the adapter
+#    change, 0 after, with `blogname` allowed in both directions.
 #
 # =============================================================================
 # WHY REQUIRE_APPROVAL AND NEVER DENY, AND WHY RAISE-ONLY

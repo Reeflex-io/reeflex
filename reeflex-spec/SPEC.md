@@ -317,12 +317,47 @@ make an ability honest; it makes an honest ability *count*. What makes the
 floor worth having anyway is property 1: being wrong costs an approval prompt,
 never a missed refusal.
 
-Two limits are stated rather than implied. A sensitive setting reached through
-a **generic** ability is not covered — disabling 2FA via `core/update-option`
-is indistinguishable from renaming the site, because the option name never
-leaves `params`. And R7 deliberately does not read `target.ref`: for a coding
-agent the ref is a filesystem path, and matching it would hold every edit of
-`src/auth/roles.py`.
+Two limits are stated rather than implied. R7 deliberately does not read
+`target.ref`: for a coding agent the ref is a filesystem path, and matching it
+would hold every edit of `src/auth/roles.py`. And a sensitive setting reached
+through a **generic** ability is not something core can see — the option name
+never leaves `params`, which §2 defines as an open backend-specific bag that no
+rule may pattern-match, so `option_name: two_factor_enabled` and
+`option_name: blogname` reach R7 identical.
+
+**That second one is an obligation on the adapter, and it is normative.** An
+adapter whose backend routes materially different operations through ONE
+ability MUST name the operation it actually observed in `action.ability`,
+using a word the operator's rules can read. The reference implementation is
+WordPress's `core/update-option`:
+
+```
+core/update-option  +  option_name=two_factor_enabled
+    ->  action.ability = "core/update-option/mfa/two_factor_enabled"
+```
+
+Three properties are required of such a refinement, because each has already
+been got wrong once:
+
+1. **The registered ability stays a literal prefix.** Nothing is renamed; an
+   operator's existing filter on `core/update-option` still matches.
+2. **The family word comes from the vocabulary the rules use** (here `mfa`).
+   A word chosen for readability alone — `core/update-security-option` — is an
+   honest label that no rule can read.
+3. **The refinement affects `action.ability` and nothing else.** The verb, the
+   three axes, the target kind and the count MUST still be derived from the
+   registered ability, or a caller-supplied name can move an axis it has no
+   business moving (§2's rule that no caller-supplied value may lower risk cuts
+   both ways — it must not raise one by accident either).
+
+The refinement is also where the record gets the operation's identity: the
+audit line carries `action.ability` and carries neither `params` nor
+`target.ref`, so an option name that is not in the ability is in no artefact an
+approver or an auditor ever reads.
+
+Like R7 itself, a recognised-operation list is a **floor**: an operation the
+backend adds tomorrow is not in it. It is raise-only, so being wrong costs an
+approval prompt and never a missed refusal.
 
 ---
 

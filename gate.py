@@ -605,11 +605,17 @@ class Gate:
     # "undefined function wp_upload_dir()" — since audit_log_path() started calling
     # it; measured + fixed 2026-08-20 (see wp-stubs.php). All four share the same
     # live-core prerequisite, so they run (or SKIP) together under one component.
+    # RFX-219: conformance-security-options.php is the fifth. It is listed here
+    # for the same reason the other three were added — a harness that no
+    # automation invokes is a harness nobody runs. It needs the same live core,
+    # and it declares in its own header which action families it covers so a
+    # PASS is not read as coverage it does not have (RFX-220).
     WP_HARNESSES = [
         "conformance-demo.php",
         "admin-holds-demo.php",
         "fanout-regression-demo.php",
         "hold-dedup-regression-demo.php",
+        "conformance-security-options.php",
     ]
 
     def run_wp(self):
