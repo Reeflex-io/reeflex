@@ -117,6 +117,15 @@ APP_MIGRATIONS_CANDIDATES = [
 
 TEST_FILE_PATTERNS = ["test_*.py", "*_test.py", "*_test.rego", "*.test.ts", "*.test.js"]
 
+# RFX-217: the floor under the drift walk. `drift` asserts that no test file
+# lives outside SUITE_ROOTS -- a claim an EMPTY walk satisfies, and it printed
+# the same PASS line at 0 files as at 52. Deliberately well below today's 52 so
+# deleting a suite stays a normal change, and far above zero so a walk that
+# stopped matching cannot pass for a tidy tree. The number this guards is
+# printed in the PASS detail on every run, so the next person to move it can see
+# what it was measured against.
+DRIFT_MIN_TEST_FILES = 30
+
 # RFX-108: the ONLY component keys whose SKIP may be silenced via --allow-skips,
 # each with the reason it can be structurally unrunnable. An --allow-skips key
 # that is not registered here is REFUSED by the skip-ledger component: a skip
@@ -646,11 +655,13 @@ class Gate:
         key = "drift"
         covered = [os.path.normpath(os.path.join(REPO_ROOT, r)) for r in SUITE_ROOTS]
         strays = []
+        matched = 0
         for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
             dirnames[:] = [d for d in dirnames
                            if d not in DRIFT_EXCLUDE_DIRS and not d.startswith("reeflex-gate-")]
             for f in filenames:
                 if any(fnmatch.fnmatch(f, p) for p in TEST_FILE_PATTERNS):
+                    matched += 1
                     full = os.path.normpath(os.path.join(dirpath, f))
                     if not any(full.startswith(c + os.sep) or os.path.dirname(full) == c
                                for c in covered):
@@ -660,9 +671,24 @@ class Gate:
                 self.emit("  | unenumerated test file: %s" % s)
             self.component(key, "FAIL",
                            "%d test file(s) outside the enumerated suite roots — wire them into gate.py or they run NOWHERE" % len(strays))
+        elif matched < DRIFT_MIN_TEST_FILES:
+            # RFX-217: this component asserts "no member of a DISCOVERED set is
+            # a stray", which an empty set satisfies. Measured on 759b83f: with
+            # TEST_FILE_PATTERNS changed to match nothing, and again with
+            # DRIFT_EXCLUDE_DIRS swallowing the tree, this printed
+            # "PASS (no test files outside the 9 enumerated suite roots)" --
+            # byte-identical to the honest verdict, having examined 0 files
+            # instead of 52. The walk not finding the suites is not evidence
+            # that the suites are tidy.
+            self.component(key, "FAIL",
+                           "the walk matched %d test file(s), below the floor of %d — TEST_FILE_PATTERNS, "
+                           "DRIFT_EXCLUDE_DIRS or REPO_ROOT is what changed, not the tree. This component "
+                           "cannot certify a tree it did not enumerate"
+                           % (matched, DRIFT_MIN_TEST_FILES))
         else:
             self.component(key, "PASS",
-                           "no test files outside the %d enumerated suite roots" % len(SUITE_ROOTS))
+                           "%d test file(s) walked, none outside the %d enumerated suite roots"
+                           % (matched, len(SUITE_ROOTS)))
 
     # -- test census (RFX-87) -------------------------------------------------
 
