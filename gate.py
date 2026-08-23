@@ -605,11 +605,18 @@ class Gate:
     # "undefined function wp_upload_dir()" — since audit_log_path() started calling
     # it; measured + fixed 2026-08-20 (see wp-stubs.php). All four share the same
     # live-core prerequisite, so they run (or SKIP) together under one component.
+    # RFX-167: conformance-decisions.php belongs HERE and not in the core-free
+    # wp-spec-conformance group, and the reason is the ticket. The per-axis
+    # vector suites assert one axis inside the normalizer, so they need no core.
+    # R2 and R3 are CONJUNCTIONS of two axes, so a per-axis suite can be fully
+    # green while a production destruction is still answered `allow` with no
+    # human — scoring THAT means asking a core what it decides.
     WP_HARNESSES = [
         "conformance-demo.php",
         "admin-holds-demo.php",
         "fanout-regression-demo.php",
         "hold-dedup-regression-demo.php",
+        "conformance-decisions.php",
     ]
 
     def run_wp(self):
