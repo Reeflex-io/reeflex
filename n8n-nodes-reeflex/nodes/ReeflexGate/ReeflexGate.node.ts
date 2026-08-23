@@ -331,9 +331,23 @@ export class ReeflexGate implements INodeType {
 				name: 'agentId',
 				type: 'string',
 				required: true,
-				default: 'agent:n8n',
+				// RFX-138: the default used to be the bare constant 'agent:n8n',
+				// identical in every workflow and every execution. Core binds a
+				// human approval to the actor by comparing (agent.id,
+				// agent.on_behalf_of) against the held envelope (SPEC SS5.1
+				// condition 3), so a shared constant makes that comparison vacuous:
+				// two executions produce the same actor key and either can spend an
+				// approval a human granted to the other. Measured against a real
+				// core: with the constant, ALLOWED; with a per-execution id, denied
+				// reeflex_hold_actor_mismatch.
+				// The execution id is what Session ID already defaults to, so a gate
+				// and its resubmission inside one execution still agree. The
+				// documented approval loop (examples/n8n/demo3) resubmits by reusing
+				// `reeflex.envelope`, so it replays the ORIGINAL agent block and is
+				// unaffected either way.
+				default: '=agent:n8n/{{$execution.id}}',
 				// eslint-disable-next-line n8n-nodes-base/node-param-description-miscased-id -- "agent.id" is a literal Action Envelope JSON field name (lowercase by SPEC), not prose.
-				description: 'Identifier of the agent performing the action (Action Envelope agent.id)',
+				description: 'Identifier of the agent performing the action (Action Envelope agent.id). Defaults to a per-execution value: two concurrent runs must not share one identity, or a human approval granted to one can be spent by the other.',
 			},
 			{
 				displayName: 'Additional Fields',

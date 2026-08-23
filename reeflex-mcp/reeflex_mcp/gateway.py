@@ -390,7 +390,33 @@ class Gateway:
         an HTTP front client is identified either by a configured bearer
         token (registry.py `clients:`) or, failing that, by the transport's
         own `Mcp-Session-Id` -- stable per connection, but anonymous.
+
+        RFX-138. `agent_id` used to be the bare constant "agent:mcp-client" on
+        all three anonymous branches. Core binds a human approval to the actor
+        with an ORDERED comparison of (agent.id, agent.on_behalf_of) -- SPEC
+        section 5.1 condition 3 -- so a constant made that comparison VACUOUS:
+        two anonymous front clients produced the identical actor key, and
+        client B could spend an approval a human granted to client A. Measured
+        against a real core: with the constant, the substitution was ALLOWED;
+        with the id derived per session, it is denied
+        `reeflex_hold_actor_mismatch`.
+
+        Anonymous is not the same as indistinguishable. Each branch already
+        computes a session that separates the clients; the agent id now says
+        so, keeping the "agent:mcp-client" kind as a prefix so the audit line
+        still reads WHAT connected and now also WHICH connection.
+
+        The configured-bearer branch is deliberately NOT changed: that
+        identity is durable across reconnects, which is the case core's actor
+        key is designed for (it excludes session_id when the agent is named
+        precisely so a client that RESTARTS inside a hold's TTL is not wrongly
+        denied). The anonymous branches have no such durability to protect --
+        the pending-hold table they resubmit from is keyed on the session and
+        held in memory, so a reconnect has already lost the hold.
         """
+        # The kind prefix for an anonymous front. Not a whole identity by
+        # itself -- never returned bare; see the docstring.
+        anon_kind = "agent:mcp-client"
         try:
             ctx = self.mcp._mcp_server.request_context
         except LookupError:
@@ -399,7 +425,9 @@ class Gateway:
         http_request = getattr(ctx, "request", None) if ctx is not None else None
         if http_request is None:
             # stdio front -- process-scoped identity (section 10.1).
-            return self._stdio_session_id, "agent:mcp-client", None
+            return (self._stdio_session_id,
+                    f"{anon_kind}/{self._stdio_session_id}",
+                    None)
 
         bearer = None
         auth_header = http_request.headers.get("authorization", "")
@@ -416,12 +444,14 @@ class Gateway:
 
         transport_session_id = http_request.headers.get("mcp-session-id", "").strip()
         if transport_session_id:
-            return f"mcp-http:{transport_session_id}", "agent:mcp-client", None
+            session_id = f"mcp-http:{transport_session_id}"
+            return session_id, f"{anon_kind}/{session_id}", None
 
         # Extremely unlikely (would mean tools/call arrived before a session
         # id was ever minted) -- still never empty: a random, unstable id
         # rather than silently reusing another connection's identity.
-        return f"mcp-http:unmapped:{uuid.uuid4().hex}", "agent:mcp-client", None
+        session_id = f"mcp-http:unmapped:{uuid.uuid4().hex}"
+        return session_id, f"{anon_kind}/{session_id}", None
 
     def _trust_annotations(self, upstream_name: str) -> bool:
         """RFX-173: is THIS upstream allowed to classify its own tools?

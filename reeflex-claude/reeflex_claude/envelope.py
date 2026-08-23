@@ -29,7 +29,7 @@ from typing import Any, Optional
 # ---------------------------------------------------------------------------
 
 _REEFLEX_VERSION = "0.1"
-_AGENT_ID        = "agent:claude-code"
+_AGENT_KIND      = "agent:claude-code"
 _NAMESPACE       = "claude-code"
 
 
@@ -64,9 +64,35 @@ def build_envelope(hook_payload: dict, cls: dict) -> dict:
     tool_input = hook_payload.get("tool_input") or {}
 
     # Agent block
+    #
+    # RFX-138.  `agent.id` used to be the bare constant "agent:claude-code",
+    # the same string in every Claude Code process on earth.  Core binds a
+    # human approval to the actor with an ORDERED comparison of
+    # (agent.id, agent.on_behalf_of) -- SPEC §5.1 condition 3 -- so a constant
+    # here made that comparison VACUOUS: two Claude Code agents behind one
+    # gate produced the identical actor key, and agent B could spend the
+    # approval a human granted to agent A.  Measured, not reasoned: with the
+    # constant, core allowed the substitution; with `agent.id` removed from
+    # the same two envelopes, core denied it `reeflex_hold_actor_mismatch`
+    # on the session fallback alone.
+    #
+    # The kind is kept as a prefix so the audit line still says WHAT acted,
+    # and the session is appended so it also says WHICH ONE -- and so that
+    # `agent.id` and `agent.session_id` visibly join on the same value.
+    #
+    # WHAT THIS COSTS, stated rather than discovered later: core deliberately
+    # excludes agent.session_id from the actor key when the agent is named, so
+    # that an agent which RESTARTS inside a hold's TTL is not wrongly denied.
+    # Deriving the id from the session opts this adapter out of that
+    # tolerance.  It costs nothing here and the reason is checkable: this
+    # adapter never re-submits a held action at all -- it has no hold_id path,
+    # `approval.present` is hard-false below, and a require_approval verdict
+    # is routed to Claude Code's own confirmation dialog (enforce.py).  An
+    # adapter that grows a resubmission path must revisit this together with
+    # the restart case.
     on_behalf_of = os.environ.get("REEFLEX_CLAUDE_PRINCIPAL") or None
     agent = {
-        "id": _AGENT_ID,
+        "id": _AGENT_KIND + "/" + session_id,
         "on_behalf_of": on_behalf_of,
         "session_id": "claude:" + session_id,
     }
