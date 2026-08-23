@@ -177,6 +177,61 @@ def record(
                             agent.session_id, and to compare NORMALIZED
                             values, so it is no longer a single verbatim
                             field). Empty string if absent.
+
+    Traceability of core's OWN GUESSES (additive, RFX-215):
+      provenance            `{"undeclared": [...]}`, carried VERBATIM from
+                            envelope.provenance — the block envelope.py F8
+                            computes from the raw caller input and assigns
+                            unconditionally (a caller-supplied `provenance`
+                            is discarded, not merged, so this cannot be
+                            asserted into the record from outside).
+
+                            WHY IT BELONGS ON THE RECORD. RFX-132's whole
+                            argument for R0 is that "a rule asked for a human"
+                            and "we could not tell what this was" are
+                            different facts about a deployment, and an auditor
+                            has to be able to separate them. Core made that
+                            distinction and then dropped it before writing the
+                            record: `grep provenance` over this file and
+                            decide.py returned nothing. R0's rule id carries
+                            the fact for the ONE case where the guess produced
+                            a refusal; every guess that produced an ALLOW left
+                            no trace at all, and RFX-129 measured a family of
+                            those. Art.12 traceability wants the record, not
+                            the in-memory value.
+
+                            NOT A HARDCODED FIELD LIST, DELIBERATELY. What is
+                            written is whatever envelope.py put there. A copy
+                            of `_PROVENANCE_FIELDS` here would be a second
+                            inventory of a set that grows elsewhere — the
+                            RFX-216 / RFX-217 defect shape — so the moment
+                            envelope.py records provenance for another field
+                            (e.g. `magnitude.count`, PR #116), it appears here
+                            with no change to this file. Pinned as a test.
+
+                            PRESENT even when nothing was guessed: an EMPTY
+                            `undeclared` list is the affirmative statement
+                            "every classification input was declared". If the
+                            key were omitted in that case, "no provenance key"
+                            would mean both "everything was declared" and
+                            "an older core wrote this line", and an auditor
+                            could not tell those apart. The key is omitted
+                            ONLY when the envelope carries no provenance block
+                            at all — a record from a path that predates F8
+                            then looks exactly as it did before.
+
+                            WHAT THIS DOES NOT REACH, MEASURED: the evidence
+                            connector's `map_decision()` is a closed allowlist
+                            and the ingest server's `validate_record` is a
+                            closed schema, so this key is DROPPED at the
+                            connector and the §5 signing preimage is
+                            byte-identical. It reaches core's audit log and
+                            anything tailing it (a SIEM file collector — the
+                            Wazuh JSON_Decoder maps additive keys with no
+                            decoder change); it does NOT reach an Attest
+                            report. Getting it there is a §4 wire-schema
+                            change and is filed separately, not smuggled in
+                            here.
     """
     rec: dict = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -198,6 +253,14 @@ def record(
         "envelope_hash": envelope_hash,
         # TODO: add audit_signature = ed25519.sign(record_bytes, vault_key)
     }
+    # RFX-215: carry core's own provenance block onto the record, verbatim and
+    # whole. Read defensively (an envelope from a path that predates F8 has no
+    # such block) and shape-checked, so a hand-built envelope in a caller's test
+    # cannot put a non-list into the audit stream.
+    _prov = envelope.get("provenance")
+    if isinstance(_prov, dict) and isinstance(_prov.get("undeclared"), list):
+        rec["provenance"] = {"undeclared": list(_prov["undeclared"])}
+
     if hold_id:
         rec["hold_id"] = hold_id
     if expires_ts:

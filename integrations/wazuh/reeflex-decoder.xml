@@ -30,6 +30,23 @@
   "hold_resolution" distinguishes it from a decision record (which carries
   no "event" key) with no decoder change required.
 
+  RFX-215 (audit traceability, additive, no decoder change): the reeflex-core
+  AUDIT LOG gained "provenance": {"undeclared": [...]} on every decision record
+  -- the classification inputs core had to GUESS because the adapter did not
+  declare a value core recognises (axes.reversibility, axes.blast_radius,
+  axes.externality, target.environment, action.verb). An EMPTY list means every
+  input was declared; the key is absent only on a record written by a core older
+  than this. Useful as an alert dimension: a gate whose envelopes are mostly
+  guessed is a MISCONFIGURED ADAPTER, and its verdicts -- including its allows --
+  rest on core's conservative defaults rather than on anything the integration
+  actually knows. Two scoping facts, so nobody builds a rule on a field that is
+  not there: it is on the AUDIT record only -- the syslog decision event this
+  decoder's prematch scopes to does NOT carry it -- so it reaches Wazuh via a
+  file-based collector on decisions.jsonl, where JSON_Decoder auto-decodes it to
+  data.provenance.undeclared with no decoder change. And it is core-local: the
+  evidence connector's §4 wire mapping is a closed allowlist and drops it, so it
+  never appears in an Attest report.
+
   Install: copy to /var/ossec/etc/decoders/ on the Wazuh manager, then
   `systemctl restart wazuh-manager`. Test with /var/ossec/bin/wazuh-logtest.
 -->
