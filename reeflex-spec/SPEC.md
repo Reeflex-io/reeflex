@@ -261,6 +261,46 @@ for the full mechanism and `reeflex-core/tests/test_budgets_rfx11.py` for an
 end-to-end demo, including one that edits `budgets.rego` alone (zero Python
 changes) to prove the tolerance is genuinely policy-controlled.
 
+#### 4.1.2 What an action whose size is unknown costs (normative, RFX-143)
+
+`magnitude.count` is an integer `>= 1`. It has **no member meaning "I cannot
+enumerate the affected set"**, and it never will: adding a sentinel would make
+the field's domain depend on the adapter's confidence, and an absent field is
+already the cheapest thing a caller can send.
+
+Three consequences follow, and they are normative:
+
+1. **An absent `magnitude.count` is filled with `1`.** `1` is the *minimum* of
+   the domain, so an adapter that cannot count is, on the count alone, charged
+   less than one that can. Core therefore records the fill: `magnitude.count`
+   is a member of `provenance.undeclared` (§4.0) whenever the caller supplied
+   no integer `>= 1`. Like every other entry in that block it is
+   **core-computed and overwritten unconditionally**, so a caller cannot assert
+   its way in or out of it.
+
+2. **A count may only ever RAISE the charge above the floor its own
+   `blast_radius` implies, never lower it.** Each budget dimension charges
+   `max(magnitude.count, count_floor[axes.blast_radius])`. `count: 1` next to
+   `blast_radius: broad` is a self-contradiction — SPEC §4 defines `broad` as
+   "a large set / whole table / bucket" — and the fail-closed reading of a
+   contradiction is the larger one.
+
+3. **The floors are policy data, like the limits.** They live beside
+   `default_budgets` in `budgets.rego`. `single` and `scoped` are `1` in the
+   shipped pack *by design*, not by omission: those two values assert a bounded
+   set, and `scoped` is what the reference adapters emit for ordinary work, so
+   a floor there would retune every everyday session rather than the
+   unbounded ones.
+
+**What this does not fix.** `ledger.py` records the raw `magnitude.count`, so
+the floor applies to the action being decided and not to the cumulative history
+it is compared against. A repeated recoverable `broad` delete under one session
+therefore reaches a human on the 12th call rather than the 3rd (measured; the
+floor is 10 and the ledger keeps summing 1s). Routing the policy's charged
+count back into the ledger is the sound fix and is not yet done — do not read
+this section as a claim that an unbounded action is priced correctly across a
+session, only that it is no longer priced as the smallest possible one.
+
 ---
 
 ## 4.2 Deriving `blast_radius` — the affected set, not the action's name

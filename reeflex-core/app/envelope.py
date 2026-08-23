@@ -437,13 +437,41 @@ def _canonicalize_verb(raw_verb: str, canonical_reversibility: str) -> str:
 
 #: The classification fields whose provenance is recorded. Anything a rule
 #: reads to decide WHAT KIND OF ACTION this is belongs here.
+#:
+#: `magnitude.count` is here as of RFX-143, and it was the one field this
+#: tuple's own docstring already required and did not contain. Every budget
+#: dimension in budgets.rego reads it (`objects_touched` reads it
+#: UNCONDITIONALLY, on every action), and F2 below fills an absent count with
+#: 1 -- the MINIMUM of its domain, since F2 rejects 0 and negatives. So before
+#: this change "the caller enumerated one object" and "the caller said nothing"
+#: arrived at the policy as the same number, which is precisely the condition
+#: this block exists to prevent: "a coerced value is indistinguishable from a
+#: declared one once the coercion has happened."
 _PROVENANCE_FIELDS: tuple[str, ...] = (
     "axes.reversibility",
     "axes.blast_radius",
     "axes.externality",
     "target.environment",
     "action.verb",
+    "magnitude.count",
 )
+
+
+def _count_is_declared(raw_magnitude: Any) -> bool:
+    """True if the caller supplied a `magnitude.count` core ACCEPTS.
+
+    Mirrors F2's own acceptance test exactly, for the same reason
+    `_verb_is_declared` mirrors `_canonicalize_verb`: "declared" here must mean
+    "did not fall back on the default of 1" and nothing else. F2 REJECTS every
+    other shape with HTTP 400 (bool, float, str, < 1), so the only value that
+    reaches a rule without having been declared is the absent one.
+    """
+    if not isinstance(raw_magnitude, dict):
+        return False
+    raw_count = raw_magnitude.get("count")
+    if isinstance(raw_count, bool):  # bool subclasses int; not a count
+        return False
+    return isinstance(raw_count, int) and raw_count >= 1
 
 
 def _axis_is_declared(raw_value: Any, axis: str) -> bool:
@@ -892,6 +920,10 @@ def validate_and_fill_defaults(raw: Any) -> dict:
         _undeclared.append("target.environment")
     if not _verb_is_declared(verb):
         _undeclared.append("action.verb")
+    # RFX-143. Judged on the RAW magnitude block, before F2 below fills the
+    # default -- after the fill there is nothing left to tell apart.
+    if not _count_is_declared(raw.get("magnitude")):
+        _undeclared.append("magnitude.count")
     envelope["provenance"] = {"undeclared": sorted(_undeclared)}
 
     # -- F2: magnitude.count: canonicalize to int; reject invalid values --
