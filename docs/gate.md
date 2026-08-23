@@ -48,6 +48,7 @@ blocking by default:
 | `pypi-smoke` | fresh install from PyPI of the published packages | **report-only** — always `DELEGATED` in CI (see above); only `run`/`skip` locally |
 | `wp-conformance` | 4 PHP live-core harnesses against a real `reeflex-core` | yes, **when it runs** — allowed to `SKIP` only via the register in §3 |
 | `wp-spec-conformance` | the SPEC conformance vectors (`reeflex-spec/conformance/`) driven through the WordPress normalizer — **no live core, no network** | yes — skips only where there is no `php` at all |
+| `wp-conformance` | 5 PHP live-core harnesses against a real `reeflex-core` (4 behavioural + `conformance-decisions.php`, the RFX-167 decision-level corpus) | yes, **when it runs** — allowed to `SKIP` only via the register in §3 |
 
 A component that **FAILs** turns the gate `RED` (exit 1) — always blocking,
 no exception. A component that **SKIPs** without a matching `--allow-skips`

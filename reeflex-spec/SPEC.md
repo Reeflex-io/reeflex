@@ -759,6 +759,49 @@ Machine-readable vectors are in **`reeflex-spec/conformance/`**, one file per no
 Both reference adapters run the same file — `reeflex-claude/tests/test_conformance_blast_radius.py` and `reeflex-wordpress/tests/conformance-blast-radius.php` — and neither carries its own copy of the expectations. A runner **MUST** report a case it cannot express as NOT APPLICABLE **by name** rather than skipping it silently, so that the number of cases actually exercised stays a real number.
 
 Two things this arrangement is for, both learned the hard way (RFX-131). Until the vectors existed, "MUST pass the conformance suite" named no suite for the axes, and each adapter derived them its own way. And a shared file is what makes a *disagreement* visible: the two reference adapters had picked different cardinality boundaries — one `> 20`, the other `>= 20` — so a 20-entity delete was `scoped` in one and `broad` in the other, and both were green against their own tests. `broad_min` is carried in the vector file for that reason.
+### 7.1 Per-axis conformance is necessary and is not sufficient (RFX-167)
+
+`reeflex-spec/conformance/` holds one vector file per axis. Each asserts that an
+adapter derives **one** axis correctly, in isolation, and each is required.
+
+They are not enough on their own, and the reason is structural rather than a gap
+anyone can close by adding cases. The two rules in the shipped pack that hold a
+destructive action are **conjunctions**:
+
+```
+R2  reversibility == irreversible AND blast_radius == broad     AND production
+R3  reversibility == irreversible AND blast_radius == systemic  AND production
+```
+
+So an adapter can satisfy an axis suite completely while a production
+destruction is still answered `allow` with no human, because the *other*
+conjunct is understated. Measured through the WordPress reference adapter, one
+axis substituted at a time, five canonical destructions in
+`target.environment = production`:
+
+| axes honest | decisions changed |
+|---|---|
+| reversibility only | 1 of 5 |
+| blast_radius only | 0 of 5 |
+| both | 5 of 5 |
+
+A correct fix to one axis therefore **measures as a no-op** and reads as not
+worth landing.
+
+Two obligations follow, and they are normative for this repository rather than
+for third-party adapters:
+
+1. An axis fix MUST be measured on the **decision**, not only on its own axis
+   vectors, and the measurement MUST state which other axis it is conjoined
+   with. "N of M vectors pass" is not a claim about what the gate refuses.
+2. `reeflex-spec/conformance/decisions.json` carries the decision-level corpus.
+   Rows are `holds`, `open` or `no_rule`; an `open` row asserts that the gap is
+   **still open**, so closing one fails the suite and forces the exclusion to be
+   deleted rather than left behind.
+
+The decision corpus is a **complement** to the per-axis files and not a
+replacement, and its own limit is stated where it lives: it scores what core
+answers, so it is blind to a wrong axis that no rule currently reads. Run both.
 
 ---
 
