@@ -625,12 +625,20 @@ class Gate:
     # automation invokes is a harness nobody runs. It needs the same live core,
     # and it declares in its own header which action families it covers so a
     # PASS is not read as coverage it does not have (RFX-220).
+    #
+    # RFX-167: conformance-decisions.php belongs HERE and not in the core-free
+    # wp-spec-conformance group, and the reason is the ticket. The per-axis
+    # vector suites assert one axis inside the normalizer, so they need no core.
+    # R2 and R3 are CONJUNCTIONS of two axes, so a per-axis suite can be fully
+    # green while a production destruction is still answered `allow` with no
+    # human — scoring THAT means asking a core what it decides.
     WP_HARNESSES = [
         "conformance-demo.php",
         "admin-holds-demo.php",
         "fanout-regression-demo.php",
         "hold-dedup-regression-demo.php",
         "conformance-security-options.php",
+        "conformance-decisions.php",
     ]
 
     def run_wp(self):
