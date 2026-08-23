@@ -4,10 +4,19 @@ adapters put in `agent.id`.
 
 WHY THIS LIVES IN CORE'S SUITE
 ==============================
-It is core's guard that goes vacuous, and core's suite is the one CI runs
-(.github/workflows/ci.yml runs `python -m unittest discover` over
-reeflex-core/tests and nothing else; the adapter suites run under gate.py).
-A rule that only the gate can see is a rule that a PR can merge past.
+It is CORE's guard that goes vacuous, so the rule that keeps it non-vacuous
+belongs next to it — and this is the one place all three adapters are graded
+together, against core's own `approval_actor_key` rather than against a
+restatement of it.
+
+Not because the adapter suites are unwatched: `.github/workflows/ci.yml` runs
+only reeflex-core/tests, but `.github/workflows/gate.yml` runs gate.py on every
+PR to main with no paths filter, and gate.py runs pytest over
+reeflex-claude/tests and reeflex-mcp/tests in per-package venvs.  The
+behavioural tests beside this one therefore run in CI too.  What this file adds
+is a check that needs no npm, no `mcp` SDK and no venv, so it also runs in a
+core-only checkout, in the image build context, and on a box with none of the
+adapter runtimes installed.
 
 THE DEFECT THIS PINS
 ====================
