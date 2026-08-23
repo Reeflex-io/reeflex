@@ -166,13 +166,36 @@ def main():
         return
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
-        (tdp / "reeflex.rego").write_text(stripped)
-        (tdp / "budgets.rego").write_text((POLICY_DIR / "budgets.rego").read_text())
+        # EVERY non-test rule file, by glob (RFX-128). This used to name
+        # reeflex.rego and budgets.rego as literals, so the first new rule
+        # file in the pack left `r7_authority_change` (and, on PR #100,
+        # `protected_assets`) undefined in the temp dir. opa then exited
+        # nonzero on all 5292 points, eval_all recorded ("ERROR", ...) for
+        # each, and this section printed "DECISION differs on 5292 / 5292" --
+        # a confident number over a run in which nothing evaluated at all.
+        # The comparison is only meaningful if both sides ran the same pack
+        # minus R1.
+        for src_file in sorted(POLICY_DIR.glob("*.rego")):
+            if src_file.name.endswith("_test.rego"):
+                continue
+            text = stripped if src_file.name == "reeflex.rego" else src_file.read_text()
+            (tdp / src_file.name).write_text(text)
+        copied = sorted(p.name for p in tdp.glob("*.rego"))
         no_r1 = eval_all(tdp, inputs)
+    # The floor: an errored re-run must not be reported as a difference.
+    errored = [k for k, v in no_r1.items() if v[0] in ("ERROR", "UNDEFINED")]
+    if errored:
+        print(f"     !! the no-R1 re-run produced {len(errored)} "
+              f"ERROR/UNDEFINED point(s) over {copied}")
+        print(f"     !! first: {no_r1[errored[0]]}")
+        print("     !! NOT reporting a difference count -- it would be a "
+              "measurement of the harness, not of R1")
+        return
     dec_diffs = [k for k in base
                  if base[k][0] != no_r1.get(k, ("?",))[0]]
     rule_diffs = [k for k in base
                   if base[k][1] != no_r1.get(k, ("?", "?"))[1]]
+    print(f"     policy files compared: {copied}")
     print(f"     DECISION differs on : {len(dec_diffs)} / {len(inputs)} grid points")
     print(f"     rule LABEL differs on: {len(rule_diffs)} / {len(inputs)} grid points")
     if not dec_diffs and rule_diffs:
