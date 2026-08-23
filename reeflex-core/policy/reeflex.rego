@@ -15,6 +15,7 @@ package reeflex.policy
 #   deny              when R3 fires and R0 does not
 #   require_approval  when R2 fires and neither R3 nor R0 does
 #   require_approval  when R5 fires and none of R3/R2/R0 do
+#   require_approval  when R7 fires and none of R3/R2/R5 do
 #   allow             otherwise (R1 read-only internal, or R4 default)
 
 # ---- predicates (the rule bodies, factored out for reuse + precedence) -----
@@ -206,6 +207,37 @@ decision := {
 	not r2_require_approval
 }
 
+# require_approval (R7) — the action changes WHO MAY ACT, how an identity is
+# proved, or what code runs, in production. authority.rego (same package,
+# loaded from the same policy dir) holds the three operator-editable signal
+# lists and the tokenizer; this predicate only asks "did any of them match".
+#
+# Fires only when R3, R2 and R5 do not, so precedence stays total and exactly
+# one decision is produced. R5 winning a tie is arbitrary and harmless: both
+# are require_approval, and R5's reason names a budget the operator configured
+# while R7's names a signal, so keeping the configured one visible is the
+# better of two holds.
+#
+# R7 IS RESOLVABLE. `authority_change_prod` is deliberately not in core's
+# NON_RESOLVABLE_RULES — see the "why require_approval and never deny" block in
+# authority.rego. R1 needs no `not r7_authority_change` guard because
+# r7_authority_change requires `verb != "read"` and r1_allow requires
+# `verb == "read"`; the guard is written there anyway so that relaxing one of
+# them later cannot silently produce a complete-rule conflict.
+decision := {
+	"decision": "require_approval",
+	"reason": sprintf(
+		"this action changes authority, credentials or what code runs in production (%s) -- a human decides",
+		[concat(", ", r7_matched_signals)],
+	),
+	"rule": "reeflex.policy/authority_change_prod",
+} if {
+	r7_authority_change
+	not r3_deny
+	not r2_require_approval
+	not budget_require_approval
+}
+
 # allow (R1) — read-only internal, when no higher-risk rule applies.
 decision := {
 	"decision": "allow",
@@ -216,6 +248,7 @@ decision := {
 	not r2_require_approval
 	not r3_deny
 	not budget_require_approval
+	not r7_authority_change
 }
 
 # allow (R4) — default: nothing high-risk matched and R1 did not apply.
@@ -228,4 +261,5 @@ decision := {
 	not r2_require_approval
 	not r3_deny
 	not budget_require_approval
+	not r7_authority_change
 }

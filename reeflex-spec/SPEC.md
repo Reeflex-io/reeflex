@@ -259,6 +259,71 @@ for the full mechanism and `reeflex-core/tests/test_budgets_rfx11.py` for an
 end-to-end demo, including one that edits `budgets.rego` alone (zero Python
 changes) to prove the tolerance is genuinely policy-controlled.
 
+## 4.4 Authority, credentials and executability (R7)
+
+> Section numbering, so the four open policy PRs do not collide: §4.2 is
+> `blast_radius` derivation (PR #94), §4.3 is named production assets / R6
+> (PR #100), §4.1.2 is the undeclared-count floor (PR #116). This is §4.4 / R7
+> and it depends on none of them.
+
+The three axes in §4 price **destructive scope**: how much is affected, how
+recoverable it is, and whether the effect leaves the system. They do not model
+two other ways an action can be dangerous, and neither is a gap in the axes —
+it is a gap in what the rules built on them cover:
+
+- **AUTHORITY** — *this action changes who may act.* A privilege grant, a role
+  assignment, a capability revocation, an IAM policy attachment.
+- **EXECUTABILITY** — *this action causes new code to run.* A plugin or theme
+  installation, a scheduled job, a module load.
+
+Both are honestly `reversible`, `single` and `internal`: the adapter is not
+lying. Measured on core 759b83f, twelve such actions in production — including
+an agent granting itself the administrator role — answered
+`allow / reeflex.policy/default_allow` (RFX-128).
+
+**R7 is the rule family that prices them, and it reads `action.ability`.**
+§3 already says that field exists "for fine-grained rules"; R7 is the first
+rule to take it up. The signal lists live in
+`reeflex-core/policy/authority.rego` as policy data a deployment edits, in the
+same way `budgets.rego` holds the R5 limits.
+
+```jsonc
+// production + a non-read verb + an ability whose TOKENS carry a signal
+{"action": {"verb": "update", "ability": "users/assign-role"},
+ "target": {"environment": "production"}}
+// -> require_approval, reeflex.policy/authority_change_prod
+```
+
+Four properties are **normative**, because each one is what keeps a
+name-derived signal from becoming the defect RFX-131 removed:
+
+1. **RAISE-ONLY.** R7 may turn an `allow` into a `require_approval`. It may
+   never lower a verdict, so it cannot soften R0/R2/R3 and an ability string
+   can never be used to buy a smaller answer (the RFX-133 shape).
+2. **REQUIRE_APPROVAL, NEVER DENY.** `authority_change_prod` is resolvable;
+   only R3 is terminal. A coverage gap is answered by asking a human, not by a
+   second refusal nobody can clear (§4.0's argument).
+3. **WHOLE-TOKEN MATCHING, ACROSS SEPARATORS AND camelCase.** `grant_admin`,
+   `assign-role` and `AttachUserPolicy` tokenize alike; `update-migrant` does
+   not match `grant` and `create-installment` does not match `install`.
+4. **A NON-READ VERB IS REQUIRED.** A read cannot change who may act, so
+   `users/list-roles` is not held.
+
+**R7 IS A FLOOR AND IT IS INCOMPLETE BY CONSTRUCTION.** `action.ability` is
+caller-supplied: an adapter naming its ability `tweak-role` evades R7 entirely,
+and an adapter that fills `ability` with a TOOL name rather than an operation
+name (reeflex-claude emits `claude-code/Bash`) is invisible to it. R7 does not
+make an ability honest; it makes an honest ability *count*. What makes the
+floor worth having anyway is property 1: being wrong costs an approval prompt,
+never a missed refusal.
+
+Two limits are stated rather than implied. A sensitive setting reached through
+a **generic** ability is not covered — disabling 2FA via `core/update-option`
+is indistinguishable from renaming the site, because the option name never
+leaves `params`. And R7 deliberately does not read `target.ref`: for a coding
+agent the ref is a filesystem path, and matching it would hold every edit of
+`src/auth/roles.py`.
+
 ---
 
 ## 5. The Decision

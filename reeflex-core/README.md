@@ -142,10 +142,27 @@ Run from the repo root (requires OPA on `PATH` or `REEFLEX_OPA_BIN` set):
 opa test reeflex-core/policy/ -v
 ```
 
-This runs `reeflex_test.rego` against `reeflex.rego` and covers all five policy
-rules: R1 allow, R2 require_approval, R3 deny, R4 default allow, R5 session
-delete budget (fragmentation resistance), plus approval-present bypass and
-absent-cumulative defensive defaults.
+This runs every `*_test.rego` in the policy dir against every rule file and
+covers:
+
+| rule | verdict | what it prices |
+|---|---|---|
+| R0 | require_approval | the action core could not classify (`unclassified_action`) |
+| R1 | allow | read-only internal |
+| R2 | require_approval | irreversible + broad + production |
+| R3 | deny | irreversible + systemic + production — the one terminal refusal |
+| R4 | allow | the default: nothing above matched |
+| R5 | require_approval | configurable cumulative budgets (fragmentation resistance) |
+| R7 | require_approval | authority / credential / executability change in production (`authority_change_prod`) |
+
+plus approval-present bypass and absent-cumulative defensive defaults.
+
+**What the pack does NOT price**, stated here rather than discovered: R4 is a
+default ALLOW, so anything none of the above names is permitted. R7 narrows
+that for the authority and executability families **only as far as
+`action.ability` is honest and descriptive** — see SPEC §4.4 for the four
+limits, including the adapters whose ability is a tool name rather than an
+operation name.
 
 ---
 
@@ -180,8 +197,10 @@ reeflex-core/
     holds.py           Event-sourced JSONL hold store (HIL Phase 1)
     webhook.py         Outbound hold webhook emitter (HIL Phase 1)
   policy/
-    reeflex.rego       Policy rules R1–R5 (OPA/Rego)
-    reeflex_test.rego  OPA unit tests for the policy
+    reeflex.rego       Policy rules R0–R5 + precedence (OPA/Rego)
+    budgets.rego       R5's configurable budget dimensions and limits
+    authority.rego     R7's authority/credential/executability signal lists
+    *_test.rego        OPA unit tests for the policy
   tests/
     test_decide.py     Python unit tests for the full pipeline
     test_hil.py        HIL Phase 1 tests (holds store, freeze, approval, API, webhook)
