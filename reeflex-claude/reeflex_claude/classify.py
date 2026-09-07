@@ -479,6 +479,34 @@ _UNBOUNDED_WRAPPERS = frozenset(["xargs", "parallel"])
 
 _RM_COMMANDS = frozenset(["rm", "rmdir", "unlink", "shred"])
 
+# ---------------------------------------------------------------------------
+# RFX-144 (ported from PR #98, dev-1 round 054) -- a path that names a
+# CONTAINER of records rather than one leaf entity.
+#
+# WHY THIS IS ALLOWED TO EXIST alongside SPEC §4.2, which forbids an adapter
+# from reading cardinality off a name: this is a KIND claim, not a cardinality
+# claim, and §4.2 permits exactly that ("An adapter MAY use name-derived
+# signals to satisfy step 1 ... and MAY use them to raise").  It is therefore
+# RAISE-ONLY -- it can make a single-path target `broad`, and it can never make
+# an enumerated set smaller.  `rm /srv/prod/db.sqlite` names one file, and that
+# one file is a database: the cardinality is still 1, but the KIND of thing
+# being destroyed is a container of records.
+#
+# A block device is worse again -- writing a filesystem over it is not
+# something a human approval can undo -- so it raises to `systemic`.
+_DATA_CONTAINER_PATH_RE = re.compile(
+    r"(\.sqlite3?$|\.db$|\.mdb$|\.sql$|\.dump$|\.bak$|\.tar(\.(gz|bz2|xz|zst))?$"
+    r"|\.zip$|\.rdb$|\.aof$|\.frm$|\.ibd$|/pgdata(/|$)|/mysql(/|$))",
+    re.IGNORECASE,
+)
+_BLOCK_DEVICE_RE = re.compile(
+    r"^/dev/(?!null$|zero$|urandom$|random$|std(in|out|err)$|tty|fd/)"
+)
+
+# `VAR=value` prefix assignment (ported from PR #98).  The identifier-start
+# anchor is what keeps this from eating `--flag=value`.
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
 # Interpreters whose inline program text is visible on the command line.
 _INLINE_INTERPRETERS = frozenset([
     "python", "python2", "python3", "perl", "ruby", "node", "nodejs",
@@ -1155,6 +1183,18 @@ def _radius_for_paths(path_args: list, is_recursive: bool):
 
     if is_systemic:
         return "systemic", "rm_recursive_root", "destructive_systemic"
+
+    # RFX-144 (ported from PR #98) -- KIND, raise-only, and deliberately placed
+    # here rather than in `_classify_path_delete` so that `rm /srv/prod/db.sqlite`
+    # and `> /srv/prod/db.sqlite` get the SAME reading: this function is the one
+    # rule for path sets and is shared by the rm path and the overwrite path.
+    # It cannot lower anything -- both branches only ever return broad/systemic,
+    # and they sit below `is_systemic` so they can never demote it.
+    if any(_BLOCK_DEVICE_RE.match(p) for p in path_args):
+        return "systemic", "overwrite_container", "destructive_systemic"
+    if any(_DATA_CONTAINER_PATH_RE.search(p) for p in path_args):
+        return "broad", "overwrite_container", "destructive_broad"
+
     if is_recursive:
         return "broad", "rm_recursive", "destructive_broad"
     if is_predicate:
@@ -1651,8 +1691,8 @@ def _shell_c_payload(tokens: list):
     way.  Measured before this: `eval "rm -rf /srv/prod/data"` was priced as
     an unrecognised execute and ALLOWED.  Note this covers only the case where
     the program text is VISIBLE; `eval "$CMD"` and `$(echo rm) -rf ...` are
-    not, and no string-matching classifier can price them (see the `gap-`
-    family in conformance.py).
+    not, and this classifier does not price them -- the destruction is not in
+    the string it is given (see the `gap-` family in conformance.py).
     """
     if not tokens:
         return None
@@ -1666,7 +1706,17 @@ def _shell_c_payload(tokens: list):
         return None
     for i, t in enumerate(tokens[1:], start=1):
         if t in ("-c", "-lc", "-ic") and i + 1 < len(tokens):
-            return tokens[i + 1]
+            # RFX-144 (dev-1 round 054).  This returned `tokens[i + 1]` and so
+            # dropped everything after the first token of the payload.  shlex
+            # concatenates adjacent quoted runs, so a nested construct like
+            #   sh -c 'sh -c "rm -rf /srv/prod/data"'
+            # split into segments whose payload token no longer carried the
+            # `rm` -- the line resolved to a bare `sh` and was priced as an
+            # unrecognised execute.  PR #98 has the identical bug and caught
+            # this case only as a side effect of its fail-closed default, so
+            # neither PR actually PARSED this input.  Joining the remainder is
+            # what recovers the payload.
+            return " ".join(tokens[i + 1:])
     return None
 
 
@@ -1713,6 +1763,15 @@ def _peel_wrappers(tokens: list):
         # command.  Peeled before anything else so a destruction inside a
         # loop or a conditional is read as the destruction it is.
         if word in _SHELL_KEYWORDS:
+            i += 1
+            continue
+
+        # RFX-144 (ported from PR #98) -- a bare `VAR=value` prefix assignment,
+        # as in `FOO=1 rm -rf /srv/prod/data`.  `env FOO=1 rm ...` was already
+        # peeled via `env`; the bare form was not, so the whole line was priced
+        # as an unrecognised execute.  Anchored at an identifier start so it
+        # cannot swallow `--flag=value`.
+        if _ENV_ASSIGN_RE.match(tokens[i]):
             i += 1
             continue
 
