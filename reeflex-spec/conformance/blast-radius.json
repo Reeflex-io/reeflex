@@ -1,0 +1,519 @@
+{
+  "$comment": [
+    "Conformance vectors for SPEC §4.2 — the normative derivation of axes.blast_radius.",
+    "",
+    "WHY THIS FILE EXISTS. blast_radius is the only axis that selects between",
+    "require_approval (R2, broad) and deny (R3, systemic), and until this file existed",
+    "each adapter derived it its own way: the WordPress reference adapter by substring",
+    "matching on the ability name, the Claude Code reference adapter from the shape of",
+    "the command's target. SPEC §7 has always said an adapter 'MUST pass the conformance",
+    "suite' for the axes; for this axis there was no suite to pass. RFX-131.",
+    "",
+    "HOW A CASE IS WRITTEN. `given` states the situation ABSTRACTLY — what the adapter",
+    "knows about the affected set at the call site — so the case is the same case in",
+    "every language. `bindings` then gives the concrete call for each adapter that can",
+    "express that situation. A case with no binding for an adapter is NOT APPLICABLE to",
+    "it and the runner MUST report it as such by name; it must never be silently",
+    "skipped, or the count of cases passed stops meaning anything.",
+    "",
+    "target_shape is the one thing every adapter can answer without querying the",
+    "resource:",
+    "  container  — the target is the system's structure/control plane, not members of it",
+    "  predicate  — the affected set is described by a filter, not enumerated",
+    "  enumerated — the adapter holds the actual list of affected entities"
+  ],
+  "spec_section": "4.2",
+  "ticket": "RFX-131",
+  "broad_min": 20,
+  "cases": [
+    {
+      "name": "container/schema",
+      "given": {
+        "target_shape": "container",
+        "container": "schema",
+        "note": "drops the container of tables, not rows in one"
+      },
+      "expect": {
+        "blast_radius": "systemic"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "psql -c 'DROP SCHEMA public CASCADE'"
+          }
+        },
+        "wordpress": {
+          "ability": "db/drop-schema",
+          "input": {
+            "schema": "wp"
+          },
+          "trusted_scope": "container"
+        }
+      }
+    },
+    {
+      "name": "container/filesystem-root",
+      "given": {
+        "target_shape": "container",
+        "container": "runtime"
+      },
+      "expect": {
+        "blast_radius": "systemic"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "rm -rf /"
+          }
+        }
+      }
+    },
+    {
+      "name": "container/site-wide-config",
+      "given": {
+        "target_shape": "container",
+        "container": "configuration",
+        "note": "changes what the system is, for every entity in it. No name signal reaches this one, which is why the DECLARATION path exists."
+      },
+      "expect": {
+        "blast_radius": "systemic"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "core/flush-rewrites",
+          "input": {},
+          "trusted_scope": "container"
+        }
+      }
+    },
+    {
+      "name": "container/access-control",
+      "given": {
+        "target_shape": "container",
+        "container": "access_control",
+        "note": "changes who may act. Reached by the NAME path (SYSTEMIC_SEGMENTS), no declaration."
+      },
+      "expect": {
+        "blast_radius": "systemic"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "core/reset-all-roles",
+          "input": {}
+        }
+      }
+    },
+    {
+      "name": "predicate/whole-table",
+      "given": {
+        "target_shape": "predicate",
+        "predicate": "every row in one table"
+      },
+      "expect": {
+        "blast_radius": "broad"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "psql -c 'TRUNCATE TABLE wp_postmeta'"
+          }
+        },
+        "wordpress": {
+          "ability": "core/truncate-postmeta",
+          "input": {}
+        }
+      }
+    },
+    {
+      "name": "predicate/no-where-clause",
+      "given": {
+        "target_shape": "predicate",
+        "predicate": "statement with no filter"
+      },
+      "expect": {
+        "blast_radius": "broad"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "psql -c 'DELETE FROM wp_comments'"
+          }
+        }
+      }
+    },
+    {
+      "name": "predicate/where-clause",
+      "given": {
+        "target_shape": "predicate",
+        "predicate": "statement with a filter",
+        "note": "a WHERE clause narrows a predicate to a smaller predicate; it does not enumerate one. The row count is not in the command text."
+      },
+      "expect": {
+        "blast_radius": "broad"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "psql -c \"DELETE FROM orders WHERE status='old'\""
+          }
+        }
+      }
+    },
+    {
+      "name": "predicate/where-clause-matching-everything",
+      "given": {
+        "target_shape": "predicate",
+        "predicate": "a filter that matches every row",
+        "note": "the worst case of the one above, and the reason a filter cannot be read as evidence of a small set."
+      },
+      "expect": {
+        "blast_radius": "broad"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "psql -c 'DELETE FROM wp_users WHERE 1=1'"
+          }
+        }
+      }
+    },
+    {
+      "name": "predicate/directory-recursive",
+      "given": {
+        "target_shape": "predicate",
+        "predicate": "a directory and everything under it"
+      },
+      "expect": {
+        "blast_radius": "broad"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "rm -rf ./build/artifacts"
+          }
+        }
+      }
+    },
+    {
+      "name": "predicate/no-target-list-at-all",
+      "given": {
+        "target_shape": "predicate",
+        "predicate": "the call names no entities, so the resource decides the set",
+        "note": "THE RFX-131 DEFAULT. This is the case both adapters used to report as `single`."
+      },
+      "expect": {
+        "blast_radius": "broad"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "core/empty-trash",
+          "input": {}
+        }
+      }
+    },
+    {
+      "name": "predicate/affected-set-not-the-parameter",
+      "given": {
+        "target_shape": "predicate",
+        "predicate": "one id in, an unenumerated set of child entities affected",
+        "note": "SPEC §4.2: the enumeration must be OF THE AFFECTED ENTITIES, not of the parameters. A name cannot decide this and an ids array actively misleads, so the ability MUST declare it."
+      },
+      "expect": {
+        "blast_radius": "broad"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "posts/delete-all-revisions-of-post",
+          "input": {
+            "ids": [
+              7
+            ]
+          },
+          "trusted_scope": "predicate"
+        }
+      }
+    },
+    {
+      "name": "predicate/empty-enumeration",
+      "given": {
+        "target_shape": "predicate",
+        "cardinality": 0,
+        "note": "An EMPTY list is not a small list. Handlers routinely read an empty selection as 'everything', and an agent wanting `single` would otherwise just send an empty array."
+      },
+      "expect": {
+        "blast_radius": "broad"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "posts/delete",
+          "input": {
+            "ids": []
+          }
+        }
+      }
+    },
+    {
+      "name": "enumerated/1",
+      "given": {
+        "target_shape": "enumerated",
+        "cardinality": 1
+      },
+      "expect": {
+        "blast_radius": "single"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "rm ./notes.txt"
+          }
+        },
+        "wordpress": {
+          "ability": "posts/delete",
+          "input": {
+            "ids": [
+              7
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "enumerated/2",
+      "given": {
+        "target_shape": "enumerated",
+        "cardinality": 2
+      },
+      "expect": {
+        "blast_radius": "scoped"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "rm ./a.txt ./b.txt"
+          }
+        },
+        "wordpress": {
+          "ability": "posts/delete",
+          "input": {
+            "ids": [
+              7,
+              8
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "enumerated/just-under-broad-min",
+      "given": {
+        "target_shape": "enumerated",
+        "cardinality": 19
+      },
+      "expect": {
+        "blast_radius": "scoped"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "rm ./f1 ./f2 ./f3 ./f4 ./f5 ./f6 ./f7 ./f8 ./f9 ./f10 ./f11 ./f12 ./f13 ./f14 ./f15 ./f16 ./f17 ./f18 ./f19"
+          }
+        },
+        "wordpress": {
+          "ability": "posts/delete",
+          "input": {
+            "ids": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "enumerated/at-broad-min",
+      "given": {
+        "target_shape": "enumerated",
+        "cardinality": 20,
+        "note": "BROAD_MIN is INCLUSIVE. The two reference adapters disagreed at exactly this value until this case existed: WordPress used > 20, Claude Code used >= 20."
+      },
+      "expect": {
+        "blast_radius": "broad"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "rm ./f1 ./f2 ./f3 ./f4 ./f5 ./f6 ./f7 ./f8 ./f9 ./f10 ./f11 ./f12 ./f13 ./f14 ./f15 ./f16 ./f17 ./f18 ./f19 ./f20"
+          }
+        },
+        "wordpress": {
+          "ability": "posts/delete",
+          "input": {
+            "ids": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "predicate/glob-in-target",
+      "given": {
+        "target_shape": "predicate",
+        "predicate": "a wildcard: the shell, not the adapter, decides the set",
+        "note": "The Claude Code idiom of `predicate/no-target-list-at-all`. Reported as `single` before RFX-131."
+      },
+      "expect": {
+        "blast_radius": "broad"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "rm -f *"
+          }
+        }
+      }
+    },
+    {
+      "name": "predicate/glob-with-extension",
+      "given": {
+        "target_shape": "predicate",
+        "predicate": "a narrower wildcard is still a wildcard"
+      },
+      "expect": {
+        "blast_radius": "broad"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "rm ./logs/*.log"
+          }
+        }
+      }
+    },
+    {
+      "name": "enumerated/dot-in-filename-is-not-a-glob",
+      "given": {
+        "target_shape": "enumerated",
+        "cardinality": 1,
+        "note": "guards the glob rule against over-firing on ordinary filenames"
+      },
+      "expect": {
+        "blast_radius": "single"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "rm ./notes.v2.txt"
+          }
+        }
+      }
+    },
+    {
+      "name": "name-must-not-raise-above-an-enumeration",
+      "given": {
+        "target_shape": "enumerated",
+        "cardinality": 1,
+        "note": "SPEC §4.2 second MUST: an enumeration is evidence, a name is not."
+      },
+      "expect": {
+        "blast_radius": "single"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "posts/delete-bulk-selection",
+          "input": {
+            "ids": [
+              7
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "name-may-raise-a-predicate-to-systemic",
+      "given": {
+        "target_shape": "container",
+        "container": "access_control",
+        "note": "no enumeration to contradict it, and the name is the only place the container claim appears"
+      },
+      "expect": {
+        "blast_radius": "systemic"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "core/delete-all-users",
+          "input": {}
+        }
+      }
+    },
+    {
+      "name": "agent-declared-count-may-not-lower-a-predicate",
+      "given": {
+        "target_shape": "predicate",
+        "predicate": "no enumeration; the agent asserts count=1",
+        "note": "a caller-supplied count is not an enumeration. It may raise, never lower."
+      },
+      "expect": {
+        "blast_radius": "broad"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "core/empty-trash",
+          "input": {
+            "count": 1
+          }
+        }
+      }
+    }
+  ]
+}
