@@ -91,6 +91,14 @@ def build_envelope(hook_payload: dict, cls: dict) -> dict:
         "tool_name": tool_name,
         "verb_source": _verb_source(tool_name, cls["verb"], tool_input),
     }
+    # RFX-206: the classifier may have priced something core's budgets read --
+    # today `amount`/`currency`, which is the ONLY place SPEC §4.1.1's money
+    # dimension looks.  Already scalar and already redacted by classify.py; we
+    # merge rather than overwrite so the two keys above cannot be displaced.
+    params_extra = cls.get("params_extra")
+    if isinstance(params_extra, dict):
+        for key, value in params_extra.items():
+            params.setdefault(key, value)
 
     # Magnitude
     magnitude = {
