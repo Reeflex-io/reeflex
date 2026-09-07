@@ -449,6 +449,105 @@ names, or the URI-shaped refs other adapters emit. **An operator who does not
 edit `protected.rego` is protected only where their estate follows the FHS.**
 Conformance (§7) requires a deployment to review that list, exactly as it
 requires reviewing the budget limits in §4.1.1.
+## 4.4 Authority, credentials and executability (R7)
+
+> Section numbering, so the four open policy PRs do not collide: §4.2 is
+> `blast_radius` derivation (PR #94), §4.3 is named production assets / R6
+> (PR #100), §4.1.2 is the undeclared-count floor (PR #116). This is §4.4 / R7
+> and it depends on none of them.
+
+The three axes in §4 price **destructive scope**: how much is affected, how
+recoverable it is, and whether the effect leaves the system. They do not model
+two other ways an action can be dangerous, and neither is a gap in the axes —
+it is a gap in what the rules built on them cover:
+
+- **AUTHORITY** — *this action changes who may act.* A privilege grant, a role
+  assignment, a capability revocation, an IAM policy attachment.
+- **EXECUTABILITY** — *this action causes new code to run.* A plugin or theme
+  installation, a scheduled job, a module load.
+
+Both are honestly `reversible`, `single` and `internal`: the adapter is not
+lying. Measured on core 759b83f, twelve such actions in production — including
+an agent granting itself the administrator role — answered
+`allow / reeflex.policy/default_allow` (RFX-128).
+
+**R7 is the rule family that prices them, and it reads `action.ability`.**
+§3 already says that field exists "for fine-grained rules"; R7 is the first
+rule to take it up. The signal lists live in
+`reeflex-core/policy/authority.rego` as policy data a deployment edits, in the
+same way `budgets.rego` holds the R5 limits.
+
+```jsonc
+// production + a non-read verb + an ability whose TOKENS carry a signal
+{"action": {"verb": "update", "ability": "users/assign-role"},
+ "target": {"environment": "production"}}
+// -> require_approval, reeflex.policy/authority_change_prod
+```
+
+Four properties are **normative**, because each one is what keeps a
+name-derived signal from becoming the defect RFX-131 removed:
+
+1. **RAISE-ONLY.** R7 may turn an `allow` into a `require_approval`. It may
+   never lower a verdict, so it cannot soften R0/R2/R3 and an ability string
+   can never be used to buy a smaller answer (the RFX-133 shape).
+2. **REQUIRE_APPROVAL, NEVER DENY.** `authority_change_prod` is resolvable;
+   only R3 is terminal. A coverage gap is answered by asking a human, not by a
+   second refusal nobody can clear (§4.0's argument).
+3. **WHOLE-TOKEN MATCHING, ACROSS SEPARATORS AND camelCase.** `grant_admin`,
+   `assign-role` and `AttachUserPolicy` tokenize alike; `update-migrant` does
+   not match `grant` and `create-installment` does not match `install`.
+4. **A NON-READ VERB IS REQUIRED.** A read cannot change who may act, so
+   `users/list-roles` is not held.
+
+**R7 IS A FLOOR AND IT IS INCOMPLETE BY CONSTRUCTION.** `action.ability` is
+caller-supplied: an adapter naming its ability `tweak-role` evades R7 entirely,
+and an adapter that fills `ability` with a TOOL name rather than an operation
+name (reeflex-claude emits `claude-code/Bash`) is invisible to it. R7 does not
+make an ability honest; it makes an honest ability *count*. What makes the
+floor worth having anyway is property 1: being wrong costs an approval prompt,
+never a missed refusal.
+
+Two limits are stated rather than implied. R7 deliberately does not read
+`target.ref`: for a coding agent the ref is a filesystem path, and matching it
+would hold every edit of `src/auth/roles.py`. And a sensitive setting reached
+through a **generic** ability is not something core can see — the option name
+never leaves `params`, which §2 defines as an open backend-specific bag that no
+rule may pattern-match, so `option_name: two_factor_enabled` and
+`option_name: blogname` reach R7 identical.
+
+**That second one is an obligation on the adapter, and it is normative.** An
+adapter whose backend routes materially different operations through ONE
+ability MUST name the operation it actually observed in `action.ability`,
+using a word the operator's rules can read. The reference implementation is
+WordPress's `core/update-option`:
+
+```
+core/update-option  +  option_name=two_factor_enabled
+    ->  action.ability = "core/update-option/mfa/two_factor_enabled"
+```
+
+Three properties are required of such a refinement, because each has already
+been got wrong once:
+
+1. **The registered ability stays a literal prefix.** Nothing is renamed; an
+   operator's existing filter on `core/update-option` still matches.
+2. **The family word comes from the vocabulary the rules use** (here `mfa`).
+   A word chosen for readability alone — `core/update-security-option` — is an
+   honest label that no rule can read.
+3. **The refinement affects `action.ability` and nothing else.** The verb, the
+   three axes, the target kind and the count MUST still be derived from the
+   registered ability, or a caller-supplied name can move an axis it has no
+   business moving (§2's rule that no caller-supplied value may lower risk cuts
+   both ways — it must not raise one by accident either).
+
+The refinement is also where the record gets the operation's identity: the
+audit line carries `action.ability` and carries neither `params` nor
+`target.ref`, so an option name that is not in the ability is in no artefact an
+approver or an auditor ever reads.
+
+Like R7 itself, a recognised-operation list is a **floor**: an operation the
+backend adds tomorrow is not in it. It is raise-only, so being wrong costs an
+approval prompt and never a missed refusal.
 
 ---
 
