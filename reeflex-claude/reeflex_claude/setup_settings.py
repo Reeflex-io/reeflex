@@ -2,10 +2,26 @@
 setup_settings.py -- Claude Code settings.json read/merge/write for `reeflex-claude setup`.
 
 Implements the F12 structural fix (code-reports/cold-start-doc-fidelity-friction-log-
-dev-2-20260701.md): once pip-installed, the PreToolUse hook command is the bare
-console entry point `reeflex-claude hook` -- no absolute path, no cwd-dependent
-`python -m` import, so there is no "wrong cwd -> ModuleNotFoundError -> non-zero
-exit -> Claude Code silently runs the tool anyway" failure mode left to trigger.
+dev-2-20260701.md): the PreToolUse hook command must not be a cwd-dependent
+`python -m` import, because "wrong cwd -> ModuleNotFoundError -> non-zero exit ->
+Claude Code silently runs the tool anyway" is a silent-allow bypass.
+
+A BARE console entry point (`reeflex-claude hook`) does not close that hole, it
+only moves it from cwd to PATH: pip-install into a virtualenv, launch `claude`
+from a normal shell, and the hook is `command not found` -> non-zero exit ->
+every tool call runs UNGATED, with no audit record and no message from Claude
+Code. Measured on a real agent (qa--032). So `setup` wires the ABSOLUTE path of
+the installed entry point -- see resolve_hook_command() -- which depends on
+neither cwd nor the launching shell's PATH. `reeflex-claude check` resolves the
+same way, so the command it probes is the command Claude Code will actually run.
+
+The matcher is a WILDCARD, deliberately. Claude Code treats `matcher` as an
+allowlist: a tool whose name does not match never reaches the hook at all, so an
+allowlist of built-in tool names silently exempts every `mcp__*` tool, Task,
+SlashCommand, Skill and every tool added to Claude Code after this string was
+written. A governance gate cannot be enumerated in advance -- classify.py's
+_classify_unknown() exists precisely to price a tool we have never seen, and it
+is unreachable unless the matcher lets the event through.
 
 MERGE SEMANTICS (never clobber):
   - Load existing JSON (or start from {} if the file is absent/empty).
@@ -34,21 +50,51 @@ of untouched regions is ever required.
 from __future__ import annotations
 
 import json
+import re
+import shlex
+import shutil
+import sys
 from pathlib import Path
 from typing import Any, Dict
 
 # ---------------------------------------------------------------------------
-# Canonical hook entry (Leo's spec, verbatim)
+# Canonical hook entry
 # ---------------------------------------------------------------------------
 
-DEFAULT_MATCHER = (
-    "Bash|Write|Edit|MultiEdit|Read|Glob|Grep|LS|NotebookEdit|WebFetch|WebSearch"
-)
+# Every tool, including ones that do not exist yet. See the module docstring:
+# the matcher is an allowlist, so anything absent from it reaches no gate.
+DEFAULT_MATCHER = "*"
+
+# Fallback command, and the ownership marker. hook_command_for_settings() prefers the
+# absolute path of the installed entry point.
 HOOK_COMMAND = "reeflex-claude hook"
 DEFAULT_TIMEOUT = 30
 
 # Substring used to identify "our" hook entry among possibly-foreign ones.
 _OWNERSHIP_MARKER = "reeflex-claude hook"
+
+
+def hook_command_for_settings() -> str:
+    """
+    The hook command to wire into settings.json.
+
+    Prefer the ABSOLUTE path of the installed `reeflex-claude` entry point: a
+    PreToolUse hook is spawned by Claude Code, whose PATH is whatever the user's
+    launching shell had -- not the virtualenv pip installed into. A bare name
+    that fails to resolve exits non-zero, which Claude Code treats as "continue",
+    i.e. a silent allow with no audit record.
+
+    When the console script cannot be located (source checkout, exotic install
+    layout), fall back to this interpreter's ABSOLUTE path plus `-m` -- the same
+    two-tier resolution `reeflex-claude check` uses for its probe, so the command
+    that is wired is the command that is verified. Both branches are absolute, so
+    neither depends on the launching shell's PATH; `check`'s deny probe is what
+    confirms the module is actually importable.
+    """
+    exe = shutil.which("reeflex-claude")
+    if exe:
+        return f"{shlex.quote(exe)} hook"
+    return f"{shlex.quote(sys.executable)} -m reeflex_claude.cli hook"
 
 
 class SettingsError(Exception):
@@ -99,8 +145,52 @@ def load_settings(path: Path) -> Dict[str, Any]:
 
 
 def is_ours(command: Any) -> bool:
-    """True if `command` is a string containing our ownership marker."""
-    return isinstance(command, str) and _OWNERSHIP_MARKER in command
+    """
+    True if `command` is one of our hook entries.
+
+    Recognises all three forms our own `setup` has ever written:
+      * the bare console script (`reeflex-claude hook`) -- every release <= 0.1.7
+      * an absolute path to the console script, possibly shell-quoted, where the
+        quote character lands between the executable name and `hook`
+      * `<abs python> -m reeflex_claude.cli hook` (note the UNDERSCORE: the
+        module name, not the distribution name)
+    Without all three, `setup` would append a duplicate entry alongside an older
+    one instead of updating it in place, leaving two hooks on one tool call.
+    """
+    if not isinstance(command, str):
+        return False
+    if _OWNERSHIP_MARKER in command:
+        return True
+    names = ("reeflex-claude", "reeflex_claude")
+    if not any(n in command for n in names):
+        return False
+    return re.search(r"(^|\s)hook(\s|$)", command) is not None
+
+
+def wired_hook_command(settings: Dict[str, Any]):
+    """
+    Return the hook command string currently wired into settings, or None.
+
+    `check` needs this: resolving the command itself only proves that the
+    INSTALLING shell can find the entry point, which it always can. The command
+    that matters is the one Claude Code will spawn -- the string in the file.
+    """
+    hooks_root = settings.get("hooks")
+    if not isinstance(hooks_root, dict):
+        return None
+    pretool = hooks_root.get("PreToolUse")
+    if not isinstance(pretool, list):
+        return None
+    for block in pretool:
+        if not isinstance(block, dict):
+            continue
+        block_hooks = block.get("hooks")
+        if not isinstance(block_hooks, list):
+            continue
+        for item in block_hooks:
+            if isinstance(item, dict) and is_ours(item.get("command")):
+                return item.get("command")
+    return None
 
 
 def merge_hook_entry(
