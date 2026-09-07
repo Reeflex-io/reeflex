@@ -273,9 +273,9 @@
       "expect": "ask",
       "family": "destroy",
       "check": false,
-      "residual": "RFX-153",
+      "residual": null,
       "expect_verb": "delete",
-      "expect_blast_radius": "single"
+      "expect_blast_radius": "broad"
     },
     {
       "id": "destroy-truncate-db",
@@ -287,9 +287,9 @@
       "expect": "ask",
       "family": "destroy",
       "check": false,
-      "residual": "RFX-153",
+      "residual": null,
       "expect_verb": "delete",
-      "expect_blast_radius": "single"
+      "expect_blast_radius": "broad"
     },
     {
       "id": "destroy-redirect-truncate",
@@ -301,9 +301,37 @@
       "expect": "ask",
       "family": "destroy",
       "check": false,
-      "residual": "RFX-153",
+      "residual": null,
       "expect_verb": "delete",
-      "expect_blast_radius": "single"
+      "expect_blast_radius": "broad"
+    },
+    {
+      "id": "destroy-bare-assign-rm",
+      "tool": "Bash",
+      "input": {
+        "command": "FOO=1 rm -rf /srv/prod/data"
+      },
+      "effect": "a bare VAR=value prefix, not `env` -- the wrapper was not peeled",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad"
+    },
+    {
+      "id": "destroy-nested-shell-c",
+      "tool": "Bash",
+      "input": {
+        "command": "sh -c 'sh -c \"rm -rf /srv/prod/data\"'"
+      },
+      "effect": "nested sh -c: the payload token no longer carried the rm",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad"
     },
     {
       "id": "destroy-sudo-rm-rf-root",

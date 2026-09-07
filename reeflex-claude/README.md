@@ -334,14 +334,25 @@ drops cases from its own total reads as "covered everything".
   destruction executed on another host (`ssh prod rm -rf /srv/data`) is
   priced as the outbound `emit` it is rather than the delete it causes.
   UPGRADE: a real shell-AST parser once tooling stabilises.
-- **A single named production file is only governed if your core declares it
-  (RFX-153).**  `blast_radius` is a *cardinality* axis, so R2's `broad`
-  requirement never reached `rm /srv/prod/db.sqlite` — one production database,
-  gone.  The adapter cannot fix this by pricing one file `broad` (SPEC §4.2: a
-  name may claim KIND, not CARDINALITY, and this environment defaults to
-  `production`, so it would prompt on `rm /tmp/scratch.txt` too).  It is closed
-  in the **policy pack** by R6 (SPEC §4.3), which holds an irreversible
-  production action on a *declared production asset* at any cardinality.
+- **A single named production file: covered two ways now, and the two do not
+  cover the same set (RFX-153).**  `blast_radius` is a *cardinality* axis, so
+  R2's `broad` requirement never reached `rm /srv/prod/db.sqlite` — one
+  production database, gone.
+  **Adapter side:** a path whose name says it is a *container of records*
+  (`.sqlite`, `.db`, `.sql`, `.dump`, `.tar*`, `/pgdata/`, `/mysql/` …) is now
+  raised to `broad`, and a block device (`/dev/sdb`, excluding `/dev/null` and
+  friends) to `systemic`.  This is a **KIND** claim, which SPEC §4.2 permits a
+  name to make, and it is **raise-only** — the cardinality is still 1, and it
+  can never make an enumerated set smaller or lower a `systemic` reading.  So
+  `rm /srv/prod/db.sqlite` reaches a human while `rm /tmp/scratch.txt` and
+  `rm /srv/app/notes.txt` still allow.
+  **What the adapter side does NOT cover:** a production file whose *name*
+  carries no container signal — `/home/app/data/store`, `/srv/prod/state`.
+  The adapter cannot price those `broad` without claiming a cardinality it
+  cannot observe.
+  **Policy side:** R6 (SPEC §4.3) closes that remainder — it holds an
+  irreversible production action on a *declared production asset* at any
+  cardinality, by ref rather than by name shape.
   **Read this before assuming you are covered:** the list shipped in
   `reeflex-core/policy/protected.rego` is a floor derived from the Filesystem
   Hierarchy Standard (`/srv`, `/var/lib`, `/var/opt`, ...).  It knows nothing
@@ -349,25 +360,24 @@ drops cases from its own total reads as "covered everything".
   names.  UPGRADE: add your paths to `protected_assets`, or set
   `default_protected := true` to hold every irreversible production action
   whose ref is not declared ephemeral.
-- **Two destruction shapes needed BOTH halves of this change, and now have
-  them (RFX-153 + RFX-144, measured).**  `> /srv/prod/db.sqlite` and
+- **Two destruction shapes needed BOTH halves of this change (RFX-153 +
+  RFX-144, measured).**  `> /srv/prod/db.sqlite` and
   `dd if=/dev/zero of=/srv/prod/db.sqlite` used to be classified `execute` +
-  `recoverable` by this adapter, and R6 requires `irreversible` — so while the
-  policy pack alone was in place, **no policy posture rescued them**: a policy
-  rule cannot correct an envelope that under-declares irreversibility.  The
-  RFX-144 classifier now prices both as `delete` + `irreversible` with
-  `target_ref` carrying the path, so R6 reaches them.  Measured on the combined
-  tree, same envelope both ways:
+  `recoverable`, and R6 requires `irreversible` — so while the policy pack
+  alone was in place, **no policy posture rescued them**: a policy rule cannot
+  correct an envelope that under-declares irreversibility.  Both are now
+  `delete` + `irreversible` + `broad`.  Measured through the shipped policy
+  pack, same envelope both ways:
 
   | adapter axes | decision |
   |---|---|
   | `execute` + `recoverable` (before RFX-144) | `allow` / `reeflex.policy/default_allow` |
   | `delete` + `irreversible` (after RFX-144) | `require_approval` / `reeflex.policy/irreversible_protected_asset_prod` |
 
-  Stated this way on purpose: **neither change closes this on its own**, and
-  each was measured green in its own suite while the gap stayed open.  If only
-  one of the two is present in your build, treat redirection and `dd` as
-  ungoverned.
+  Stated this way on purpose: **neither change closed this on its own**, and
+  each was green in its own test suite for the whole time the gap was open.
+  If only one of the two is present in your build, treat redirection and `dd`
+  as ungoverned.
 - **Stub signing**: `meta.signature = "ed25519:stub:..."`.  UPGRADE: Vault-backed
   ed25519 signing once the key management path is implemented (SPEC §6 note).
 - **Four families the classifier cannot see at all** (RFX-158): the program

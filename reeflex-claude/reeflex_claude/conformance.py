@@ -153,17 +153,35 @@ CASES = [
     # the same rule that priced `cat docs/truncate.md` as a broad production
     # delete (see the `fp-` cases below, all measured `ask` on main). An
     # accident is not a guarantee; RFX-153 is where the guarantee belongs.
+    # RFX-153 RESIDUAL CLOSED for these three (dev-1 round 054, ported from
+    # PR #98).  They are no longer excluded and no longer `single`: the
+    # container-KIND check in `_radius_for_paths` raises a path that names a
+    # database file to `broad`, which is a CARDINALITY-preserving KIND claim
+    # and so is permitted by SPEC §4.2 (a name may raise, never lower, and may
+    # never reach `single`/`scoped`).  The cardinality is still 1; what changed
+    # is that the adapter now says what KIND of thing that 1 is.
     _c("destroy-dd-over-db",
        "dd if=/dev/zero of=/srv/prod/db.sqlite bs=1M count=100",
        "overwrites the production database file", "ask", "destroy",
-       residual=RESIDUAL_TICKET, verb="delete", blast_radius="single"),
+       verb="delete", blast_radius="broad"),
     _c("destroy-truncate-db", "truncate -s 0 /srv/prod/db.sqlite",
        "empties the production database file", "ask", "destroy",
-       residual=RESIDUAL_TICKET, verb="delete", blast_radius="single"),
+       verb="delete", blast_radius="broad"),
     _c("destroy-redirect-truncate", "> /srv/prod/db.sqlite",
        "empties the production database with a bare redirect", "ask",
-       "destroy", residual=RESIDUAL_TICKET, verb="delete",
-       blast_radius="single"),
+       "destroy", verb="delete", blast_radius="broad"),
+
+    # NEW rows (dev-1 round 054).  The corpus had `destroy-env-rm`
+    # (`env FOO=1 rm ...`) but no BARE assignment row and no nested `sh -c`
+    # row, so both gaps were invisible to it.  Neither of these was caught by
+    # PR #99, and PR #98 caught them only as a side effect of its fail-closed
+    # default rather than by parsing them.
+    _c("destroy-bare-assign-rm", "FOO=1 rm -rf /srv/prod/data",
+       "a bare VAR=value prefix, not `env` -- the wrapper was not peeled",
+       "ask", "destroy", verb="delete", blast_radius="broad"),
+    _c("destroy-nested-shell-c", "sh -c 'sh -c \"rm -rf /srv/prod/data\"'",
+       "nested sh -c: the payload token no longer carried the rm",
+       "ask", "destroy", verb="delete", blast_radius="broad"),
 
     # ------------------------------------------------------------------
     # destroy -- forms found while fixing the eighteen. Every one of these
