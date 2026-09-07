@@ -11,11 +11,44 @@ package reeflex.policy
 
 # Precedence is explicit and total: deny > require_approval > allow, so exactly
 # one decision is produced for any input.
-#   require_approval  when R0 fires (R2/R3 matched on inputs core GUESSED)
+#   require_approval  when R0 fires (R2/R3/R6 matched on inputs core GUESSED)
 #   deny              when R3 fires and R0 does not
 #   require_approval  when R2 fires and neither R3 nor R0 does
 #   require_approval  when R5 fires and none of R3/R2/R0 do
+#   require_approval  when R6 fires and none of R3/R2/R5/R0 do
 #   allow             otherwise (R1 read-only internal, or R4 default)
+#
+# R6 IS DELIBERATELY LAST AMONG THE HOLDS.  It could equally have been placed
+# above R5 — both produce require_approval, so the DECISION is the same either
+# way and only the reported `rule` differs.  Putting it last buys a property
+# worth more than a better reason string: R6 CAN ONLY EVER CONVERT AN ALLOW
+# INTO A HOLD.  No existing deny, no existing hold, and no existing rule id
+# changes when protected.rego is added, so an auditor comparing a pre-RFX-153
+# and a post-RFX-153 build sees additions and nothing else.  R2's and R5's
+# verdicts are still reported under R2's and R5's rule ids, which is what a
+# report reads. Pinned by tests/test_protected_asset_rfx153.py.
+#
+# R0 OUTRANKS R6 TOO, AND THAT IS A REBASE DECISION, NOT AN INHERITED ONE.
+# R6 was written against a tree where R0 did not exist (#106 landed after).
+# R0's claim is "the verdict rests on a value core GUESSED, so report a
+# coverage gap rather than a control"; R6's rule id claims the operator
+# DECLARED this path production state.  Both cannot be the honest label for
+# one decision, and R0's is the weaker, truer one — so R6 yields.  The
+# reachable case is a protected ref with a DECLARED low cardinality and an
+# UNRECOGNISED target.environment: F5 coerces `qa-eu` to the most-guarded tier
+# `production`, R2/R3 never fire (the cardinality is `single`), and before this
+# ladder R6 would have raised a hold whose reason said "declared production
+# asset" about a value core supplied.
+#
+# Note what "guessed" does NOT mean here, because the obvious reading is wrong:
+# `target.environment` and `action.verb` are REQUIRED fields — omitting either
+# is a 400 and never reaches a rule — so for those two, undeclared means an
+# unrecognised VALUE.  Only the axes can genuinely be absent.  Measured, not
+# assumed: test_an_absent_environment_or_verb_is_refused_not_guessed.
+#
+# Pinned in both directions by tests/test_protected_asset_rfx153.py
+# (test_r0_outranks_r6_when_environment_was_guessed and
+# test_r6_keeps_its_own_rule_id_when_the_adapter_declared_everything).
 
 # ---- predicates (the rule bodies, factored out for reuse + precedence) -----
 
@@ -92,6 +125,31 @@ r0_unclassified if {
 	r2_require_approval
 }
 
+#: The classification inputs R6 reads — and it is a DIFFERENT set from R2/R3's.
+#: R6 deliberately does not read `axes.blast_radius` (cardinality is the axis
+#: that was wrong about a named production asset in the first place, RFX-153),
+#: so a guessed blast_radius cannot be what produced an R6 verdict and must not
+#: be what downgrades it.  Same discipline as the note on
+#: r0_classification_inputs above, applied per rule rather than globally.
+r6_classification_inputs := {"axes.reversibility", "target.environment"}
+
+r6_guessed_inputs contains f if {
+	some f in object.get(input, ["provenance", "undeclared"], [])
+	f in r6_classification_inputs
+}
+
+# R0 vs R6.  A hold reported as `irreversible_protected_asset_prod` tells an
+# operator the adapter DECLARED this an irreversible production action on a
+# path they themselves declared production state.  If core supplied either of
+# those two inputs, that sentence is false and #106's `unclassified_action` is
+# the true one — same verdict, honest reason code.  r6_guessed_inputs is a
+# subset of r0_classification_inputs, so the reason string below always names
+# at least one field.
+r0_unclassified if {
+	count(r6_guessed_inputs) > 0
+	r6_require_approval
+}
+
 # R1: read-only internal action.
 r1_allow if {
 	input.action.verb == "read"
@@ -124,6 +182,25 @@ r3_deny if {
 budget_require_approval if {
 	count(exceeded_dimensions) > 0
 	not input.approval.present
+}
+
+# R6: irreversible destruction of a DECLARED PRODUCTION ASSET, at ANY
+# cardinality (RFX-153).  R2 and R3 both require a large blast_radius, and
+# blast_radius is a CARDINALITY axis — so an irreversible production action on
+# ONE named entity reached no rule at all and R4 allowed it.  `rm
+# /srv/prod/db.sqlite` was the measured case.
+#
+# The predicate deliberately reads NEITHER blast_radius NOR the verb.
+# Cardinality is the axis that was wrong about this action, and the verb is the
+# field an adapter guesses worst (RFX-144): a truncate-by-redirect and a `dd`
+# over the same file are `execute`, not `delete`, and destroy it just as
+# completely.  What it reads instead is `protected_target` — the operator's own
+# declaration of what production state IS (protected.rego), the one input the
+# cardinality axis could never carry.
+r6_require_approval if {
+	input.axes.reversibility == "irreversible"
+	input.target.environment == "production"
+	protected_target
 }
 
 # ---- decision object (single value via explicit precedence) ----------------
@@ -186,6 +263,14 @@ decision := {
 	first_exceeded_dimension == "deletions"
 	not r3_deny
 	not r2_require_approval
+	# R0 needed no guard here while it fired only on top of R2/R3, both of
+	# which R5 already excludes. R6's clause broke that: R0 can now fire with
+	# neither, on a protected ref whose environment core guessed, and a
+	# fragmentation budget can be tripped by the same call. Without this line
+	# both bodies are true and OPA raises eval_conflict_error — core answering
+	# 500 on a decision it used to get right. Pinned by
+	# test_precedence_is_total_across_the_grid.
+	not r0_unclassified
 }
 
 # require_approval (R5, other dimensions) — any dimension OTHER than
@@ -204,9 +289,36 @@ decision := {
 	first_exceeded_dimension != "deletions"
 	not r3_deny
 	not r2_require_approval
+	not r0_unclassified
+}
+
+# require_approval (R6) — an irreversible production action on an asset the
+# operator declared production state, at a cardinality R2 does not reach.
+# Fires only when R3, R2, R5 and R0 do not, so precedence stays total and no
+# pre-existing verdict is renamed. R0 is in that list because this rule id
+# asserts the adapter DECLARED both axes it reads; see the R0-vs-R6 note in the
+# precedence block at the top of this file.
+decision := {
+	"decision": "require_approval",
+	"reason": "irreversible change to a declared production asset requires human approval",
+	"rule": "reeflex.policy/irreversible_protected_asset_prod",
+} if {
+	r6_require_approval
+	not r3_deny
+	not r2_require_approval
+	not budget_require_approval
+	not r0_unclassified
 }
 
 # allow (R1) — read-only internal, when no higher-risk rule applies.
+#
+# R6 OUTRANKS R1 ON PURPOSE.  A `read` declared `irreversible` on a protected
+# production asset is a contradiction no honest adapter emits, and R1's only
+# other conditions are the verb and the externality — both caller-asserted.
+# Letting R1 win would therefore hand back a one-field evasion of R6 (relabel
+# the delete `read`), which is the exact shape SPEC §3 already cross-checks for
+# with _delete_signal_from_ability. So an irreversible action is never
+# read-only, whatever the verb says.
 decision := {
 	"decision": "allow",
 	"reason": "read-only internal action",
@@ -216,6 +328,7 @@ decision := {
 	not r2_require_approval
 	not r3_deny
 	not budget_require_approval
+	not r6_require_approval
 }
 
 # allow (R4) — default: nothing high-risk matched and R1 did not apply.
@@ -228,4 +341,5 @@ decision := {
 	not r2_require_approval
 	not r3_deny
 	not budget_require_approval
+	not r6_require_approval
 }
