@@ -339,13 +339,25 @@ drops cases from its own total reads as "covered everything".
   names.  UPGRADE: add your paths to `protected_assets`, or set
   `default_protected := true` to hold every irreversible production action
   whose ref is not declared ephemeral.
-- **Two destruction shapes still reach `allow` even with R6 in place, measured.**
-  `> /srv/prod/db.sqlite` and `dd if=/dev/zero of=/srv/prod/db.sqlite` are
-  classified `execute` + `recoverable` by this adapter, and R6 requires
-  `irreversible` — so no policy posture rescues them.  A policy rule cannot
-  correct an envelope that under-declares irreversibility.  UPGRADE: RFX-144 /
-  RFX-146 (verb and reversibility classification); until then, treat
-  redirection and `dd` as ungoverned by this adapter.
+- **Two destruction shapes needed BOTH halves of this change, and now have
+  them (RFX-153 + RFX-144, measured).**  `> /srv/prod/db.sqlite` and
+  `dd if=/dev/zero of=/srv/prod/db.sqlite` used to be classified `execute` +
+  `recoverable` by this adapter, and R6 requires `irreversible` — so while the
+  policy pack alone was in place, **no policy posture rescued them**: a policy
+  rule cannot correct an envelope that under-declares irreversibility.  The
+  RFX-144 classifier now prices both as `delete` + `irreversible` with
+  `target_ref` carrying the path, so R6 reaches them.  Measured on the combined
+  tree, same envelope both ways:
+
+  | adapter axes | decision |
+  |---|---|
+  | `execute` + `recoverable` (before RFX-144) | `allow` / `reeflex.policy/default_allow` |
+  | `delete` + `irreversible` (after RFX-144) | `require_approval` / `reeflex.policy/irreversible_protected_asset_prod` |
+
+  Stated this way on purpose: **neither change closes this on its own**, and
+  each was measured green in its own suite while the gap stayed open.  If only
+  one of the two is present in your build, treat redirection and `dd` as
+  ungoverned.
 - **Stub signing**: `meta.signature = "ed25519:stub:..."`.  UPGRADE: Vault-backed
   ed25519 signing once the key management path is implemented (SPEC §6 note).
 - **Four families the classifier cannot see at all** (RFX-158): the program
@@ -353,8 +365,13 @@ drops cases from its own total reads as "covered everything".
   `python3 deploy.py`), the command word is expanded by the shell
   (`$RM -rf …`, `$(echo rm) …`), or the destruction runs on another host
   (`ssh prod 'rm -rf /srv/data'`, priced as the outbound `emit` it is).  The
-  destruction is not in the command string, so no string-matching classifier
-  can price it.  **`REEFLEX_CLAUDE_STRICT=1` does cover five of the six** —
+  destruction is not in the command string, so **this** classifier does not
+  price it — and for the first three it is not in the command string at all,
+  so nothing that reads only that string would.  The `ssh` case is different
+  and should not be lumped in: the remote command *is* on the line, and a
+  classifier that parses `ssh`'s argv can price it (PR #98 did, measured), so
+  that one is unclosed work rather than a limit of the approach.
+  **`REEFLEX_CLAUDE_STRICT=1` does cover five of the six** —
   measured, not asserted: they are all unrecognised *execute* commands, which
   strict mode prices `irreversible`+`broad`.  The `ssh` case is not one of
   them (it is classified `emit`, not unrecognised).
@@ -364,8 +381,11 @@ drops cases from its own total reads as "covered everything".
   the conformance corpus, **it moves 23 of 82 verdicts**, including `pytest`,
   `npm install` and `make build` from `allow` to `ask`, and five of the six
   RFX-158 gaps above.  That is the whole point of the knob: it is the noisy
-  setting, and it is the only lever that covers the commands the classifier
-  cannot read.  Before RFX-145 it was neither noisy nor safe — it moved
+  setting, and today it is the broadest lever this adapter ships for the
+  commands the classifier cannot read.  It is not the only way to cover them:
+  a policy-side rule, or parsing the wrapper the destruction hides behind, both
+  reach cases strict mode does not (the `ssh` family above is one).  Before
+  RFX-145 it was neither noisy nor safe — it moved
   **zero** verdicts and only changed a word in the audit log.
   UPGRADE: use a per-command allow-list in policy instead.
 - **approval re-submission**: the hook sets `approval.present = false` at
