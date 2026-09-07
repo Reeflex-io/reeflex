@@ -28,11 +28,51 @@ moment stdin hits EOF outside a real MCP client.
 
 from __future__ import annotations
 
+import functools
 import sys
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
-from . import client
+from . import client, config
+
+
+def _surfaces_its_error(fn):
+    """Re-raise this package's own exceptions as `ToolError`, carrying the message.
+
+    WHY THIS EXISTS. The SDK converts an uncaught exception into a generic
+    `Error executing tool <name>` and drops the original text. That is a
+    defensible default for a general-purpose server -- an internal traceback is
+    not the model's business -- and it is exactly wrong for THIS server, whose
+    entire job is to let a human act on a hold. Masked, every failure reads the
+    same: "reeflex-core unreachable at http://...", `not_found` for a hold id
+    that does not exist, and "REEFLEX_PRINCIPAL is not set" all collapse into
+    one opaque string, and the operator cannot tell a typo from an outage from
+    a missing config.
+
+    The messages raised by `client` and `config` are written FOR a human and
+    contain no internals -- a URL the operator configured, core's own error
+    code, the name of an environment variable. Relaying them is the product
+    behaviour; the SDK's default is not something to inherit silently.
+
+    Caught deliberately narrowly: our own exception types plus `ValueError`
+    (which `client.resolve_hold` raises for a decision word core would reject
+    anyway). Anything else is a real bug in this server and keeps the SDK's
+    masking, because an unexpected traceback IS internals.
+
+    Found when `mcp>=2` resolved to 2.1.1 and three tests went red on a commit
+    that touched none of this. `MCPServer` has no `mask_error_details` switch,
+    so the behaviour cannot be configured back -- it has to be owned here.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*a, **kw):
+        try:
+            return fn(*a, **kw)
+        except (client.HoldsAPIError, client.HoldsConnectionError, config.ConfigError, ValueError) as exc:
+            raise ToolError(str(exc)) from exc
+
+    return wrapper
 
 mcp = MCPServer(
     "reeflex-holds",
@@ -53,6 +93,7 @@ mcp = MCPServer(
 
 
 @mcp.tool()
+@_surfaces_its_error
 def list_holds(status: str | None = None) -> dict:
     """List Reeflex holds from reeflex-core, optionally filtered by status.
 
@@ -69,6 +110,7 @@ def list_holds(status: str | None = None) -> dict:
 
 
 @mcp.tool()
+@_surfaces_its_error
 def get_hold(id: str) -> dict:
     """Get the full detail of one Reeflex hold, including its Action Envelope.
 
@@ -84,6 +126,7 @@ def get_hold(id: str) -> dict:
 
 
 @mcp.tool()
+@_surfaces_its_error
 def resolve_hold(id: str, decision: str, reason: str | None = None) -> dict:
     """Approve or reject a pending Reeflex hold.
 
@@ -118,6 +161,7 @@ def resolve_hold(id: str, decision: str, reason: str | None = None) -> dict:
 
 
 @mcp.tool()
+@_surfaces_its_error
 def get_freeze_status() -> dict:
     """Best-effort probe of whether reeflex-core is reachable.
 
