@@ -603,7 +603,7 @@ class TestDecideDeclarationMatchesCode(unittest.TestCase):
 
         `test_the_sweep_would_catch_a_new_undeclared_reader` below proves the
         RECORDER still records; it says nothing about whether the CHAIN still
-        reads identity.  A refactor that moved the four-eyes compare or the
+        reads identity.  A refactor that moved the four-eyes compare AND the
         actor key out of `_validate_approval()` would shrink the sink, keep
         `undeclared(touched) == set()` and `decide_only - DECIDE == set()` both
         green, and leave the two tests above as tautologies over a smaller set.
@@ -614,6 +614,20 @@ class TestDecideDeclarationMatchesCode(unittest.TestCase):
         not; the params entries are the pin for §5 item 2, so the two paths
         added to DECIDE_ENVELOPE_PATHS are asserted to be read rather than
         merely declared.
+
+        SCOPE, CORRECTED BY MEASUREMENT (RFX-139 closing criterion, dev-1--055).
+        This docstring used to say "the four-eyes compare OR the actor key",
+        which overstated what this assertion can see.  Measured by deleting
+        check 8 -- the entire RFX-138 fix -- from `_validate_approval()`: all
+        26 assertions in this file stay GREEN, because check 6 still
+        dereferences agent.id / agent.on_behalf_of / agent.session_id and this
+        floor is satisfied by ANY reader of a path.  Only removing BOTH checks
+        shrinks the sink enough to fail here.  So this is a floor on
+        MEMBERSHIP -- "some check still reads the field" -- not on ENFORCEMENT.
+        `test_the_declared_floor_is_enforced_not_merely_read` below is the
+        missing arm; the behavioural coverage lives in
+        tests/test_approval_actor_binding_rfx138.py, which does go red (8
+        tests) when check 8 is removed.
         """
         touched = self._sweep()
         for expected in ("agent.id",            # check 6 + check 8
@@ -630,6 +644,70 @@ class TestDecideDeclarationMatchesCode(unittest.TestCase):
                 "is one a hold-approval check was written to compare, and a "
                 "check that stops reading its field stops being a check."
                 % expected)
+
+    def _resubmit(self, **over) -> tuple[int, dict | None]:
+        """Approve a hold, then resubmit a PERTURBED envelope against it.
+
+        A fresh hold per call: the checks this drives all return before
+        mark_consumed(), but a caller that ever reaches check 8's success path
+        would consume it, and a shared hold would make the second probe depend
+        on the first.
+        """
+        from app.decide import _validate_approval
+        held = {"agent__id": "agent:alpha", "agent__on_behalf_of": "user:alice",
+                "params": {"amount": 10, "currency": "EUR"}}
+        filled = validate_and_fill_defaults(_envelope(**held))
+        rec = self._holds.create_hold(filled, "reeflex.policy/floor")
+        self._holds.resolve_hold(rec["id"], "approve", "human", "user:carol", None)
+
+        env = dict(validate_and_fill_defaults(_envelope(**{**held, **over})))
+        env["approval"] = {"present": True, "hold_id": rec["id"]}
+        code, resp, _hold = _validate_approval(env)
+        return code, resp
+
+    def test_the_declared_floor_is_enforced_not_merely_read(self):
+        """Each declared floor path must be read by a check that still REFUSES.
+
+        RFX-139's closing criterion, measured in dev-1--055.  The floor above
+        asserts the chain still DEREFERENCES six paths.  That is satisfied by
+        any reader, so it cannot see a check being deleted while a different
+        check keeps reading the same field -- which is exactly what happens
+        when check 8 (RFX-138's actor binding) is removed: agent.id is still
+        read by check 6's four-eyes compare, the sink is unchanged, and this
+        whole file stays green over a live fail-open in which agent BETA spends
+        agent ALPHA's approval.
+
+        So this arm asserts the CONSEQUENCE rather than the read: perturb one
+        field of each derived check group and require the refusal the group
+        exists to produce.  A check that stops refusing stops being a check,
+        whoever else still reads its field.
+        """
+        for label, over, expected in (
+            # check 7 — approval_bound_paths(), BIND_VALUE (RFX-133)
+            ("check 7 / params.amount", {"params": {"amount": 6000000,
+                                                    "currency": "EUR"}},
+             "reeflex_hold_envelope_mismatch"),
+            # check 8 — approval_actor_paths(), BIND_ACTOR (RFX-138)
+            ("check 8 / agent.id", {"agent__id": "agent:beta"},
+             "reeflex_hold_actor_mismatch"),
+            ("check 8 / agent.on_behalf_of", {"agent__on_behalf_of": "user:bob"},
+             "reeflex_hold_actor_mismatch"),
+        ):
+            with self.subTest(label):
+                code, resp = self._resubmit(**over)
+                self.assertIsNotNone(
+                    resp,
+                    "%s: the perturbed resubmission was ALLOWED. The field is "
+                    "still in the floor above (some reader dereferences it), "
+                    "so that assertion is green -- but the check that compares "
+                    "it no longer refuses. That is the RFX-138 fail-open, and "
+                    "a floor on reads cannot see it." % label)
+                self.assertEqual(
+                    expected, (resp or {}).get("reason"),
+                    "%s: refused, but with %r rather than %r -- the checks may "
+                    "have been reordered, and the reason code is what every "
+                    "downstream consumer switches on."
+                    % (label, (resp or {}).get("reason"), expected))
 
     def test_the_sweep_would_catch_a_new_undeclared_reader(self):
         """Negative control: the derivation must actually be able to go red.
