@@ -1,0 +1,541 @@
+{
+  "$comment": [
+    "Conformance vectors for the DECISION — the thing the product is sold on.",
+    "",
+    "WHY THIS FILE EXISTS (RFX-167). reeflex-spec/conformance/ already holds",
+    "per-AXIS vector files: blast-radius.json (RFX-131) and reversibility.json",
+    "(RFX-164). Each one asserts that an adapter derives ONE axis correctly. Both",
+    "were necessary. Neither is sufficient, and measurement says so sharply:",
+    "",
+    "  R2  reversibility == irreversible AND blast_radius == broad     AND production",
+    "  R3  reversibility == irreversible AND blast_radius == systemic  AND production",
+    "",
+    "Both rules that hold a destructive action are CONJUNCTIONS of two axes that",
+    "were independently understated. So a correct fix to ONE axis changes almost",
+    "no decisions, measures as a no-op, and gets deprioritised. Measured through",
+    "the real WordPress normalizer into a core built from main 759b83f, one axis",
+    "substituted at a time, target.environment=production, no approval:",
+    "",
+    "    reversibility honest ALONE   1 of these 5 operations changes decision",
+    "    blast_radius  honest ALONE   0 of them change",
+    "    BOTH honest                  5 of 5 change",
+    "",
+    "A per-axis suite can be 20/20 GREEN while a production destruction is still",
+    "answered `allow` with no human. This file is the artefact that says so: it",
+    "asserts the DECISION on a canonical envelope, not an axis in isolation.",
+    "",
+    "THIS FILE IS ALSO NOT SUFFICIENT, and that is stated here rather than found",
+    "later. It scores what core ANSWERS, so it is blind to a wrong axis that no",
+    "rule currently reads. One is open right now: on PR #94 a plain read of one",
+    "post (`core/get-post {id:42}`) is priced blast_radius=broad, and the row",
+    "still says `allow` because R1 (read_only_internal) fires first. Decision-level",
+    "and axis-level vectors are complements. Run both.",
+    "",
+    "HOW A CASE IS SCORED. `status` is the whole contract:",
+    "",
+    "  holds    the canon delivers this TODAY, through the shipped adapter.",
+    "           The runner asserts the live decision equals required.decision.",
+    "           A regression turns the gate red.",
+    "",
+    "  open     the canon PROMISES this and the shipped adapter's axes prevent it.",
+    "           The runner asserts (a) the live decision is still NOT the required",
+    "           one — if it now is, the row must be PROMOTED to `holds` and this",
+    "           exclusion deleted, and the gate goes red until someone does that;",
+    "           and (b) substituting required.axes DOES produce required.decision,",
+    "           which is what proves the gap is adapter-side and not a missing rule;",
+    "           and (c) `closes_on` still describes which axis fix closes the row.",
+    "",
+    "           `closes_on` is a property of the row ON A GIVEN ADAPTER, not of the",
+    "           row alone: 'substitute reversibility only' means something different",
+    "           depending on what the adapter already reports for the other axis.",
+    "           Measured — on origin/main `user/all` closes on reversibility alone,",
+    "           because main already prices it systemic; from a doubly-understated",
+    "           baseline it needs both. So each open row records the",
+    "           `as_shipped_axes` it was measured against, and the runner scores",
+    "           `closes_on` only while this tree still reports them. When the adapter",
+    "           moves, the runner says so WITH the new matrix in hand and the row",
+    "           must be re-recorded — that report is the point of the file.",
+    "",
+    "  no_rule  the shipped canon states NO requirement for this shape, so there is",
+    "           nothing to promise. The runner asserts the row is `allow` both as",
+    "           shipped AND with honest axes — i.e. the gap is in the canon, not the",
+    "           adapter. RFX-153 is the ticket that decides these. When it lands,",
+    "           these rows go red and get rewritten as `open` or `holds`.",
+    "",
+    "The `open`/`no_rule` arms are the RFX-158 convention: a known gap is pinned so",
+    "that closing it FAILS the suite and the exclusion gets deleted, rather than",
+    "left behind to rot into a claim nobody re-checked.",
+    "",
+    "WHERE required.axes COMES FROM. Not from anyone's reading of this file. Every",
+    "value below was MEASURED on a tree carrying both axis fixes (PR #94 + PR #101,",
+    "cherry-picked and conflicts resolved per RFX-167's merge-order note), on which",
+    "blast-radius.json is 14/14 and reversibility.json is 20/20. `axes_source` names",
+    "the per-axis vector case that grounds each value. When those two files exist in",
+    "this directory the runner CROSS-CHECKS the values against them; on a tip where",
+    "they do not exist yet it prints that the cross-check was skipped, loudly.",
+    "",
+    "WHERE required.decision COMES FROM. Only from what the SHIPPED canon already",
+    "claims — R1..R5 in reeflex-core/policy/reeflex.rego. No row asserts a decision",
+    "the canon does not already promise for those axes; a row whose right answer is",
+    "an open product question is `no_rule`, not a required decision this file",
+    "invented.",
+    "",
+    "RE-RECORDED ON THE CLUSTER-B MERGE (dev-3 round 039, 7 Sep 2026). This file",
+    "was authored against a tree where BOTH axis fixes were unmerged, so twelve of",
+    "its fourteen rows were `open` or `no_rule` — pinned gaps. #94 (RFX-131,",
+    "blast_radius) and #101 (RFX-164, reversibility) are now both in the adapter,",
+    "and #118 (RFX-128, R7 authority) is in the canon. The runner reported SEVEN",
+    "rows to promote and five closes_on failures, which is the RFX-158 convention",
+    "working exactly as designed: closing a pinned gap FAILS the suite until",
+    "someone deletes the exclusion. Deleted here, with what closed each row.",
+    "",
+    "  5 `open` rows now close as shipped. Every one of them is a production",
+    "    destruction that answered `allow` with no human before these merges.",
+    "",
+    "  2 `no_rule` rows (option/single, plugin/files) now close too, and they",
+    "    SETTLE the open question their own notes recorded. Both notes said",
+    "    blast_radius for a single option / a plugin's files was undecided and",
+    "    that #94 would answer `broad`. Measured on the merged adapter: it does —",
+    "    no `ids` enumeration is a predicate, and a predicate is `broad` (§4.2).",
+    "    So both are R2 rows, not the RFX-153 rows they were filed as.",
+    "",
+    "  `closes_on` is deleted rather than re-recorded. It answered 'which single",
+    "    axis fix would close this row', and with both fixes merged the question",
+    "    has no subject left. The five failures said `either` where the corpus said",
+    "    `both`/`reversibility` — correct, and it is the adapter that moved: every",
+    "    one of those rows is now priced irreversible/broad or irreversible/systemic",
+    "    AS SHIPPED, so substituting one axis changes nothing because neither axis",
+    "    is understated any more. That is the whole claim of RFX-131 + RFX-164,",
+    "    stated by an instrument that had to go red to say it.",
+    "",
+    "ONE THING THIS RE-RECORD DELIBERATELY DOES NOT CLAIM. plugin/files is held on",
+    "TWO independent grounds now, and only one of them is in `required`: at",
+    "irreversible/broad it is R2, and at irreversible/SINGLE it is still held, by",
+    "R7 (authority_change_prod, #118) — deleting a plugin's files is a change to",
+    "what code runs. `required` records R2 because that is what the shipped",
+    "adapter's axes reach. The R7 floor is noted on the row and pinned by",
+    "reeflex-core/tests/test_authority_family_rfx128.py, not by this corpus: a",
+    "decision corpus that asserted both would go red the moment either rule's",
+    "precedence changed, for no gain in coverage."
+  ],
+  "spec_section": "3",
+  "ticket": "RFX-167",
+  "measured_on": {
+    "core": "reeflex-core built from the cluster-B stack over main 3cdc3d3 (#94 0243ee1 + #100 be8fe8e + #99 3cdc3d3, then #117, #116, #101, #118), shipped policy/ pack",
+    "adapter_as_shipped": "reeflex-wordpress at that same tip — BOTH axis fixes merged, which is why `as_shipped` and `honest` now agree on every row",
+    "adapter_with_honest_axes": "same tree; axis substitution is now a no-op on the promoted rows",
+    "environment": "production",
+    "approval": "absent",
+    "harness": "php reeflex-wordpress/tests/conformance-decisions.php <core-url>, one session and one nonce per POST",
+    "previous_recording": "core + adapter at origin/main 759b83f, axis fixes unmerged (5 open, 6 no_rule) — kept in git history, not here"
+  },
+  "cases": [
+    {
+      "name": "read/list",
+      "status": "holds",
+      "given": "an agent lists users. No state changes.",
+      "required": {
+        "decision": "allow",
+        "rule": "read_only_internal",
+        "axes": {
+          "reversibility": "reversible",
+          "blast_radius": "single"
+        }
+      },
+      "axes_source": {
+        "reversibility": "reversibility.json::CONTROL read"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "users/list",
+          "input": {}
+        }
+      }
+    },
+    {
+      "name": "post/soft-delete-single",
+      "status": "holds",
+      "given": "one post to the trash. WordPress keeps it; a human can restore it.",
+      "note": "The canon ALLOWS this deliberately. It is here so a fix that makes every delete a prompt turns the gate red — the failure direction RFX-145 warns about.",
+      "required": {
+        "decision": "allow",
+        "rule": "default_allow",
+        "axes": {
+          "reversibility": "recoverable",
+          "blast_radius": "single"
+        }
+      },
+      "axes_source": {
+        "reversibility": "reversibility.json::CONTROL post/single",
+        "blast_radius": "blast-radius.json::enumerated/1"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "posts/delete",
+          "input": {
+            "ids": [
+              981
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "post/hard-delete-bulk",
+      "status": "holds",
+      "given": "45 posts deleted past the trash. The adapter already reports both axes honestly for this shape, which is why it holds today.",
+      "required": {
+        "decision": "require_approval",
+        "rule": "irreversible_broad_prod",
+        "axes": {
+          "reversibility": "irreversible",
+          "blast_radius": "broad"
+        }
+      },
+      "axes_source": {
+        "reversibility": "reversibility.json::post/hard-delete-signal",
+        "blast_radius": "blast-radius.json::enumerated/at-broad-min"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "posts/delete",
+          "input": {
+            "ids": [
+              3001,
+              3002,
+              3003,
+              3004,
+              3005,
+              3006,
+              3007,
+              3008,
+              3009,
+              3010,
+              3011,
+              3012,
+              3013,
+              3014,
+              3015,
+              3016,
+              3017,
+              3018,
+              3019,
+              3020,
+              3021,
+              3022,
+              3023,
+              3024,
+              3025,
+              3026,
+              3027,
+              3028,
+              3029,
+              3030,
+              3031,
+              3032,
+              3033,
+              3034,
+              3035,
+              3036,
+              3037,
+              3038,
+              3039,
+              3040,
+              3041,
+              3042,
+              3043,
+              3044,
+              3045
+            ],
+            "force_delete": true
+          }
+        }
+      }
+    },
+    {
+      "name": "user/all",
+      "status": "holds",
+      "given": "every account on the site deleted. wp_delete_user() has no trash, and the same envelope is already priced systemic.",
+      "note": "The one row of the five that the reversibility fix closes ALONE. It is why 'reversibility honest' measures as 1 of 17 and looks ineffective.",
+      "required": {
+        "decision": "deny",
+        "rule": "irreversible_systemic_prod",
+        "axes": {
+          "reversibility": "irreversible",
+          "blast_radius": "systemic"
+        }
+      },
+      "axes_source": {
+        "reversibility": "reversibility.json::user/all",
+        "blast_radius": "blast-radius.json::name-may-raise-a-predicate-to-systemic"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "core/delete-all-users",
+          "input": {}
+        }
+      },
+      "closed_by": "#101 (RFX-164): wp_delete_user() has no trash, so the adapter now prices this irreversible; it was already systemic. deny/R3 as shipped.",
+      "measured_as_shipped": "deny / reeflex.policy/irreversible_systemic_prod  (adapter axes irreversible/systemic)"
+    },
+    {
+      "name": "user/all-unalarming-name",
+      "status": "holds",
+      "given": "the same destruction as user/all under a name whose words do not trip the systemic signal.",
+      "required": {
+        "decision": "require_approval",
+        "rule": "irreversible_broad_prod",
+        "axes": {
+          "reversibility": "irreversible",
+          "blast_radius": "broad"
+        }
+      },
+      "axes_source": {
+        "reversibility": "reversibility.json::user/all-unalarming-name",
+        "blast_radius": "blast-radius.json::predicate/no-target-list-at-all"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "core/wipe-users",
+          "input": {}
+        }
+      },
+      "closed_by": "#101 (RFX-164) + #94 (RFX-131) together: irreversible from the object kind, broad because the call enumerates nothing. Neither alone reached it from the 759b83f baseline; both do now, which is why closes_on measures `either`.",
+      "measured_as_shipped": "require_approval / reeflex.policy/irreversible_broad_prod  (adapter axes irreversible/broad)"
+    },
+    {
+      "name": "user/selected-server-side",
+      "status": "holds",
+      "given": "the affected set is a server-side predicate, not the parameter. The agent supplied LESS information than an enumeration and the lazier phrasing is the one that skips the human.",
+      "required": {
+        "decision": "require_approval",
+        "rule": "irreversible_broad_prod",
+        "axes": {
+          "reversibility": "irreversible",
+          "blast_radius": "broad"
+        }
+      },
+      "axes_source": {
+        "reversibility": "reversibility.json::user/selected-server-side",
+        "blast_radius": "blast-radius.json::predicate/affected-set-not-the-parameter"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "users/delete",
+          "input": {
+            "role": "subscriber"
+          }
+        }
+      },
+      "closed_by": "#101 (RFX-164) + #94 (RFX-131): the affected set is a server-side predicate, and §4.2 forbids an adapter that cannot enumerate from saying `single`.",
+      "measured_as_shipped": "require_approval / reeflex.policy/irreversible_broad_prod  (adapter axes irreversible/broad)"
+    },
+    {
+      "name": "trash/emptied",
+      "status": "holds",
+      "given": "emptying the trash IS the restore capability being spent, over a set the call does not name.",
+      "required": {
+        "decision": "require_approval",
+        "rule": "irreversible_broad_prod",
+        "axes": {
+          "reversibility": "irreversible",
+          "blast_radius": "broad"
+        }
+      },
+      "axes_source": {
+        "reversibility": "reversibility.json::trash/emptied",
+        "blast_radius": "blast-radius.json::predicate/no-target-list-at-all"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "core/empty-trash",
+          "input": {}
+        }
+      },
+      "closed_by": "#101 (RFX-164) + #94 (RFX-131): emptying the trash IS the restore capability being spent, over a set the call does not name.",
+      "measured_as_shipped": "require_approval / reeflex.policy/irreversible_broad_prod  (adapter axes irreversible/broad)"
+    },
+    {
+      "name": "meta/by-key",
+      "status": "holds",
+      "given": "every row carrying one meta key, across every post. delete_post_meta() keeps no prior value, and the call names a key rather than a set.",
+      "required": {
+        "decision": "require_approval",
+        "rule": "irreversible_broad_prod",
+        "axes": {
+          "reversibility": "irreversible",
+          "blast_radius": "broad"
+        }
+      },
+      "axes_source": {
+        "reversibility": "reversibility.json::meta/by-key",
+        "blast_radius": "blast-radius.json::predicate/no-target-list-at-all"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "meta/delete-post-meta",
+          "input": {
+            "key": "_price"
+          }
+        }
+      },
+      "closed_by": "#101 (RFX-164) + #94 (RFX-131): delete_post_meta() keeps no prior value, and a key is a predicate, not an enumeration.",
+      "measured_as_shipped": "require_approval / reeflex.policy/irreversible_broad_prod  (adapter axes irreversible/broad)"
+    },
+    {
+      "name": "user/single",
+      "status": "no_rule",
+      "open_ticket": "RFX-153",
+      "given": "one account, permanently. Irreversible, in production, cardinality single.",
+      "note": "R2 needs broad and R3 needs systemic, so the shipped canon covers no single/scoped irreversible production deletion at all. Honest axes do not help; there is no rule to reach.",
+      "honest_axes": {
+        "reversibility": "irreversible",
+        "blast_radius": "single"
+      },
+      "axes_source": {
+        "reversibility": "reversibility.json::user/single",
+        "blast_radius": "blast-radius.json::enumerated/1"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "users/delete",
+          "input": {
+            "ids": [
+              7
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "user/enumerated-below-bulk-threshold",
+      "status": "no_rule",
+      "open_ticket": "RFX-153",
+      "given": "three accounts, permanently — under the 20-entity broad_min.",
+      "honest_axes": {
+        "reversibility": "irreversible",
+        "blast_radius": "scoped"
+      },
+      "axes_source": {
+        "reversibility": "reversibility.json::user/enumerated-below-bulk-threshold",
+        "blast_radius": "blast-radius.json::enumerated/2"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "users/delete",
+          "input": {
+            "ids": [
+              4001,
+              4002,
+              4003
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "term/single",
+      "status": "no_rule",
+      "open_ticket": "RFX-153",
+      "given": "one taxonomy term. wp_delete_term() has no trash.",
+      "honest_axes": {
+        "reversibility": "irreversible",
+        "blast_radius": "single"
+      },
+      "axes_source": {
+        "reversibility": "reversibility.json::term/single",
+        "blast_radius": "blast-radius.json::enumerated/1"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "terms/delete",
+          "input": {
+            "ids": [
+              12
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "attachment/default-config",
+      "status": "no_rule",
+      "open_ticket": "RFX-153",
+      "given": "one attachment with MEDIA_TRASH at its default (off): the original file and every generated size are unlinked from disk.",
+      "honest_axes": {
+        "reversibility": "irreversible",
+        "blast_radius": "single"
+      },
+      "axes_source": {
+        "reversibility": "reversibility.json::attachment/default-config",
+        "blast_radius": "blast-radius.json::enumerated/1"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "media/delete",
+          "input": {
+            "ids": [
+              4410
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "option/single",
+      "status": "holds",
+      "given": "one site option deleted. delete_option() keeps no prior value.",
+      "note": "The note this replaces said blast_radius for a single option was an OPEN question that #94 would answer `broad`, and deliberately asserted nothing. Measured on the merged adapter, it does. Recorded now, with the measurement.",
+      "axes_source": {
+        "reversibility": "reversibility.json::option/single",
+        "blast_radius": "blast-radius.json::predicate/no-target-list-at-all"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "options/delete",
+          "input": {
+            "option": "woocommerce_stock_settings"
+          }
+        }
+      },
+      "closed_by": "#94 (RFX-131) SETTLES the open question this row's own note recorded. `options/delete {option: ...}` enumerates no affected set, §4.2 reads that as a predicate, and a predicate is `broad` — so this is an R2 row, not the RFX-153 row it was filed as. #101 (RFX-164) supplies the irreversible: delete_option() keeps no prior value.",
+      "required": {
+        "decision": "require_approval",
+        "rule": "irreversible_broad_prod",
+        "axes": {
+          "reversibility": "irreversible",
+          "blast_radius": "broad"
+        }
+      },
+      "measured_as_shipped": "require_approval / reeflex.policy/irreversible_broad_prod  (adapter axes irreversible/broad)"
+    },
+    {
+      "name": "plugin/files",
+      "status": "holds",
+      "given": "a plugin's files removed from disk. Nothing in WordPress restores them.",
+      "note": "HELD ON TWO INDEPENDENT GROUNDS, and only R2 is asserted here. Substituting irreversible/SINGLE — i.e. conceding the cardinality question entirely — still returns require_approval, under reeflex.policy/authority_change_prod (R7, #118 / RFX-128): removing a plugin's files changes what code runs. Measured, not assumed. `required` records R2 because that is the rule the shipped adapter's axes reach; the R7 floor is pinned by reeflex-core/tests/test_authority_family_rfx128.py.",
+      "axes_source": {
+        "reversibility": "reversibility.json::plugin/files",
+        "blast_radius": "blast-radius.json::predicate/no-target-list-at-all"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "plugins/delete",
+          "input": {
+            "plugin": "woocommerce/woocommerce.php"
+          }
+        }
+      },
+      "closed_by": "Same as option/single: #94 (RFX-131) prices a call that enumerates nothing as `broad`, #101 (RFX-164) prices removed plugin files as irreversible. R2 as shipped.",
+      "required": {
+        "decision": "require_approval",
+        "rule": "irreversible_broad_prod",
+        "axes": {
+          "reversibility": "irreversible",
+          "blast_radius": "broad"
+        }
+      },
+      "measured_as_shipped": "require_approval / reeflex.policy/irreversible_broad_prod  (adapter axes irreversible/broad)"
+    }
+  ]
+}
