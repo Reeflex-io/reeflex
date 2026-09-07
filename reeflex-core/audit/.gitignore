@@ -1,3 +1,6 @@
 # runtime audit logs (regenerated at runtime); keep the dir via .gitkeep
 *.jsonl
+# sidecar cross-process lock files (appendlog.py) — one per append-only log,
+# created on first append, never carrying data
+*.jsonl.lock
 !.gitkeep

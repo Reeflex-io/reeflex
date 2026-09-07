@@ -31,9 +31,18 @@ SKELETON SHORTCUTS (upgrade path documented):
     production signed audit trail; keep JSONL as a local dev / test fallback.
     Upgrade path: write to Postgres `audit_decisions` table with a UNIQUE
     constraint on (session_id, action_nonce) to prevent duplicate inserts.
-  - Read-back proof: after each write we immediately re-read the last line to
-    confirm the record landed (GET-after-POST equivalent for a file log).
+  - Read-back proof: after each write we immediately re-read OUR OWN BYTES AT
+    OUR OWN OFFSET to confirm the record landed (GET-after-POST equivalent for
+    a file log).  It used to re-read the file's LAST line, which is a different
+    and weaker question, and which was answered by the wrong replica's record
+    whenever two cores shared the volume (RFX-207 — see appendlog.py for the
+    measurement and for why the offset proof is strictly stronger).
     TODO: in the Postgres upgrade, run a SELECT by record_id after INSERT.
+
+CROSS-PROCESS.  Appends go through appendlog.exclusive() + append_and_verify(),
+so two replicas sharing one audit volume interleave whole records safely and
+neither mistakes the other's line for a torn write.  `_lock` below remains the
+in-process arm.
 """
 
 from __future__ import annotations
@@ -43,6 +52,9 @@ import os
 import pathlib
 import threading
 import time
+
+from .appendlog import AppendVerifyError  # noqa: F401  (re-exported for callers)
+from . import appendlog
 
 _lock = threading.Lock()
 
@@ -67,39 +79,32 @@ def _append_and_readback(rec: dict, *, verify: dict) -> dict:
     detection). Returns `rec` unchanged on success.
     """
     log_path = _log_path()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
     line = json.dumps(rec, separators=(",", ":")) + "\n"
 
+    # `verify` is retained as the caller's declaration of which fields identify
+    # this record, and is checked against the bytes we read back from our OWN
+    # offset (below).  It is no longer used to interrogate whatever line
+    # happens to be last in the file: with two replicas on one volume that
+    # line is frequently the other replica's, which raised on a write that had
+    # in fact landed perfectly.  See appendlog.py for the measurement.
+    #
+    # _lock still serialises this process's own threads (cheaper than
+    # contending on the file lock for every thread); appendlog.exclusive()
+    # adds the cross-process arm.
     with _lock:
-        with open(log_path, "a", encoding="utf-8") as fh:
-            fh.write(line)
-            fh.flush()
-            os.fsync(fh.fileno())
+        with appendlog.exclusive(log_path):
+            appendlog.append_and_verify(log_path, line)
 
-        # Read-back proof: verify the last line matches what we wrote.
-        with open(log_path, "rb") as fh:
-            # Seek to end, walk back past final newline to find the last record
-            fh.seek(0, 2)
-            size = fh.tell()
-            if size == 0:
-                raise OSError("audit file empty immediately after write")
-            # Walk backwards to find start of last line
-            pos = size - 1
-            while pos > 0:
-                fh.seek(pos)
-                ch = fh.read(1)
-                if ch == b"\n" and pos < size - 1:
-                    break
-                pos -= 1
-            fh.seek(max(pos, 0))
-            last_line = fh.read().decode("utf-8").strip()
-
-        written_rec = json.loads(last_line)
+        written_rec = json.loads(line)
         for key, expected in verify.items():
             if written_rec.get(key) != expected:
-                raise OSError(
-                    f"audit read-back mismatch: wrote {rec!r}, read back {written_rec!r}"
+                # Not reachable through a concurrent append any more: this now
+                # only fires if the caller's `verify` disagrees with the record
+                # the caller itself passed in, i.e. a programming error here.
+                raise AppendVerifyError(
+                    f"audit record does not satisfy its own verify clause: "
+                    f"{key}={written_rec.get(key)!r} != {expected!r}",
+                    cause="tampered",
                 )
 
     return rec
