@@ -469,17 +469,64 @@ class TestPredatesF8(_IsolatedAudit):
 
 class TestKeySetIsAdditive(_IsolatedAudit):
 
+    #: Every key added to the decision record SINCE the baseline this file
+    #: pinned, each with the PR that added it. The point of the assertion below
+    #: is that this list is SHORT and EXPLICIT — a new key must be added here
+    #: deliberately, by whoever adds it, and cannot arrive unnoticed.
+    #:
+    #: RFX-197 (#110) is the first entry after RFX-215's own. It stamps
+    #: `ledger_epoch` on the decision record, which is what makes a cumulative
+    #: counter that fell inside its own window diagnosable rather than merely
+    #: visible. Added here on the cluster-A merge (dev-3 round 039), in #110's
+    #: own PR rather than as a follow-up, because #110 is the change that makes
+    #: the old assertion false. Neither PR's conflict graph could see this:
+    #: #110 edits audit.py and this file asserts over audit.py's OUTPUT, so
+    #: `git merge-tree` reports no overlap at all.
+    KEYS_ALLOWED_SINCE = {
+        "provenance",     # RFX-215 (#119) — this file's own subject
+        "ledger_epoch",   # RFX-197 (#110)
+    }
+
+    #: Of those, the ones that must be on EVERY decision record. `provenance` is
+    #: unconditional by design (an empty `undeclared` list is the affirmative
+    #: statement "everything was declared"). `ledger_epoch` is NOT: audit.py
+    #: omits the key when the value is empty, exactly like every other additive
+    #: field, so a tree with no ledger state yet writes records without it.
+    #: MEASURED THE HARD WAY: asserting equality against the full set above
+    #: passed locally, where a previous run had left ledger state behind, and
+    #: FAILED in CI on a fresh checkout. An assertion whose answer depends on
+    #: what an earlier run left on disk is not an assertion.
+    KEYS_ALWAYS_PRESENT = {"provenance"}
+
     @unittest.skipUnless(_opa_available(), "OPA binary not available")
     def test_provenance_is_the_only_new_key(self) -> None:
-        """BITES on 759b83f in the other direction: there, the new-key set is
-        empty and this asserts it is exactly {"provenance"}."""
+        """BITES on 759b83f in the other direction: there, `provenance` is
+        absent from the record and the first assertion below fails.
+
+        ADDITIVE, STILL ASSERTED EXACTLY, IN TWO HALVES. This was NOT loosened
+        into "any new key is fine": a key nobody declared in
+        KEYS_ALLOWED_SINCE still fails the second assertion, which is the
+        property RFX-215 wanted. Splitting it is what lets an OPTIONAL additive
+        key be declared without claiming it is always written.
+        """
         env = _base_envelope()
         session_id = env["agent"]["session_id"]
         status, _ = process(env)
         self.assertEqual(status, 200)
         rec = _decision_record_for(session_id)
 
-        self.assertEqual(set(rec.keys()) - _KEYS_BEFORE_RFX215, {"provenance"})
+        new_keys = set(rec.keys()) - _KEYS_BEFORE_RFX215
+        self.assertTrue(
+            self.KEYS_ALWAYS_PRESENT <= new_keys,
+            "a key that must be on every decision record is missing: %s"
+            % (self.KEYS_ALWAYS_PRESENT - new_keys),
+        )
+        self.assertEqual(
+            new_keys - self.KEYS_ALLOWED_SINCE, set(),
+            "the decision record's key set moved without anyone declaring it "
+            "in KEYS_ALLOWED_SINCE — add it there, with the ticket, or take it "
+            "back out",
+        )
 
     @unittest.skipUnless(_opa_available(), "OPA binary not available")
     def test_no_pre_existing_key_dropped(self) -> None:
