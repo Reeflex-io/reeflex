@@ -1,0 +1,324 @@
+{
+  "$comment": [
+    "Conformance vectors for SPEC §2 — the normative derivation of axes.reversibility.",
+    "",
+    "WHY THIS FILE EXISTS. reversibility is a hard precondition of BOTH rules that",
+    "hold a destructive action: R2 (irreversible + broad + production ->",
+    "require_approval) and R3 (irreversible + systemic + production -> deny). No other",
+    "rule in the shipped pack reads the axis. So a single wrong `recoverable` disables",
+    "the two rules the product is sold on, silently, for that action — and until this",
+    "file existed there was no suite for the axis. SPEC §7 has always said an adapter",
+    "'MUST pass the conformance suite' for the axes; for this one there was nothing to",
+    "pass. Sibling of blast-radius.json (RFX-131), same reason, same shape.",
+    "",
+    "THE GROUND TRUTH RULE. `recoverable` means the SYSTEM BEING ACTED ON retains",
+    "something a human can restore from after the call returns. It is a property of",
+    "the object kind, not of the verb. The WordPress reference adapter used to answer",
+    "`recoverable` for every small delete on the strength of a 'WP trash default':",
+    "that default is real for post-type objects and comments and does not exist for",
+    "users, terms, options, meta, plugins, themes or tables. wp_delete_user() has no",
+    "trash to go to.",
+    "",
+    "TWO CROSS-CUTTING RULES, both stated as cases below:",
+    "  1. Spending the undo is not recoverable. `core/empty-trash` IS the restore",
+    "     capability being consumed; it can never itself be `recoverable`.",
+    "  2. An action cannot be both site-wide and undoable. Where an adapter prices",
+    "     blast_radius `broad` or `systemic`, `recoverable` contradicts it inside one",
+    "     envelope, and the honest answer is `irreversible`.",
+    "",
+    "HOW A CASE IS WRITTEN. `given` states the situation ABSTRACTLY — what the adapter",
+    "knows about the object kind and the undo available to it at the call site — so the",
+    "case is the same case in every language. `bindings` then gives the concrete call",
+    "for each adapter that implements it.",
+    "",
+    "ADAPTER STATUS AT THE TIME THIS FILE LANDED (measured, qa--023). The WordPress",
+    "reference adapter passes all of these; reeflex-wordpress/tests/",
+    "conformance-reversibility.php runs the file, in the gate. The Claude Code reference",
+    "adapter is NOT yet wired to it and does not pass: measured cross-adapter, the two",
+    "reference adapters disagree on 5 of 6 comparable operations, because",
+    "reeflex-claude answers `irreversible` for every shell removal while",
+    "reeflex-wordpress answered `recoverable` for every ability-level deletion. Some of",
+    "those rows are additionally distorted by RFX-144 (classify.py::_bash_verb reads",
+    "only the first shell token, so `wp user delete ...` is not seen as a delete at",
+    "all). Wiring the Claude Code runner is deliberately left to the RFX-144 fix so",
+    "the two changes do not collide — see the ticket filed with this file."
+  ],
+  "spec_section": "2",
+  "ticket": "RFX-164",
+  "bulk_min": 20,
+  "cases": [
+    {
+      "name": "user/single",
+      "given": {
+        "object_kind": "user",
+        "undo_available": false,
+        "note": "wp_delete_user() removes the row from wp_users and wp_usermeta. WordPress has no user trash."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "claude": { "tool": "Bash", "tool_input": { "command": "userdel alice" } },
+        "wordpress": { "ability": "users/delete", "input": { "ids": [7] } }
+      }
+    },
+    {
+      "name": "user/all",
+      "given": {
+        "object_kind": "user",
+        "undo_available": false,
+        "affected": "every account",
+        "note": "the canonical case. Also systemic, so rule 2 applies independently."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "claude": { "tool": "Bash", "tool_input": { "command": "rm -rf /var/lib/accounts" } },
+        "wordpress": { "ability": "core/delete-all-users", "input": {} }
+      }
+    },
+    {
+      "name": "user/all-unalarming-name",
+      "given": {
+        "object_kind": "user",
+        "undo_available": false,
+        "affected": "every account",
+        "note": "same effect as user/all; the ability name carries no bulk or systemic token. The answer must not depend on the name."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "claude": { "tool": "Bash", "tool_input": { "command": "rm -rf /var/lib/accounts" } },
+        "wordpress": { "ability": "core/wipe-users", "input": {} }
+      }
+    },
+    {
+      "name": "user/selected-server-side",
+      "given": {
+        "object_kind": "user",
+        "undo_available": false,
+        "affected": "every account holding a role",
+        "note": "THE AGENT-CONTROLLED CASE. The same accounts as user/enumerated, selected by predicate instead of listed. The caller supplied LESS information; that must not lower the axis."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "claude": { "tool": "Bash", "tool_input": { "command": "rm -rf /var/lib/accounts/subscribers" } },
+        "wordpress": { "ability": "users/delete", "input": { "role": "subscriber" } }
+      }
+    },
+    {
+      "name": "user/enumerated-below-bulk-threshold",
+      "given": {
+        "object_kind": "user",
+        "undo_available": false,
+        "count": 19,
+        "note": "below bulk_min. The count must not be what makes an unrecoverable kind unrecoverable."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "wordpress": { "ability": "users/delete", "input": { "ids": [4001, 4002, 4003] } }
+      }
+    },
+    {
+      "name": "term/single",
+      "given": {
+        "object_kind": "term",
+        "undo_available": false,
+        "note": "wp_delete_term() has no trash and drops term relationships."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "wordpress": { "ability": "terms/delete", "input": { "ids": [12] } }
+      }
+    },
+    {
+      "name": "option/single",
+      "given": {
+        "object_kind": "option",
+        "undo_available": false,
+        "note": "delete_option() retains no prior value anywhere."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "claude": { "tool": "Bash", "tool_input": { "command": "rm /etc/app/settings.conf" } },
+        "wordpress": { "ability": "options/delete", "input": { "option": "woocommerce_stock_settings" } }
+      }
+    },
+    {
+      "name": "meta/by-key",
+      "given": {
+        "object_kind": "meta",
+        "undo_available": false,
+        "note": "delete_post_meta() for a key across posts. The kind is meta, NOT the post whose name may appear in the ability."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "wordpress": { "ability": "meta/delete-post-meta", "input": { "key": "_price" } }
+      }
+    },
+    {
+      "name": "plugin/files",
+      "given": {
+        "object_kind": "plugin",
+        "undo_available": false,
+        "note": "delete_plugins() removes the directory from disk."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "claude": { "tool": "Bash", "tool_input": { "command": "rm -rf wp-content/plugins/woocommerce" } },
+        "wordpress": { "ability": "plugins/delete", "input": { "plugin": "woocommerce/woocommerce.php" } }
+      }
+    },
+    {
+      "name": "theme/files",
+      "given": {
+        "object_kind": "theme",
+        "undo_available": false,
+        "note": "delete_theme() removes the directory from disk."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "claude": { "tool": "Bash", "tool_input": { "command": "rm -rf wp-content/themes/storefront" } },
+        "wordpress": { "ability": "themes/delete", "input": { "stylesheet": "storefront" } }
+      }
+    },
+    {
+      "name": "table/truncate",
+      "given": {
+        "object_kind": "table",
+        "undo_available": false,
+        "note": "no WordPress layer is involved at all."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "claude": { "tool": "Bash", "tool_input": { "command": "psql -c 'TRUNCATE postmeta'" } },
+        "wordpress": { "ability": "db/truncate-table", "input": { "table": "wp_postmeta" } }
+      }
+    },
+    {
+      "name": "attachment/default-config",
+      "given": {
+        "object_kind": "attachment",
+        "undo_available": false,
+        "config": "MEDIA_TRASH off (the default)",
+        "note": "wp_delete_attachment() unlinks the original and every generated size."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "claude": { "tool": "Bash", "tool_input": { "command": "rm wp-content/uploads/2026/08/invoice.pdf" } },
+        "wordpress": { "ability": "media/delete", "input": { "ids": [4410] } }
+      }
+    },
+    {
+      "name": "trash/emptied",
+      "given": {
+        "object_kind": "post",
+        "undo_available": false,
+        "note": "RULE 1. This action IS the undo being spent, so it is never itself recoverable — even though the object kind is otherwise trashable."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "wordpress": { "ability": "core/empty-trash", "input": {} }
+      }
+    },
+    {
+      "name": "post/hard-delete-signal",
+      "given": {
+        "object_kind": "post",
+        "undo_available": false,
+        "note": "a trashable kind, but the caller asked to bypass the trash."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "wordpress": { "ability": "posts/delete", "input": { "ids": [981], "force_delete": true } }
+      }
+    },
+    {
+      "name": "post/broad-contradiction",
+      "given": {
+        "object_kind": "post",
+        "undo_available": true,
+        "blast_radius": "broad",
+        "affected": "every draft post, selected by predicate",
+        "note": [
+          "RULE 2. A trashable kind, but the adapter prices this broad, so",
+          "`recoverable` would contradict `broad` inside one envelope.",
+          "",
+          "The binding is deliberately PREDICATE-shaped (a status filter, no ids)",
+          "rather than a short enumerated list. An earlier draft of this case used",
+          "ids=[1,2,3], which is broad on 44c6f85 only because the ability NAME",
+          "contains a bulk token — exactly the derivation RFX-131 replaces with the",
+          "affected set. Under RFX-131 a 3-id delete is correctly `scoped`, the",
+          "contradiction does not arise, and `recoverable` is the right answer, so",
+          "the case tested nothing there. A predicate-selected set is broad under",
+          "both derivations (measured on 44c6f85 and on PR #94's head), which is",
+          "what makes this case portable across that change."
+        ]
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "wordpress": { "ability": "posts/bulk-delete", "input": { "status": "draft" } }
+      }
+    },
+    {
+      "name": "CONTROL post/single",
+      "given": {
+        "object_kind": "post",
+        "undo_available": true,
+        "note": "wp_trash_post(): a real trash the site owner can restore from. `recoverable` is the CORRECT answer and must survive the fix."
+      },
+      "expect": { "reversibility": "recoverable" },
+      "bindings": {
+        "wordpress": { "ability": "posts/delete", "input": { "ids": [981] } }
+      }
+    },
+    {
+      "name": "CONTROL comment/single",
+      "given": {
+        "object_kind": "comment",
+        "undo_available": true,
+        "note": "wp_trash_comment(): comment trash exists."
+      },
+      "expect": { "reversibility": "recoverable" },
+      "bindings": {
+        "wordpress": { "ability": "comments/delete", "input": { "ids": [55] } }
+      }
+    },
+    {
+      "name": "CONTROL update/single",
+      "given": {
+        "object_kind": "post",
+        "undo_available": true,
+        "verb": "update",
+        "note": "a mutation another mutation can revert."
+      },
+      "expect": { "reversibility": "recoverable" },
+      "bindings": {
+        "wordpress": { "ability": "posts/update", "input": { "ids": [981] } }
+      }
+    },
+    {
+      "name": "CONTROL read",
+      "given": {
+        "object_kind": "user",
+        "undo_available": true,
+        "verb": "read",
+        "note": "a read changes nothing. The least-dangerous answer available."
+      },
+      "expect": { "reversibility": "reversible" },
+      "bindings": {
+        "claude": { "tool": "Bash", "tool_input": { "command": "cat /etc/passwd" } },
+        "wordpress": { "ability": "users/list", "input": {} }
+      }
+    },
+    {
+      "name": "CONTROL emit",
+      "given": {
+        "object_kind": "message",
+        "undo_available": false,
+        "verb": "emit",
+        "note": "sent bytes are out the door. Already correct in both adapters; here so the file covers the whole axis, not only deletes."
+      },
+      "expect": { "reversibility": "irreversible" },
+      "bindings": {
+        "wordpress": { "ability": "notifications/send-email", "input": { "to": "customer@example.com" } }
+      }
+    }
+  ]
+}
