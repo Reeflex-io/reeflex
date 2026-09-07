@@ -366,17 +366,34 @@ class TestNotASecondInventory(_IsolatedAudit):
     audit.py must carry WHATEVER envelope.py put in the block, never a copy of
     `_PROVENANCE_FIELDS`. The consequence is stated in audit.py and pinned
     here: the moment envelope.py starts recording provenance for another field
-    — `magnitude.count` on PR #116 is the pending one — it appears on the audit
-    line with no further change to audit.py."""
+    it appears on the audit line with no further change to audit.py.
+
+    THE PREMISE LANDED, AND THAT IS THIS PIN WORKING (dev-3 round 039, RFX-143).
+    RFX-215 wrote this test with `magnitude.count` as the not-yet-recorded field
+    and named PR #116 as the pending one. #116 is this commit: envelope.py now
+    records `magnitude.count`, so the assertion below started failing — which is
+    exactly the instruction RFX-215 left in its own failure message ("point it
+    at the next un-recorded field, do not delete the assertion"). Repointed at
+    `target.kind`, per that instruction, and the carry it proves is unchanged:
+    audit.py wrote a field it has never heard of, straight from the envelope.
+
+    Neither PR's conflict graph could see this. #116 and RFX-215's test file
+    share no hunk — #116 edits envelope.py's field tuple and this file asserts
+    over that tuple's CONTENTS, so `git merge-tree` reports nothing. Same class
+    as dev-2's 14:52 red main: a PR that changes what something REQUIRES is
+    coupled to every PR that asserts over it, and no textual tool expresses it.
+    """
 
     def test_a_field_envelope_py_does_not_yet_record_still_lands(self) -> None:
         # A field name that is deliberately NOT in _PROVENANCE_FIELDS today.
-        future = "magnitude.count"
+        # `target.kind` is the honest next candidate: core does not currently
+        # guess it, and if it ever starts to, provenance should say so.
+        future = "target.kind"
         self.assertNotIn(
             future, _PROVENANCE_FIELDS,
-            "magnitude.count is now a provenance field — this test's premise "
-            "has landed (PR #116); point it at the next un-recorded field, do "
-            "not delete the assertion",
+            "target.kind is now a provenance field — this test's premise has "
+            "landed; point it at the next un-recorded field, do not delete the "
+            "assertion",
         )
 
         rec = record(

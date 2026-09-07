@@ -332,7 +332,12 @@ TREATMENTS: dict[str, Treatment] = {
         unverifiable_assertion=True,
         approval_binding=BIND_HASH,
         note="int >= 1 or HTTP 400; absent -> 1. bool rejected (it subclasses "
-             "int). Feeds every count dimension.",
+             "int). Feeds every count dimension. RFX-143: 1 is the MINIMUM of "
+             "the domain, so the absent-value fill is the cheapest charge "
+             "available -- the fill is therefore recorded in "
+             "provenance.undeclared, and budgets.rego charges "
+             "max(count, count_floor[blast_radius]) so a count can only raise "
+             "the charge above its axis floor, never lower it. SPEC 4.1.2.",
     ),
 
     # -- params: the money pair -- RFX-133, this PR -------------------------
