@@ -32,7 +32,15 @@ classifiers = [
 # (the OTHER package on the old mcp<2 pin) is UNCHANGED and unaffected: it
 # is pinned and tested independently (see gate.py's per-package venvs).
 dependencies = [
-    "mcp>=2",
+    # UPPER BOUND ON PURPOSE. An open `>=2` let 2.1.1 arrive on a commit that
+    # touched none of this package and turn three green tests red: the SDK now
+    # masks an uncaught exception as "Error executing tool <name>", which for a
+    # human-in-the-loop console means an operator cannot tell a typo from an
+    # outage. server.py owns that behaviour now (`_surfaces_its_error`), but the
+    # lesson is the floor: a dependency whose minor releases change what our
+    # users SEE is not one to leave unbounded. Raise the ceiling deliberately,
+    # after running the suite against the new minor.
+    "mcp>=2,<2.2",
 ]
 
 [project.urls]

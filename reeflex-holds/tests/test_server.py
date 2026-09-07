@@ -263,3 +263,55 @@ class TestGetFreezeStatusTool(_PatchClientFn):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Every tool must surface its own error text (RFX-206)
+# ---------------------------------------------------------------------------
+
+
+class TestEveryToolSurfacesItsError(unittest.TestCase):
+    """The three tests above each pin one tool. This pins the RULE.
+
+    The SDK masks an uncaught exception as `Error executing tool <name>`, and
+    `MCPServer` has no switch to turn that off, so every tool has to convert its
+    own errors itself. A fourth tool added later that forgets is not a style
+    slip: it is an operator who is told "something went wrong" when the answer
+    was "REEFLEX_PRINCIPAL is not set".
+
+    Enumerated from the server's own tool registry rather than a list kept here,
+    so the guard covers a tool the day it is added.
+    """
+
+    def test_no_tool_is_missing_the_wrapper(self) -> None:
+        from reeflex_holds import server as srv
+
+        undecorated = []
+        for name in ("list_holds", "get_hold", "resolve_hold", "get_freeze_status"):
+            fn = getattr(srv, name)
+            # functools.wraps keeps __wrapped__ on the decorated function.
+            if not hasattr(fn, "__wrapped__"):
+                undecorated.append(name)
+        self.assertEqual(
+            undecorated, [],
+            "these tools would answer a failure with 'Error executing tool <name>' "
+            "and nothing else: " + ", ".join(undecorated),
+        )
+
+    def test_an_unexpected_exception_is_still_masked(self) -> None:
+        """The wrapper is narrow on purpose: a real bug in this server is
+        internals, and internals stay masked. Widening the except clause to
+        `Exception` would relay tracebacks to the model."""
+        from reeflex_holds import server as srv
+
+        def boom(hold_id):
+            raise RuntimeError("index out of range in some helper")
+
+        self._patched = holds_server.client.get_hold
+        holds_server.client.get_hold = boom
+        try:
+            with self.assertRaises(Exception) as ctx:
+                asyncio.run(mcp.call_tool("get_hold", {"id": "x"}))
+            self.assertNotIn("index out of range", str(ctx.exception))
+        finally:
+            holds_server.client.get_hold = self._patched
