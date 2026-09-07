@@ -98,8 +98,16 @@ def list_holds(status: str | None = None) -> dict:
     """List Reeflex holds from reeflex-core, optionally filtered by status.
 
     Args:
-        status: one of pending, approved, rejected, expired, consumed.
-            Omit for no filter (core returns all statuses, most recent first).
+        status: one of pending, approved, rejected, expired, consumed, or the
+            synonym "all" (= no filter). Omit for no filter. ANY OTHER VALUE IS
+            REFUSED by core with HTTP 400 naming the accepted set -- it does NOT
+            come back as an empty list. Before RFX-211 it did, and this tool is
+            why that mattered most: it forwards `status` verbatim with no
+            validation of its own, so a caller that guessed a word got
+            `{"items": [], "count": 0}` and could reasonably report "no holds
+            are pending" when holds were pending. Note the Reeflex portal's
+            holds screen uses a DIFFERENT vocabulary for decided holds
+            ("resolved"); core's are approved/rejected/consumed.
 
     Returns:
         Core's paged list verbatim: {"items": [...], "count": N,

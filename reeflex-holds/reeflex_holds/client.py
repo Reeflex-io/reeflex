@@ -178,8 +178,12 @@ def _request_ok(
 def list_holds(status: str | None = None) -> dict:
     """GET /v1/holds?status=<status>.
 
-    status: pending|approved|rejected|expired|consumed, or None for no filter
-    (core's default: all statuses, most recent 100).
+    status: pending|approved|rejected|expired|consumed, the synonym "all"
+    (= no filter), or None for no filter (core's default: all statuses, most
+    recent 100). Anything else is a HoldsAPIError(400) from core naming the
+    accepted set -- NOT an empty list. This client deliberately does not
+    duplicate that validation: core owns the vocabulary, and duplicating it here
+    is how the two surfaces drift apart (RFX-211/RFX-218).
     Returns core's paged shape verbatim: {"items": [...], "count": N,
     "next_cursor"?: "..."}.
     """

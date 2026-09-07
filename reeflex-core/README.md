@@ -240,9 +240,24 @@ List holds, with optional status filter and cursor-based pagination.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `status` | string | Filter: `pending`, `approved`, `rejected`, `expired`, `consumed`. Absent = all statuses. |
-| `limit` | integer | Max items per page (default 100, max 1000). |
-| `cursor` | string | Opaque pagination token (`hold_id` of the last item on the previous page). |
+| `status` | string | Filter: `pending`, `approved`, `rejected`, `expired`, `consumed`, or `all`. Absent = all statuses. Anything else → **400**, not an empty list. |
+| `limit` | integer | Max items per page (default 100, range 1–1000). Unparseable or out of range → **400**, not a silent default. |
+| `cursor` | string | The `next_cursor` from the previous page. A cursor absent from *this* result set → **400**, not a silent restart at page 1. |
+
+Every parameter above **refuses a value it does not recognise** rather than
+degrading. Until RFX-211 each of them answered with the most reassuring result
+available: an unrecognised `status` returned `{"items": [], "count": 0}` with
+HTTP 200 — indistinguishable from a genuinely empty queue — an unrecognised
+`cursor` was dropped so the caller silently received page 1 again, and an
+unparseable `limit` became 100. This is the call that answers *"what is held?"*,
+so a lookup that reports nothing in response to a typo is worse than one that
+errors.
+
+`all` is accepted as an explicit synonym for "no filter" because it is valid
+vocabulary on the Reeflex portal's own holds API. Note that the two surfaces do
+**not** otherwise share a status vocabulary — the portal's word for a decided
+hold is `resolved`, core's are `approved`/`rejected`/`consumed` — so a 400 from
+this endpoint names the set it checked against.
 
 Expiry is swept lazily on each list call: any pending hold past its `expires_ts` transitions to `expired` before the result is returned.
 

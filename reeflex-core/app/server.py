@@ -358,14 +358,58 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
 
     def _handle_list_holds(self, qs: dict) -> None:
-        from .holds import list_holds  # type: ignore[import]
+        # RFX-211 (+ two siblings found with it): every parameter on this
+        # endpoint used to answer a word it did not know with a confident wrong
+        # answer -- an unrecognised `status` returned `{"items":[],"count":0}`
+        # with HTTP 200, an unrecognised `cursor` was dropped so the caller got
+        # page 1 again, and an unparseable `limit` silently became 100. This is
+        # the call that answers "what is held?", so the most reassuring possible
+        # reply was also the wrong one. Each is now a NAMED 400.
+        #
+        # The vocabularies live in holds.py (LIST_STATUS_FILTERS, MAX_LIST_LIMIT)
+        # and list_holds() enforces them itself, so an in-process caller gets the
+        # same refusal as an HTTP one -- that symmetry is RFX-218's lesson: the
+        # helper must not disagree with the endpoint about the vocabulary.
+        from .holds import (  # type: ignore[import]
+            LIST_STATUS_FILTERS,
+            MAX_LIST_LIMIT,
+            UnknownCursor,
+            list_holds,
+        )
 
         status_filter = qs.get("status", [None])[0]
-        try:
-            limit = int(qs.get("limit", [100])[0])
-            limit = max(1, min(limit, 1000))
-        except (ValueError, TypeError):
-            limit = 100
+        if status_filter is not None and status_filter not in LIST_STATUS_FILTERS:
+            self._respond(400, {
+                "error": "invalid_request",
+                "reason": "status: unrecognised",
+                "detail": (
+                    f"status must be one of {list(LIST_STATUS_FILTERS)} or omitted, "
+                    f"got {status_filter!r}"
+                ),
+                "accepted": list(LIST_STATUS_FILTERS),
+            })
+            return
+
+        raw_limit = qs.get("limit", [None])[0]
+        limit = 100
+        if raw_limit is not None:
+            try:
+                limit = int(raw_limit)
+            except (ValueError, TypeError):
+                self._respond(400, {
+                    "error": "invalid_request",
+                    "reason": "limit: not an integer",
+                    "detail": f"limit must be an integer in 1..{MAX_LIST_LIMIT}, got {raw_limit!r}",
+                })
+                return
+            if not 1 <= limit <= MAX_LIST_LIMIT:
+                self._respond(400, {
+                    "error": "invalid_request",
+                    "reason": "limit: out of range",
+                    "detail": f"limit must be in 1..{MAX_LIST_LIMIT}, got {limit}",
+                })
+                return
+
         cursor = qs.get("cursor", [None])[0]
 
         try:
@@ -374,6 +418,13 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
                 limit=limit,
                 cursor=cursor,
             )
+        except UnknownCursor as exc:
+            self._respond(400, {
+                "error": "invalid_request",
+                "reason": "cursor: unknown",
+                "detail": str(exc),
+            })
+            return
         except Exception as exc:  # noqa: BLE001
             print(f"[reeflex-core] WARN: list_holds failed: {exc}", file=sys.stderr)
             self._respond(500, {"error": "internal_error"})
