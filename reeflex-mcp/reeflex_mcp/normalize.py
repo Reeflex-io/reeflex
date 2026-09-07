@@ -55,7 +55,9 @@ per BUG 2 -- new prefixes/bare-verbs marked NEW):
     select_* / get* / list*  (NEW, BUG 2)
     <anything else>                                -> execute (conservative default)
                                                        axes forced to the restrictive floor:
-                                                       irreversible / systemic / internal
+                                                       irreversible / systemic / outbound
+                                                       (externality was `internal` until
+                                                        RFX-214 -- see _EXECUTE_AXES)
 
 Values in parentheses above are NOT dictated verbatim by the brief; they are
 this module's conservative, documented completion of the two axes the brief
@@ -134,10 +136,39 @@ _AXES_BY_BUCKET: dict[str, dict[str, str]] = {
 }
 
 # The brief's literal "restrictive floor" for the unmatched/unmapped bucket.
+#
+# externality is "outbound", NOT "internal" (RFX-214). It used to be
+# "internal", which read as restrictive and was not: `externality` has exactly
+# one decision effect in the shipped policy pack outside R1, and it is R5's
+# `external_sends` budget, which counts `externality == "outbound"` and only
+# that (budgets.rego current_for/prior_for). So on the one bucket that exists
+# precisely because this gateway could not identify the tool, the floor
+# declared the single value that charges the budget nothing.
+#
+# Measured on origin/main 759b83f, driving THIS function's own output into a
+# live core (scripts/attack-probe-rfx214-unknown-tool-externality.py): an
+# unmapped, unannotated `syncRecordsToPartner` at staging ran 200 calls before
+# anything stopped it, and what stopped it was `objects_touched` at 201 -- not
+# external_sends at 51, which is where the same session goes when the
+# externality is declared `outbound`. Tightening the operator's
+# external_sends limit 50 -> 5 did not move it: still 201.
+#
+# The other three buckets do NOT move and must not: `read` genuinely is not a
+# send (and R1 reads verb==read AND externality==internal), `create` already
+# says outbound, and a declarative mapping is an operator's own statement
+# about a tool they know. This is only the bucket that means "no tier could
+# say anything about this tool at all".
+#
+# CONSEQUENCE, stated so it is not discovered later: an unmapped tool now
+# consumes external_sends. Past the operator's limit that is a HOLD on traffic
+# that may well be internal -- a wrong hold, the documented bias, and the same
+# trade RFX-129 took inside core for the same reason. The fix for the noise is
+# a mapping or an annotation, i.e. telling the gateway what the tool is, which
+# is the upgrade path this module has always named.
 _EXECUTE_AXES = {
     "reversibility": "irreversible",
     "blast_radius": "systemic",
-    "externality": "internal",
+    "externality": "outbound",
 }
 
 # Argument keys opportunistically used as target.ref when present and stringy

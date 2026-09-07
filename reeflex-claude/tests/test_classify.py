@@ -9,6 +9,7 @@ verb, reversibility, blast_radius, externality, and classification_tier.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import unittest
 
@@ -27,6 +28,50 @@ from reeflex_claude.classify import classify
 
 def _c(tool_name: str, tool_input: dict) -> dict:
     return classify(tool_name, tool_input)
+
+
+# RFX-214: read the value R5's external_sends budget actually charges out of
+# the policy pack, rather than mirroring it here. `parse, never import` applies
+# to .rego as much as to .py -- this is a regex over source text, no OPA
+# invocation and no dependency on core being installed.
+_EXTERNAL_SENDS_BLOCK_RE = re.compile(
+    r'dimension\s*==\s*"external_sends".*?input\.axes\.externality\s*==\s*"([a-z_]+)"',
+    re.DOTALL)
+
+
+def _find_budgets_rego():
+    """Locate reeflex-core/policy/budgets.rego by walking up to the monorepo
+    root. Returns None when it is absent -- a standalone reeflex-claude install
+    ships no policy pack and there is nothing to cross-check."""
+    here = os.path.abspath(__file__)
+    while True:
+        parent = os.path.dirname(here)
+        if parent == here:
+            return None
+        candidate = os.path.join(parent, "reeflex-core", "policy", "budgets.rego")
+        if os.path.isfile(candidate):
+            return candidate
+        here = parent
+
+
+def _external_sends_counted_value():
+    """The single externality value budgets.rego charges to external_sends, or
+    None if the policy pack is not on disk. Raises if the pack says something
+    this helper cannot read unambiguously -- an instrument that guesses here
+    would turn a real drift into a green test."""
+    path = _find_budgets_rego()
+    if path is None:
+        return None
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    found = set(_EXTERNAL_SENDS_BLOCK_RE.findall(source))
+    if len(found) != 1:
+        raise AssertionError(
+            "cannot read the external_sends dimension out of %s: expected "
+            "exactly one `input.axes.externality == \"...\"` comparison in an "
+            "external_sends block, found %r. The budget's shape changed -- "
+            "update this helper rather than letting it skip." % (path, sorted(found)))
+    return found.pop()
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +430,52 @@ class TestUnknownTool(unittest.TestCase):
         self.assertEqual(r["verb"], "execute")
         self.assertEqual(r["reversibility"], "irreversible")
         self.assertEqual(r["blast_radius"], "broad")
-        self.assertEqual(r["externality"], "internal")
+        # RFX-214 (merge resolution, dev-1--054): this asserted "internal".
+        # #111 (RFX-206) raised blast_radius to `broad` and #115 (RFX-214)
+        # moved externality to `outbound`; the two are ORTHOGONAL axes and
+        # both fixes are wanted, so the resolution keeps both rather than
+        # letting whichever merged second overwrite the other.
+        self.assertEqual(r["externality"], "outbound")
+
+    def test_unknown_externality_is_a_value_external_sends_charges(self):
+        """RFX-214: the unknown-tool fallback must not declare the one value
+        R5's external_sends budget does not count.
+
+        This is deliberately NOT `assertEqual(..., "outbound")` with the
+        expected value pinned in this file. A pinned literal here would be a
+        mirror of budgets.rego that nothing checks -- exactly the defect
+        RFX-216 records -- and it would stay green if a policy author renamed
+        the value the budget counts. So the expected value is READ OUT OF
+        budgets.rego, and the test states the invariant instead of the
+        constant: whatever externality external_sends charges, that is what an
+        unidentifiable tool declares.
+        """
+        counted = _external_sends_counted_value()
+        if counted is None:
+            self.skipTest(
+                "reeflex-core/policy/budgets.rego not present -- standalone "
+                "reeflex-claude install, nothing to cross-check against")
+        r = _c("SomeCustomTool", {"param": "value"})
+        self.assertEqual(
+            r["externality"], counted,
+            "the unknown-tool fallback declares %r, but R5's external_sends "
+            "budget charges %r -- an operator's send budget cannot bound "
+            "traffic this adapter could not identify (RFX-214)"
+            % (r["externality"], counted))
+
+    def test_known_internal_tools_did_not_move(self):
+        """The fix is scoped to the ignorance path. A tool this adapter KNOWS
+        is internal must still say internal, or RFX-214's cure is worse than
+        the disease: every file read would consume the operator's send
+        budget."""
+        for tool, tool_input in (
+            ("Read", {"file_path": "/tmp/x"}),
+            ("Grep", {"pattern": "x"}),
+            ("Write", {"file_path": "/tmp/x", "content": "y"}),
+            ("Bash", {"command": "ls -la"}),
+        ):
+            with self.subTest(tool=tool):
+                self.assertEqual(_c(tool, tool_input)["externality"], "internal")
 
     def test_empty_tool_name(self):
         r = _c("", {})
