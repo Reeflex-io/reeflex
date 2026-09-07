@@ -213,7 +213,7 @@ about.
 |-----------------------------|-------------------------------------|---------------------------------------------|
 | `REEFLEX_CORE_URL`          | `http://127.0.0.1:8080`             | reeflex-core endpoint                        |
 | `REEFLEX_CLAUDE_ENVIRONMENT`| `production`                        | target environment (production\|staging\|dev)|
-| `REEFLEX_CLAUDE_STRICT`     | unset                               | if set truthy: unknown execute → irreversible|
+| `REEFLEX_CLAUDE_STRICT`     | unset                               | if set truthy: unknown execute → irreversible **and broad**, so an unrecognised command in production reaches a human. Before RFX-145 it lifted only reversibility, and R2 requires `broad`, so it could not change any verdict — it changed a word in the audit log. |
 | `REEFLEX_CLAUDE_PRINCIPAL`  | null                                | on_behalf_of value in the envelope           |
 | `REEFLEX_CLAUDE_AUDIT_LOG`  | `<tempdir>/reeflex-claude-audit.jsonl`| adapter-side audit log path                |
 | `REEFLEX_CLAUDE_TIMEOUT`    | `5`                                 | HTTP timeout to core in seconds              |
@@ -293,8 +293,37 @@ refusal) and `check`'s deny-scenario probe (healthy install, missing binary,
 non-zero exit, malformed output, wrong decision) without touching your real
 `~/.claude` or `./.claude` directories.
 
+`test_conformance_bash.py` runs the corpus in `reeflex_claude/conformance.py`
+— commands whose real-world effect was written down before the classifier was
+— through the classifier and an offline transcription of R1–R4, and fails if
+any irreversible production destruction reaches `allow`, or if any everyday
+command stops reaching it. The **live** equivalent of the same corpus, through
+the real hook against a real core, is:
+
+```bash
+python3 scripts/attack-probe-rfx144-agent-prices-own-action.py --strict --budget
+```
+
+Its exit code is the number of ground-truth production destructions that were
+allowed with no human, so CI can gate on it directly. Known residuals are
+printed with the ticket that tracks them and excluded from the count — a
+bounded gate that says what it does not cover is honest; one that silently
+drops cases from its own total reads as "covered everything".
+
 ## Limits / upgrade paths
 
+- **Bash classification** is heuristic — structural matching on each command
+  of the line, not a shell AST.  Since RFX-144 the whole line is classified
+  and not its first token: it is split at `&&`, `||`, `;`, `|`, `&` and
+  newline (quote-aware), `sh -c '<inner>'` is expanded in place,
+  `sudo`/`env`/`timeout`/`nohup`/`xargs` are peeled off, every resulting
+  command is classified on its own, and the most dangerous one is reported.
+  A line is a `read` only when every command on it is a read.
+  **Known gaps today**, none of them closed by this design: a command inside
+  a script file (`python3 deploy.py`, `bash deploy.sh`) is opaque, and a
+  destruction executed on another host (`ssh prod rm -rf /srv/data`) is
+  priced as the outbound `emit` it is rather than the delete it causes.
+  UPGRADE: a real shell-AST parser once tooling stabilises.
 - **A single named production file is only governed if your core declares it
   (RFX-153).**  `blast_radius` is a *cardinality* axis, so R2's `broad`
   requirement never reached `rm /srv/prod/db.sqlite` — one production database,
@@ -310,20 +339,55 @@ non-zero exit, malformed output, wrong decision) without touching your real
   names.  UPGRADE: add your paths to `protected_assets`, or set
   `default_protected := true` to hold every irreversible production action
   whose ref is not declared ephemeral.
-- **Two destruction shapes still reach `allow` even with R6 in place, measured.**
-  `> /srv/prod/db.sqlite` and `dd if=/dev/zero of=/srv/prod/db.sqlite` are
-  classified `execute` + `recoverable` by this adapter, and R6 requires
-  `irreversible` — so no policy posture rescues them.  A policy rule cannot
-  correct an envelope that under-declares irreversibility.  UPGRADE: RFX-144 /
-  RFX-146 (verb and reversibility classification); until then, treat
-  redirection and `dd` as ungoverned by this adapter.
-- **Bash classification** is heuristic (regex on the command string).  A
-  full parse tree would be more accurate.  UPGRADE: replace `_bash_verb` with
-  a shell-AST parser once tooling stabilises.
+- **Two destruction shapes needed BOTH halves of this change, and now have
+  them (RFX-153 + RFX-144, measured).**  `> /srv/prod/db.sqlite` and
+  `dd if=/dev/zero of=/srv/prod/db.sqlite` used to be classified `execute` +
+  `recoverable` by this adapter, and R6 requires `irreversible` — so while the
+  policy pack alone was in place, **no policy posture rescued them**: a policy
+  rule cannot correct an envelope that under-declares irreversibility.  The
+  RFX-144 classifier now prices both as `delete` + `irreversible` with
+  `target_ref` carrying the path, so R6 reaches them.  Measured on the combined
+  tree, same envelope both ways:
+
+  | adapter axes | decision |
+  |---|---|
+  | `execute` + `recoverable` (before RFX-144) | `allow` / `reeflex.policy/default_allow` |
+  | `delete` + `irreversible` (after RFX-144) | `require_approval` / `reeflex.policy/irreversible_protected_asset_prod` |
+
+  Stated this way on purpose: **neither change closes this on its own**, and
+  each was measured green in its own suite while the gap stayed open.  If only
+  one of the two is present in your build, treat redirection and `dd` as
+  ungoverned.
 - **Stub signing**: `meta.signature = "ed25519:stub:..."`.  UPGRADE: Vault-backed
   ed25519 signing once the key management path is implemented (SPEC §6 note).
+- **Four families the classifier cannot see at all** (RFX-158): the program
+  arrives on stdin (`curl … | sh`), the program is in a file (`bash deploy.sh`,
+  `python3 deploy.py`), the command word is expanded by the shell
+  (`$RM -rf …`, `$(echo rm) …`), or the destruction runs on another host
+  (`ssh prod 'rm -rf /srv/data'`, priced as the outbound `emit` it is).  The
+  destruction is not in the command string, so **this** classifier does not
+  price it — and for the first three it is not in the command string at all,
+  so nothing that reads only that string would.  The `ssh` case is different
+  and should not be lumped in: the remote command *is* on the line, and a
+  classifier that parses `ssh`'s argv can price it (PR #98 did, measured), so
+  that one is unclosed work rather than a limit of the approach.
+  **`REEFLEX_CLAUDE_STRICT=1` does cover five of the six** —
+  measured, not asserted: they are all unrecognised *execute* commands, which
+  strict mode prices `irreversible`+`broad`.  The `ssh` case is not one of
+  them (it is classified `emit`, not unrecognised).
 - **REEFLEX_CLAUDE_STRICT**: unset by default so coding agents are not blocked on
-  every `npm install`.  UPGRADE: use a per-command allow-list in policy instead.
+  every `npm install`.  When set, every UNRECOGNISED command is priced
+  irreversible + broad, so in production it reaches a human — measured live on
+  the conformance corpus, **it moves 23 of 82 verdicts**, including `pytest`,
+  `npm install` and `make build` from `allow` to `ask`, and five of the six
+  RFX-158 gaps above.  That is the whole point of the knob: it is the noisy
+  setting, and today it is the broadest lever this adapter ships for the
+  commands the classifier cannot read.  It is not the only way to cover them:
+  a policy-side rule, or parsing the wrapper the destruction hides behind, both
+  reach cases strict mode does not (the `ssh` family above is one).  Before
+  RFX-145 it was neither noisy nor safe — it moved
+  **zero** verdicts and only changed a word in the audit log.
+  UPGRADE: use a per-command allow-list in policy instead.
 - **approval re-submission**: the hook sets `approval.present = false` at
   interception.  Re-submission with `approval.present = true` after human
   approval is the caller's responsibility (Claude Code surfaces the `ask` dialog;
