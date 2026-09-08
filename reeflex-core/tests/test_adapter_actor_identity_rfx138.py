@@ -241,8 +241,11 @@ class TestN8nNodeActorIdentity(unittest.TestCase):
         self.assertTrue(
             default.startswith("="),
             "the Agent ID default %r is a plain constant: every execution of "
-            "every workflow would share one actor key (RFX-138). Session ID "
-            "on the same node already defaults to '={{$execution.id}}'."
+            "every workflow would share one actor key (RFX-138). Make it an "
+            "n8n expression over '$execution.id'. Note this is NOT the same "
+            "scope as Session ID, which defaults to '={{$workflow.id}}' "
+            "(RFX-180..184) so the cumulative budgets survive across runs: "
+            "budgets per workflow, approvals per execution."
             % default,
         )
         self.assertIn("$execution.id", default)
