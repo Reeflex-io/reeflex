@@ -74,7 +74,7 @@ proceeding).
 
 ## GIF (filmed at T7)
 
-*(placeholder — no GIF yet)*
+![demo5](./img/demo5-watch-before-you-enforce.gif)
 
 **How to film:** import into a local n8n (Docker), attach the credential,
 click "Execute workflow" once.
