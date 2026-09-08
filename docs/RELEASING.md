@@ -23,9 +23,9 @@ Pushing a `v*` tag triggers `release.yml`, which fans out to:
 | Channel | Package | Auth |
 |---|---|---|
 | GitHub Release | all artifacts + `SHA256SUMS` attached to the tag | `GITHUB_TOKEN` |
-| PyPI | `reeflex-claude` **and** `reeflex-holds` | OIDC Trusted Publishing |
-| npm | `n8n-nodes-reeflex` (with provenance) | OIDC or `NPM_TOKEN` |
-| GHCR | `ghcr.io/reeflex-io/reeflex-core` **only if core changed** | `GITHUB_TOKEN` |
+| PyPI | `reeflex-claude`, `reeflex-holds` **and** `reeflex-mcp` — each **only if its own `version` moved** (see the note below) | OIDC Trusted Publishing |
+| npm | `n8n-nodes-reeflex` — **no longer released from this repo**, it has its own (`Reeflex-io/n8n-nodes-reeflex`) with its own publish workflow | n/a here |
+| GHCR | `ghcr.io/reeflex-io/reeflex-core` **only if core changed** — tagged `<tag>` **and** `latest`. This image is the release artefact for core: `release.yml` builds no sdist or wheel for it, and `reeflex-core/` carries no `pyproject.toml` to build one from | `GITHUB_TOKEN` |
 | WP.org SVN | `reeflex-gate` (trunk + tag + assets) — **inert until the slot exists** (§2.5) | `WPORG_SVN_USERNAME` / `WPORG_SVN_PASSWORD` |
 | Job summary | a channel checklist (version + URL + ✅/⏭️/❌ per channel) | — |
 
@@ -45,17 +45,34 @@ the same tag.
 > allow re-uploading a version). Per the project gates, pushing a release tag
 > requires a human GO. The workflow automates the *mechanics*, not the decision.
 
+> **A TAG REPUBLISHES NOTHING (RFX-246).** `skip-existing` cuts both ways: it is
+> what makes a re-run safe, and it is also why a package whose `version` did not
+> move is **skipped**, while the `pypi` job still reports **success**. On
+> `Release v0.2.0` that job — then named *"PyPI publish (reeflex-claude +
+> reeflex-holds + reeflex-mcp)"* — was green having uploaded exactly one of the
+> three, because `reeflex-claude` 0.1.7 and `reeflex-mcp` 0.1.3 deliberately did
+> not move. Correct behaviour, false claim; the name and the run summary are
+> fixed, and **the bump below is the step that decides what ships.** To check
+> after the fact, grep the `pypi` job log for `Uploading` versus
+> `Skipping … already exist` — a green tick is not the evidence.
+
 ### Pre-flight (before you tag)
 
 - CI is green on the commit you are tagging.
-- Versions are bumped in each package that changed:
+- Versions are bumped in each package that changed. **A package not bumped here
+  does not ship, whatever the tag says:**
   - `reeflex-claude/pyproject.toml` → `version`
   - `reeflex-holds/pyproject.toml` → `version`
-  - `n8n-nodes-reeflex/package.json` → `version`
+  - `reeflex-mcp/pyproject.toml` → `version`
   - `reeflex-wordpress/reeflex-gate.php` → the `Version:` header
+  - *(not `n8n-nodes-reeflex/package.json` — that package moved to its own repo
+    and is not built or published by `release.yml` any more.)*
   These are **independent** — the release tag (`v0.1.6`) is the umbrella, not each
   package's version (e.g. v0.1.6 shipped `reeflex-claude 0.1.6`,
   `reeflex-holds 0.1.0`, `n8n-nodes-reeflex 0.1.0`, `reeflex-gate 0.1.5`).
+  `reeflex-core` has **no version file to bump**: its artefact is the GHCR image,
+  which is tagged from the release tag itself and rebuilt only when `reeflex-core/`
+  or the `Dockerfile` changed.
 - `CHANGELOG.md` updated.
 - A local copy of the built artifacts lands in `reeflex/releases/<tag>/` (local =
   source of truth, GitHub = publication). The workflow builds its own copies; keep
