@@ -493,13 +493,16 @@ credential speak for itself.
 
 Kept in one list so none of them has to be inferred from a silence.
 
-1. **`stream: true` is not governed.** The seat is a post-call hook on a
-   buffered response; a streaming response is delivered through a different
-   hook this class does not implement, and the same `rm -rf /` that is refused
-   on the buffered path reaches the caller intact as stream deltas. A
-   deployment that must not have an ungoverned path should refuse
-   `stream: true` at the gateway until that hook exists. This is the largest
-   hole in the seat and it is open work.
+1. **This walk is buffered only; `stream: true` is governed, elsewhere.** When
+   this demo was written the seat implemented the buffered post-call hook and
+   nothing else, and the same `rm -rf /` that is refused on the buffered path
+   reached the caller intact as stream deltas. RFX-242 closed that: the
+   guardrail also implements `async_post_call_streaming_iterator_hook`, and the
+   assembled calls are decided by the same `enforce.rule_one_call()`, in the
+   same order, as the buffered path. **Every request in this walk is buffered**,
+   so nothing in this transcript is evidence about the streamed path — that
+   evidence is `reeflex-litellm/proxy/stream_walk.py`, which asserts on raw
+   `text/event-stream` bytes.
 2. **An approval that arrives after the wait window is unspendable** (step 5b).
 3. **The evidence feed cannot carry the enforcement stage or the routing
    block**, so a report cannot distinguish a gateway refusal from an
