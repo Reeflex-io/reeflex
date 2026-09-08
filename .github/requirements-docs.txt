@@ -1,0 +1,22 @@
+# Pinned build dependencies for docs.yml (docs.reeflex.io).
+#
+# WHY THIS FILE EXISTS. docs.yml used to run `pip install "mkdocs-material[imaging]"
+# mkdocs-git-revision-date-localized-plugin` — two unbounded floors on the
+# critical path of a workflow that has NO `pull_request` trigger. That
+# combination is the worst case of the PR #123 class: an upstream release could
+# only ever be discovered by turning `main` RED, because no PR could have run
+# the build. (The `pull_request` trigger is added in the same change as this
+# file, precisely so a pin here is verifiable BEFORE it merges.)
+#
+# BOUNDS, justified by the surface mkdocs.yml actually uses:
+#   mkdocs-material  — the `material` theme, its `social` plugin (the imaging
+#                      extra) and Material-specific `theme.features` /
+#                      `markdown_extensions` keys in mkdocs.yml. All of that is
+#                      the 9.x configuration schema; a 10.0 would be free to
+#                      rename it. Latest 9.7.7 (2026-07-17).
+#   ...localized-plugin — the `git-revision-date-localized` plugin key in
+#                      mkdocs.yml. 1.x schema. Latest 1.5.4 (2026-08-21).
+#
+# Raise a ceiling deliberately, in a PR, with the `Docs` build green on it.
+mkdocs-material[imaging]>=9.5,<10
+mkdocs-git-revision-date-localized-plugin>=1.2,<2

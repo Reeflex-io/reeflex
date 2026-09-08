@@ -1,5 +1,12 @@
 [build-system]
-requires = ["setuptools>=68"]
+# UPPER BOUND: the API surface this file uses from setuptools is the PEP 517
+# `build_meta` backend plus two config tables ([tool.setuptools.packages.find]
+# and [tool.setuptools.package-data]). The ceiling is one major above the
+# version release.yml actually builds the published wheel with (84.0.0 as of
+# 2026-09-08) — setuptools removes things across majors, and an open floor here
+# means the artefact a customer installs was built by a backend nobody chose.
+# Raise it deliberately, after a `python -m build` on all three packages.
+requires = ["setuptools>=68,<85"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -27,10 +34,33 @@ classifiers = [
 # stdlib-only (see core_client.py). `anyio` was already a transitive `mcp`
 # dependency (>=4.5); pinned explicitly now that upstream.py imports it
 # directly (CancelScope(shield=True) around upstream teardown -- BUG 1 fix).
+#
+# EVERY FLOOR HERE IS BOUNDED ABOVE, AND EACH BOUND IS JUSTIFIED BY THE API
+# SURFACE THIS PACKAGE USES (the sweep PR #123 asked for). The lesson that
+# forced it: reeflex-holds shipped `mcp>=2`, mcp 2.1.1 arrived, and a SDK MINOR
+# changed what our users see -- an operator could no longer tell a typo from an
+# outage -- on a commit that touched none of this repo. A dependency whose minor
+# releases can change our behaviour is not one to leave open-ended.
+#
+#   mcp>=1.2,<2   the FastMCP (front) + ClientSession (back) API. 2.0.0 removed
+#                 mcp.server.fastmcp outright, so <2 is not caution, it is the
+#                 boundary of what this package can import at all. Unchanged.
+#   pyyaml>=6,<7  used surface: yaml.safe_load, yaml.YAMLError, and
+#                 yaml.safe_dump(..., sort_keys=False, default_flow_style=False)
+#                 (registry.py, mappings.py). `sort_keys` on safe_dump needs
+#                 >=5.1; the floor is >=6 because 6.0 is the first release that
+#                 supports this package's own requires-python (>=3.10). 6.x is
+#                 the only major with these signatures (latest 6.0.3), so <7.
+#                 It had NO floor and NO ceiling before this change -- and
+#                 reeflex-mcp 0.1.3 is on PyPI today declaring exactly that.
+#   anyio>=4.5,<5 used surface: anyio.CancelScope(shield=True) (upstream.py) and
+#                 anyio.fail_after (tests). Both are the 4.x API; >=4.5 is what
+#                 mcp itself requires. Latest is 4.15.1, so <5 bounds the next
+#                 major without excluding anything we run on.
 dependencies = [
     "mcp>=1.2,<2",
-    "pyyaml",
-    "anyio>=4.5",
+    "pyyaml>=6,<7",
+    "anyio>=4.5,<5",
 ]
 
 [project.urls]

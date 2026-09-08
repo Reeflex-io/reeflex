@@ -1,5 +1,11 @@
 [build-system]
-requires = ["setuptools>=68"]
+# UPPER BOUND: same reasoning as the dependency ceiling below, one layer down.
+# The surface used from setuptools is the PEP 517 `build_meta` backend plus
+# [tool.setuptools.packages.find]. The ceiling is one major above the version
+# release.yml built the published 0.2.0 wheel with (84.0.0 as of 2026-09-08).
+# An open floor on the BUILD backend means the artefact a customer installs was
+# assembled by a version nobody chose. Raise it after a `python -m build`.
+requires = ["setuptools>=68,<85"]
 build-backend = "setuptools.build_meta"
 
 [project]

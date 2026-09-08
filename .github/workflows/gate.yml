@@ -59,6 +59,33 @@ permissions:
   contents: read
 
 jobs:
+  # A ~20-second job, deliberately separate from the ~10-minute gate below.
+  # The gate ALSO runs both of these as components (`dep-floors-selftest` and
+  # `dep-floors`), so this job adds no new information — it adds SPEED and a
+  # check name of its own on the PR page. An open dependency floor is a
+  # one-line diff to fix and the reviewer should not wait for npm ci and four
+  # PHP harnesses to be told about it. PR #123's `mcp>=2` was found by main
+  # going red; this is the check that would have found it on the PR.
+  dep-floors:
+    name: dependency floors (every declared requirement is bounded above)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The instrument before the verdict. On 3.12 this ALSO cross-checks the
+      # anchored manifest parser against stdlib `tomllib` on every fixture —
+      # they disagree, this fails, and no verdict is reported.
+      - name: Selftest — prove the manifest parser and the classifier
+        run: python scripts/check_dependency_floors.py --selftest
+      - name: Second pair of eyes — the same properties under unittest discovery
+        run: python -m unittest discover -s scripts/tests -t scripts -v
+      - name: Check the tree
+        run: python scripts/check_dependency_floors.py .
+
   preflight-gate:
     name: preflight gate (env + full suite + built entry points)
     runs-on: ubuntu-latest

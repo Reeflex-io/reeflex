@@ -152,8 +152,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install the Python build backend
-        run: python -m pip install --upgrade build
+      # PINNED (the PR #123 sweep). This was `--upgrade build`, i.e. "take the
+      # newest thing on the index", on the one workflow whose output is the
+      # artefact a customer installs. The bound and its justification are in
+      # the file; `scripts/check_dependency_floors.py` walks it.
+      - name: Install the Python build backend (pinned)
+        run: python -m pip install -r .github/requirements-build.txt
+
+      - name: Show what resolved (the wheels below are built BY this)
+        run: python -m pip freeze
 
       - name: Build the WordPress + verify zips (stdlib zipfile — no `zip` binary needed)
         run: python scripts/build-wp-zips.py --out dist-artifacts
