@@ -28,19 +28,28 @@ THE SEVEN CASES
 ===============
  1. deny  / stream   the refused command must not appear in ANY chunk
  2. deny  / buffered the SAME refusal payload as case 1 (path parity)
- 3. allow / stream   byte-identical to a proxy with no seat, after the two
-                     per-response fields (`id`, `created`) are normalized
- 4. prose / stream    a response with no tool call is untouched and not delayed
+ 3. allow / stream   byte-identical to a proxy with no seat, after the three
+                     identifiers the MODEL mints per response (`id`, `created`,
+                     `tool_call_id`) are normalized -- and nothing else
+ 4. prose / stream   a response with no tool call is untouched and not delayed
  5. hold  / stream   withheld while a human decides, then RELEASED -- with the
                      approval arriving from a second thread mid-request
  6. core down/stream fail closed: refused, and the reason says why
  7. audit            core decided each streamed request EXACTLY ONCE
 
-Case 7 exists because implementing this hook also silences LiteLLM's
-`_run_deferred_stream_guardrails` pass, which used to run the BUFFERED hook on
-an assembled streaming response after delivery -- producing a governance record
-for a call the caller had already been given.  One row per request is what says
-that is gone; two would say the seat now decides twice.
+Case 7 DOES NOT DISCRIMINATE PRE- FROM POST-FIX and is not offered as if it
+did.  Before this hook existed, LiteLLM's `_run_deferred_stream_guardrails`
+ran the BUFFERED hook on an assembled streaming response AFTER delivery -- so
+the pre-fix build also writes exactly one decision row, and that row is the
+audit-only one.  What case 7 guards is the other direction: that the seat does
+not now decide TWICE.  The "before delivery" half is carried by case 1, where
+the refusal is in the bytes.
+
+Case 5 is the one to read carefully before trusting.  "The call came out" is
+also what a gateway with no seat produces, so two of its three rows PASS on the
+pre-fix build.  The discriminating row is the third, and it compares two clocks:
+when the approval landed in core (from a second thread) against when the first
+tool byte left the gateway.
 """
 
 from __future__ import annotations
@@ -214,8 +223,36 @@ def normalize_stream(body: bytes) -> bytes:
 # Case 5's second actor: the human
 # ---------------------------------------------------------------------------
 
-def latest_pending_hold(core_url: str, holds_file: str) -> str:
-    """The id of the newest hold still pending, read off core's holds ledger."""
+def hold_ids(holds_file: str) -> set:
+    """Every hold id core's ledger has ever mentioned."""
+    out = set()
+    try:
+        with open(holds_file, "r", encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if rec.get("id"):
+                    out.add(rec["id"])
+    except OSError:
+        pass
+    return out
+
+
+def new_pending_hold(holds_file: str, before: set) -> str:
+    """The id of a hold that is pending AND was not in the ledger `before`.
+
+    THE `before` SET IS NOT A REFINEMENT, IT IS THE WHOLE CORRECTNESS OF CASE 5.
+    A first version took "the newest hold still pending", which is right on a
+    fresh core and wrong on a core that has been used: earlier walks leave
+    timed-out holds pending for four hours, so the approver thread found one of
+    THOSE on its first poll, approved a hold nobody was waiting on, and the
+    request under test timed out at 30 s. It reported `approval at +6.0 ms` and
+    `first tool byte: None` -- a red row for a correct build, which is the
+    cheaper of the two ways that bug could have landed. The other way is a
+    green row for a broken one.
+    """
     pending, resolved = [], set()
     with open(holds_file, "r", encoding="utf-8") as fh:
         for line in fh:
@@ -223,14 +260,17 @@ def latest_pending_hold(core_url: str, holds_file: str) -> str:
                 rec = json.loads(line)
             except ValueError:
                 continue
+            hid = rec.get("id")
+            if not hid or hid in before:
+                continue
             if rec.get("status") == "pending":
-                pending.append(rec["id"])
-            elif rec.get("id"):
-                resolved.add(rec["id"])
+                pending.append(hid)
+            else:
+                resolved.add(hid)
     for hid in reversed(pending):
         if hid not in resolved:
             return hid
-    raise RuntimeError("no pending hold in %s" % holds_file)
+    raise RuntimeError("no NEW pending hold in %s" % holds_file)
 
 
 def approve(core_url: str, hold_id: str, token: str, principal_id: str) -> int:
@@ -385,6 +425,9 @@ def main() -> int:
         token = open(args.approver_token_file).read().strip()
         s5 = "%s-hold" % tag
         approved = {}
+        # Snapshot BEFORE the request, so the approver can only resolve a hold
+        # this request raised. See new_pending_hold().
+        holds_before = hold_ids(args.holds_file)
 
         def approver():
             # Wait for the hold to EXIST, then approve it -- from a different
@@ -394,7 +437,7 @@ def main() -> int:
             deadline = time.time() + 60
             while time.time() < deadline:
                 try:
-                    hid = latest_pending_hold(args.core_url, args.holds_file)
+                    hid = new_pending_hold(args.holds_file, holds_before)
                 except Exception:
                     time.sleep(0.3)
                     continue
