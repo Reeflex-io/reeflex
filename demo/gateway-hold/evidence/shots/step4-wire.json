@@ -1,0 +1,17 @@
+[
+  {
+    "method": "GET",
+    "url": "/app/holds",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/app/holds/badge",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "url": "/app/holds/364237644c6a4dcd8b5c17c742e75810/resolve",
+    "status": 200
+  }
+]

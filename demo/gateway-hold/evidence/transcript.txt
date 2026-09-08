@@ -1,0 +1,450 @@
+
+
+[1;36m========== STEP 0  what this walk is running against[0m
+
+[1m== core: reeflex-core v0.2.0 on :18701 (container rfx-demo-core)[0m
+   {"status":"ok","ledger":{"durable":true,"path":"/app/audit/ledger.jsonl","epoch_id":"8a221534ce8945e5b3fdd27ff062fe7d","
+
+[1m== model: the mock, on :18702[0m
+   mock model on http://127.0.0.1:18702/v1 (latency 0ms)
+   app leg: ENABLED (a gate credential is present in the environment)
+
+[1m== gateway (impatient): litellm on :18703[0m
+
+[1m== gateway (patient): litellm on :18704[0m
+   litellm (impatient) up on :18703
+   litellm (patient) up on :18704
+
+[1m== stack up. run dir: /tmp/reeflex-gateway-hold-run[0m
+
+[1m-- the pieces, pinned[0m
+   reeflex-core   [ghcr.io/reeflex-io/reeflex-core:latest] digest ghcr.io/reeflex-io/reeflex-core@sha256:58a0a531dfa1aa9bdfaf82baf94c4a1388303520cae755ffbbe1a28d9e64845b
+   litellm        1.100.0
+   classifier     /root/reeflex-wt/reeflex-claude-dev-3/reeflex-claude/reeflex_claude
+   core config    REEFLEX_REQUIRE_VERIFIED_APPROVER is NOT SET => the shipped default (true, since 0.2.0)
+
+[1m-- the classifier is not the stale PyPI wheel[0m
+..                                                                       [100%]
+2 passed in 0.02s
+
+[1m-- the tenancy binding, validated before any traffic[0m
+{
+  "bind": {
+    "key_alias": {},
+    "key_hash": {
+      "litellm_proxy_master_key": "acme-payments"
+    },
+    "team_id": {}
+  },
+  "source": "REEFLEX_LITELLM_TENANCY_MAP_FILE=/root/reeflex-wt/reeflex-claude-dev-3/demo/gateway-hold/config/tenancy.json",
+  "tenants": {
+    "acme-payments": {
+      "cloud_hosts": [],
+      "environment": "production",
+      "evidence": {
+        "gate_token_env": "RFX_DEMO_GATE_TOKEN",
+        "ingest_url": "https://app.reeflex.io/api/v1/evidence",
+        "signing_key_env": "RFX_DEMO_EVIDENCE_KEY"
+      },
+      "label": "ACME Payments",
+      "on_prem_hosts": [
+        "127.0.0.1",
+        "localhost"
+      ],
+      "org": "acme-payments",
+      "principal": "payments-oncall@acme.example"
+    }
+  }
+}
+   app leg: LIVE against https://app.reeflex.io
+
+
+[1;36m========== STEP 1  ONE prompt. The model proposes DROP TABLE customers.[0m
+   prompt: Clean up the old customer table on prod. TOOL run_shell {"command": "psql -h prod-db -c \"DROP TABLE customers\""}
+   
+   The model is a local mock, deliberately: the thing being demonstrated is
+   the GATEWAY, and a real model would make the one variable that matters --
+   which tool call comes back -- nondeterministic. Point the proxy at any
+   OpenAI-compatible model and the seat behaves identically.
+
+
+[1;36m========== STEP 2  the gateway returns a HOLD instead of the tool call[0m
+
+[1m-- POST /v1/chat/completions  (gateway on :18703, reeflex_hold_wait: 2)[0m
+   tool_calls:    None      <- the model proposed one; the caller got none
+   finish_reason: 'stop'
+   error:   reeflex_hold_timeout
+   rule:    reeflex.policy/irreversible_broad_prod
+   stage:   refused_at_gateway   <- refused at the GATEWAY. Not 'prevented at execution'.
+   hold_id: f4edbaa9938549a6896907e8bd3105fe
+   reason:  Reeflex: this action needs human approval. No decision arrived within the gateway's wait window, so the call is refused for now. The hold is still open -- retry after a human resolves it. The hold was delivered to the approval inbox. Reeflex: irreversible broad change in production requires human approval [rule=reeflex.policy/irreversible_broad_prod]
+
+[1m-- the command string is not in the response the caller received[0m
+   'DROP TABLE customers' does not appear in the 996 bytes of the response. Searched the
+   whole document, not just the tool_calls field.
+
+[1m-- and core is holding it: GET /v1/holds/f4edbaa9938549a6896907e8bd3105fe[0m
+   id:            f4edbaa9938549a6896907e8bd3105fe
+   status:        pending
+   rule_id:       reeflex.policy/irreversible_broad_prod
+   expires_ts:    2026-09-08T12:52:00Z
+   agent.id:      agent:litellm-gateway/acme-payments/mock-tools   <- the ORG is in the actor identity, not just
+                       a label: core's hold check 8 binds an approval
+                       to it, so one department cannot spend another's.
+   session_id:    litellm:acme-payments:demo-step2-1788857518
+   axes:          {"reversibility": "irreversible", "blast_radius": "broad", "externality": "internal"}
+   provenance:    {"undeclared": []}   <- nothing undeclared, so R0 does not apply
+   danger_signature:    sql_drop_table
+   classification_tier: destructive_broad
+   command_preview:     psql -h prod-db -c "DROP TABLE customers"
+
+
+[1;36m========== STEP 3  the hold in the approval inbox at https://app.reeflex.io[0m
+
+[1m-- the adapter's ledger line: was a human actually asked?[0m
+   enforcement_stage:   "refused_at_gateway"
+   observed:            "proposal"
+   prevents_execution:  false
+   hold_id:             "f4edbaa9938549a6896907e8bd3105fe"
+   hold_announced:      "sent"
+   hold_decision:       null
+   rule:                "reeflex.policy/irreversible_broad_prod"
+   agent_id:            "agent:litellm-gateway/acme-payments/mock-tools"
+   
+   This is the field a report needs. `hold_announced: sent` means the
+   hold reached an inbox; `failed` and `not_configured` are holds nobody
+   was told about, and reading those as human oversight would be the
+   Article 14 overclaim in miniature.
+
+
+[1;36m========== STEP 4+5  a human approves in the UI, and the agent's call is released[0m
+
+[1m-- the agent's request, at the gateway that waits (:18704, wait 180s)[0m
+   the caller is still waiting; core is holding 364237644c6a4dcd8b5c17c742e75810
+
+[1m-- the relay, watching the app for a human decision[0m
+
+[1m-- a human, in a real browser, on https://app.reeflex.io/app/holds[0m
+[ui] the hold's own card is on the page (#hold-36423764)
+[ui] what the human reads on it:
+[ui]     | delete
+[ui]     | · litellm-gateway · 1 item · production
+[ui]     | raised 2026-09-08 08:52 UTC
+[ui]     | waiting less than an hour
+[ui]     | ·
+[ui]     | 3 hours left to decide
+[ui]     | — deadline 2026-09-08 12:52 UTC
+[ui]     | gate litellm-gateway-demo · requested by agent agent:litellm-gateway/acme-payments/mock-tools
+[ui]     | rule reeflex.policy/irreversible_broad_prod — Reeflex: irreversible broad change in production requires human approval [rule=reeflex.policy/irreversible_broad_prod]
+[ui]     | View evidence chain →
+[ui]     | ✓ Approve
+[ui]     | Deny…
+[ui] the card names the verb, the environment, the gateway, the rule and the department
+[ui] the Approve control is painted where it says it is: '✓ Approve'
+[ui] the card after the click: 'delete · · litellm-gateway · 1 item · production · raised 2026-09-08 08:52 UTC · gate litellm-gateway-demo · requested by agent agent:litellm-gateway/acme-payments/mock-tools · rule reeflex.policy/irreversible_broad_prod'
+[ui] requests the browser actually made:
+[ui]    GET   /app/holds                                                             200
+[ui]    GET   /app/holds/badge                                                       200
+[ui]    POST  /app/holds/364237644c6a4dcd8b5c17c742e75810/resolve                    200
+
+[1m-- the relay carrying that decision to core[0m
+[relay] watching https://app.reeflex.io/api/v1/holds/resolutions for a human decision
+[relay] the app reports: hold 36423764 -> approve
+[relay] core accepted the approve of hold 36423764 as alice.approver@acme.example (decided_by_verified=True)
+
+[1m-- what the blocked caller finally received[0m
+   tool_calls:    [{"function": {"arguments": "{\"command\": \"psql -h prod-db -c \\\"DROP TABLE customers\\\"\"}", "name": "run_shell"}, "id": "call_0_ac667ae3", "type": "function"}]
+   finish_reason: 'tool_calls'
+   content:       None
+
+   The SAME request. It was withheld while a human decided, and
+   released only because core answered `allow` to the resubmission
+   -- not because the hold said 'approved'.
+
+[1m-- 5b  MEASURED LIMIT: a retry cannot spend an approval that arrives late[0m
+   1. the agent asks              -> refused, hold b4085381030c41a5a9c9c7a1b7662f9f
+   2. a human approves hold b4085381 (too late: the window is closed)
+   3. the agent retries           -> refused, hold 991c442a347546eda30b1621f5808bb6
+
+   The retry raised a DIFFERENT hold. And the approved one:
+     hold b4085381  status=approved  decided_by=human:alice.approver@acme.example  verified=True  consumed_ts=None
+
+   `approved`, `consumed_ts: null`: a real human decision that nothing
+   will ever spend. Nothing is released by accident, which is the
+   fail-closed half -- but the human's answer is lost, and the agent is
+   back at the start of the queue.
+
+
+[1;36m========== STEP 6  the record, and exactly what it may and may not claim[0m
+
+[1m-- the adapter's decision ledger for this walk[0m
+   #   verdict          rule                           enforcement_stage    announced released decided_by
+   ----------------------------------------------------------------------------------------------------------------------
+   1   require_approval irreversible_broad_prod        refused_at_gateway   sent      False    -
+   2   allow            approved_resubmission          allowed_at_gateway   sent      True     alice.approver@acme.example
+   3   require_approval irreversible_broad_prod        refused_at_gateway   sent      False    -
+   4   require_approval irreversible_broad_prod        refused_at_gateway   sent      False    -
+
+   Every row says `prevents_execution: false` and `observed:
+   proposal`, on purpose. This seat sees a call PROPOSED. An
+   application that keeps its own copy of the model's answer is not
+   stopped by anything a gateway can do.
+
+[1m-- the released call's full ledger line[0m
+     {
+       "action": {
+         "ability": "litellm/run_shell",
+         "namespace": "litellm-gateway",
+         "target_environment": "production",
+         "target_system": null,
+         "verb": "delete"
+       },
+       "agent_id": "agent:litellm-gateway/acme-payments/mock-tools",
+       "axes": {
+         "blast_radius": "broad",
+         "externality": "internal",
+         "reversibility": "irreversible"
+       },
+       "core_reachable": true,
+       "decision_id": "3465d2881f314e1db15739aa46358709",
+       "enforcement_stage": "allowed_at_gateway",
+       "envelope_hash": "250f44a723784ad66154b019a246772ba6c9414188611803592de927c69669d9",
+       "gateway_routing": {
+         "adapter": "reeflex-litellm",
+         "api_base_host": "127.0.0.1:18702",
+         "api_base_is_private": true,
+         "caller": {
+           "end_user_id": null,
+           "key_alias": null,
+           "key_hash_prefix": "litellm_prox",
+           "litellm_org_id": null,
+           "team_alias": null,
+           "team_id": null,
+           "user_id": "default_user_id",
+           "via_virtual_key": true
+         },
+         "deployment_id": "ef708792f9a1ebc4c31a86cd60dbbc6f6783292b597e8cc9573d3861dae31028",
+         "gateway": "litellm",
+         "model": "mock-tools",
+         "model_requested": "mock-tools",
+         "model_served": "mock-tools",
+         "placement": "on_prem",
+         "provider": "openai",
+         "stream": false,
+         "tenant": {
+           "label": "ACME Payments",
+           "matched_on": "key_hash",
+           "matched_value": "litellm_proxy_master_key",
+           "org": "acme-payments"
+         }
+       },
+       "gateway_tool": "run_shell",
+       "hold_announced": "sent",
+       "hold_decision": {
+         "decided_by": {
+           "id": "alice.approver@acme.example",
+           "type": "human"
+         },
+         "resolution": "approved",
+         "verified": true
+       },
+       "hold_id": "364237644c6a4dcd8b5c17c742e75810",
+       "magnitude": {
+         "count": 1
+       },
+       "normalization": "name_and_shape",
+       "observed": "proposal",
+       "occurred_ts": "2026-09-08T08:52:17Z",
+       "parent_decision_id": "4be0bffddae843288136096b78e73e1d",
+       "prevents_execution": false,
+       "reason": "Reeflex: approved hold resubmission [rule=reeflex.policy/approved_resubmission]",
+       "refusal_error": null,
+       "released_after_approval": true,
+       "rule": "reeflex.policy/approved_resubmission",
+       "schema": "reeflex-litellm/decision-ledger/v1",
+       "session_id": "litellm:acme-payments:demo-step5-1788857523",
+       "tenant_org": "acme-payments",
+       "tool_call_id": "call_0_ac667ae3",
+       "verdict": "allow"
+     }
+
+[1m-- what CANNOT be on the evidence wire, proven by running the projection[0m
+   the ledger line (the adapter's own record) carries:
+     enforcement_stage    "refused_at_gateway"
+     observed             "proposal"
+     prevents_execution   false
+     hold_id              "991c442a347546eda30b1621f5808bb6"
+     hold_announced       "sent"
+     gateway_routing      {adapter, api_base_host, api_base_is_private, caller, deployment_id, gateway, model, model_requested, model_served, placement, provider, stream, tenant}
+
+   the SAME line projected onto the §4 evidence wire:
+     action               {"verb": "delete", "target_environment": "production", "target_system": "litellm-gateway"}
+     agent_id             "agent:litellm-gateway/acme-payments/mock-tools"
+     decision_id          "8a0d87f54a4746a8871adea08ab0b8fb"
+     envelope_hash        "250f44a723784ad66154b019a246772ba6c9414188611803592de927c69669d9"
+     hold                 {"hold_id": "991c442a347546eda30b1621f5808bb6"}
+     magnitude            {"count": 1}
+     occurred_ts          "2026-09-08T08:52:24Z"
+     rule                 "reeflex.policy/irreversible_broad_prod"
+     sig_alg              "hmac-sha256"
+     verdict              "require_approval"
+
+   NOT on the wire: enforcement_stage, observed, prevents_execution,
+   gateway_routing. Not omitted by oversight -- `wire_record()` is a
+   closed allowlist and `assert_wire_is_spec_clean()` re-checks its own
+   output before every request. Try it:
+     evidence record carries field(s) EVIDENCE-INGEST-SPEC-v1 §4 does not define: enforcement_stage. §4 is a closed schema (unknown key -> 422) and the contract is FROZEN -- the field belongs in the adapter ledger, or needs a spec chan
+
+   and the overclaim guard, on the stage this seat must never emit:
+     ValueError: reeflex-litellm cannot emit enforcement_stage='prevented_at_execution': this seat sees a tool call PROPOSED, not executed, so it may only record allowed_at_gateway or refused_at_gateway. See evidence.py's module docstrin
+
+   What a report CAN therefore say about this walk: a production
+   `delete` on `litellm-gateway`, rule irreversible_broad_prod, held,
+   then allowed under approved_resubmission, by
+     agent_id = agent:litellm-gateway/acme-payments/mock-tools
+   What it CANNOT say: that the action was prevented at execution. It
+   was not. It was refused at a gateway, which is a different and
+   weaker fact, and the two must not be counted together.
+
+[1m-- an Attest report over the org this walk wrote to[0m
+   period 2026-09-07 .. 2026-09-09
+   GET   /app/attest                                    200
+   POST  /app/attest/reports                            200
+   GET   /app/attest?report_id=410129a5-1e5f-4820-9c3d-131aa80cb471 200
+   report_id 410129a5-1e5f-4820-9c3d-131aa80cb471
+   downloaded -> /root/reeflex-wt/reeflex-claude-dev-3/demo/gateway-hold/evidence/shots/step6-attest-report.json
+   
+   the Article 14 basis the report computed:
+     checked_at_ingest_only                               ["evidence.signature"]
+     gate_declared_admitted_one_way                       []
+     malformed                                            0
+     records                                              4
+     reeflex_corroborated                                 ["evidence.received_ts", "evidence.gate_id", "evidence (append-only: the runtime role holds INSERT/SELECT and no UPDATE or DELETE)"]
+     tenant_attested                                      ["evidence.envelope_hash", "evidence.sig_alg", "evidence.signature", "evidence.rule", "evidence.decision_id", "evidence.occurred_ts", "evidence.verdict", "evidence.verb", "evidence.target_system", "evidence.target_environment", "evidence.decided_by_type", "evidence.decided_by_id", "evidence.hold_id", "evidence.parent_decision_id", "evidence.resolution", "evidence.agent_id", "evidence.magnitude_count"]
+   
+   the evidence-chain rows' approver fields:
+     hold f4edbaa9  resolution=null      decided_by=None:None
+     hold 36423764  resolution="approved" decided_by=human:alice.approver@acme.example
+     hold b4085381  resolution=null      decided_by=None:None
+     hold 991c442a  resolution=null      decided_by=None:None
+   
+   what the report contains about this walk:
+     litellm-gateway                    present
+     acme-payments                      present
+     irreversible_broad_prod            present
+     approved_resubmission              present
+     alice.approver@acme.example        present
+   
+   and what it does NOT contain -- §4 has no field for these and the
+   contract is frozen, so this is the report an auditor gets today:
+     enforcement_stage                  absent
+     prevents_execution                 absent
+     gateway_routing                    absent
+     refused_at_gateway                 absent
+     prevented_at_execution             absent
+   
+   `prevented_at_execution` being absent is correct and is the point:
+   nothing in this chain prevented an execution. `refused_at_gateway`
+   being absent too is the GAP (RFX-247) -- the report cannot state
+   the weaker, true fact either, so it states neither.
+
+
+[1;36m========== DENY VARIANT A  a hard deny -- a structured tool result the model reads[0m
+
+[1m-- the same tool, a wider command: rm -rf /var/lib/pgsql[0m
+   tool_calls:    None
+   finish_reason: 'stop'
+   message.content, verbatim -- this is what the MODEL reads on its
+   next turn, and it is why an agent can react instead of retrying
+   the same refused call in a loop:
+
+     {
+       "reeflex": {
+         "refused": [
+           {
+             "error": "reeflex_denied",
+             "reason": "Reeflex: irreversible systemic change in production is not allowed even with approval [rule=reeflex.policy/irreversible_systemic_prod]",
+             "rule": "reeflex.policy/irreversible_systemic_prod",
+             "stage": "refused_at_gateway",
+             "tool": "run_shell",
+             "tool_call_id": "call_0_a8d3aef6"
+           }
+         ],
+         "version": 1
+       }
+     }
+
+
+[1;36m========== DENY VARIANT B  unclassifiable -> HOLD, not deny (R0)[0m
+
+   The SAME action, decided twice, differing in ONE field.
+
+   all three axes declared        -> deny              reeflex.policy/irreversible_systemic_prod
+                                     hold_id: None
+                                     irreversible systemic change in production is not allowed even with approval
+
+   axes.reversibility OMITTED     -> require_approval  reeflex.policy/unclassified_action
+                                     hold_id: 11fddb85273347bca983b3175bcf9f83
+                                     this action could not be classified: axes.reversibility was not declared by the adapter and core used its conservative default, so the verdict rests o
+
+   So an action core cannot classify becomes a hold a human can
+   resolve, not a refusal nobody can appeal. R0 outranks R3 precisely
+   because a terminal deny is the right answer for an action an adapter
+   DECLARED and the wrong one for an action core guessed at.
+
+   And this gateway seat never reaches it. Read off the gateway-raised
+   holds in this core's store:
+     hold 10bf7fc3  provenance: {"undeclared": []}
+     hold 317db678  provenance: {"undeclared": []}
+     hold 3308972f  provenance: {"undeclared": []}
+
+   `undeclared: []` on every one. The adapter declares every field R0
+   watches, so R0 is a guard this seat does not need and does not get.
+
+
+[1;36m========== WHAT THE GATE ACTUALLY DISCRIMINATES ON  (and what it does not)[0m
+
+   MAPPED -> Bash: the classifier prices the command
+   tool call                                                             rule
+   ----------------------------------------------------------------------------------------------------
+   run_shell {"command": "ls -la"}                                ALLOW  released untouched
+   run_shell {"command": "psql -h prod-db -c \"SELECT count(*) FR ALLOW  released untouched
+   run_shell {"command": "psql -h prod-db -c \"DROP TABLE custome HOLD   irreversible_broad_prod
+   run_shell {"command": "rm -rf ./build"}                        HOLD   irreversible_broad_prod
+   run_shell {"command": "rm -rf /var/lib/pgsql"}                 DENY   irreversible_systemic_prod
+
+   UNMAPPED: the tool name is not understood, so a human is asked
+   tool call                                                             rule
+   ----------------------------------------------------------------------------------------------------
+   run_sql {"query": "DROP TABLE customers"}                      HOLD   irreversible_broad_prod
+   drop_table {"table": "customers"}                              HOLD   irreversible_broad_prod
+   ping {"host": "example.com"}                                   HOLD   irreversible_broad_prod  <- CONTROL: harmless, held anyway
+   get_weather {"city": "Bucharest"}                              HOLD   irreversible_broad_prod  <- CONTROL: harmless, held anyway
+
+   Read the two blocks separately. In the first, the verdict changes
+   with the command while the tool, the host and the session stay the
+   same -- SELECT is allowed and DROP TABLE is held. In the second,
+   the verdict is the same for a destructive call and for `ping`.
+
+
+[1;36m========== CONTROL  the same three envelopes against api-dev.reeflex.io[0m
+   So no verdict above is an artefact of the container this walk started.
+
+   envelope                               this walk's core                   api-dev (shared)
+   ------------------------------------------------------------------------------------------------------------
+   irreversible / broad / production      require_approval irreversible_broad_prod require_approval irreversible_broad_prod
+   irreversible / systemic / production   deny irreversible_systemic_prod    deny irreversible_systemic_prod
+   axes.reversibility OMITTED (R0)        require_approval unclassified_action require_approval unclassified_action
+
+   Identical on every row. No verdict in this demo is an artefact
+   of the container the walk started.
+
+   Not run on api-dev, and why: it has REEFLEX_REQUIRE_VERIFIED_APPROVER
+   =true with no REEFLEX_RESOLVER_TOKENS, so no hold there can be
+   resolved by anybody. Steps 4 and 5 need a core whose operator has
+   bound a credential to a named human.
+
+
+[1;36m========== done. transcript: /root/reeflex-wt/reeflex-claude-dev-3/demo/gateway-hold/evidence/transcript.txt[0m
+   screenshots: /root/reeflex-wt/reeflex-claude-dev-3/demo/gateway-hold/evidence/shots/
+   run dir (ledger, core audit, logs): /tmp/reeflex-gateway-hold-run

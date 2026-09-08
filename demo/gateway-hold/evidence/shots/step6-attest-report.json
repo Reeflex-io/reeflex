@@ -1,0 +1,743 @@
+{
+  "controls": [
+    {
+      "article": "Art.12",
+      "attestation_basis": {
+        "checked_at_ingest_only": [
+          "evidence.signature"
+        ],
+        "gate_declared_admitted_one_way": [],
+        "malformed": 0,
+        "records": 4,
+        "reeflex_corroborated": [
+          "evidence.received_ts",
+          "evidence.gate_id",
+          "evidence (append-only: the runtime role holds INSERT/SELECT and no UPDATE or DELETE)"
+        ],
+        "tenant_attested": [
+          "evidence.envelope_hash",
+          "evidence.sig_alg",
+          "evidence.signature",
+          "evidence.rule",
+          "evidence.decision_id",
+          "evidence.occurred_ts",
+          "evidence.verdict",
+          "evidence.verb",
+          "evidence.target_system",
+          "evidence.target_environment",
+          "evidence.decided_by_type",
+          "evidence.decided_by_id",
+          "evidence.hold_id",
+          "evidence.parent_decision_id",
+          "evidence.resolution",
+          "evidence.agent_id",
+          "evidence.magnitude_count"
+        ]
+      },
+      "chain_population": "all evidence records in the period",
+      "count_population": "all evidence records in the period",
+      "coverage": "Evidences",
+      "evidence_chain": [
+        {
+          "agent_id": "agent:litellm-gateway/acme-payments/mock-tools",
+          "decided_by_id": null,
+          "decided_by_type": null,
+          "decision_id": "0d91be93474240618ee8a31a22a8af7c",
+          "envelope_hash": "250f44a723784ad66154b019a246772ba6c9414188611803592de927c69669d9",
+          "gate_id": "60717aa5-49d4-4014-8817-9e5cf862c940",
+          "hold_id": "f4edbaa9938549a6896907e8bd3105fe",
+          "magnitude_count": 1,
+          "occurred_ts": "2026-09-08T08:52:02+00:00",
+          "parent_decision_id": null,
+          "received_ts": "2026-09-08T08:52:02.746887+00:00",
+          "resolution": null,
+          "rule": "reeflex.policy/irreversible_broad_prod",
+          "sig_alg": "hmac-sha256",
+          "signature": "7a7ce47b2c1adba511705856bb67268bc1aef676ec02e098e93878f065d7e498",
+          "target_environment": "production",
+          "target_system": "litellm-gateway",
+          "verb": "delete",
+          "verdict": "require_approval"
+        },
+        {
+          "agent_id": "agent:litellm-gateway/acme-payments/mock-tools",
+          "decided_by_id": "alice.approver@acme.example",
+          "decided_by_type": "human",
+          "decision_id": "3465d2881f314e1db15739aa46358709",
+          "envelope_hash": "250f44a723784ad66154b019a246772ba6c9414188611803592de927c69669d9",
+          "gate_id": "60717aa5-49d4-4014-8817-9e5cf862c940",
+          "hold_id": "364237644c6a4dcd8b5c17c742e75810",
+          "magnitude_count": 1,
+          "occurred_ts": "2026-09-08T08:52:17+00:00",
+          "parent_decision_id": "4be0bffddae843288136096b78e73e1d",
+          "received_ts": "2026-09-08T08:52:17.625819+00:00",
+          "resolution": "approved",
+          "rule": "reeflex.policy/approved_resubmission",
+          "sig_alg": "hmac-sha256",
+          "signature": "cff3dbbf779cc11001a19876d471feed1b2cd97bb0e18e607a30da5a4b17b0bb",
+          "target_environment": "production",
+          "target_system": "litellm-gateway",
+          "verb": "delete",
+          "verdict": "allow"
+        },
+        {
+          "agent_id": "agent:litellm-gateway/acme-payments/mock-tools",
+          "decided_by_id": null,
+          "decided_by_type": null,
+          "decision_id": "eb802d2a313f4ec6ad16078bf41c8a36",
+          "envelope_hash": "250f44a723784ad66154b019a246772ba6c9414188611803592de927c69669d9",
+          "gate_id": "60717aa5-49d4-4014-8817-9e5cf862c940",
+          "hold_id": "b4085381030c41a5a9c9c7a1b7662f9f",
+          "magnitude_count": 1,
+          "occurred_ts": "2026-09-08T08:52:22+00:00",
+          "parent_decision_id": null,
+          "received_ts": "2026-09-08T08:52:22.327364+00:00",
+          "resolution": null,
+          "rule": "reeflex.policy/irreversible_broad_prod",
+          "sig_alg": "hmac-sha256",
+          "signature": "714a237f6dcaf6a019d8ab456616023dc7b30beca1fc9df388b8885240fb2b5b",
+          "target_environment": "production",
+          "target_system": "litellm-gateway",
+          "verb": "delete",
+          "verdict": "require_approval"
+        },
+        {
+          "agent_id": "agent:litellm-gateway/acme-payments/mock-tools",
+          "decided_by_id": null,
+          "decided_by_type": null,
+          "decision_id": "8a0d87f54a4746a8871adea08ab0b8fb",
+          "envelope_hash": "250f44a723784ad66154b019a246772ba6c9414188611803592de927c69669d9",
+          "gate_id": "60717aa5-49d4-4014-8817-9e5cf862c940",
+          "hold_id": "991c442a347546eda30b1621f5808bb6",
+          "magnitude_count": 1,
+          "occurred_ts": "2026-09-08T08:52:24+00:00",
+          "parent_decision_id": null,
+          "received_ts": "2026-09-08T08:52:24.732317+00:00",
+          "resolution": null,
+          "rule": "reeflex.policy/irreversible_broad_prod",
+          "sig_alg": "hmac-sha256",
+          "signature": "d7c20924c46e6f7046c131d674664cb47bf4931b11bee8526c118c151c5d10d4",
+          "target_environment": "production",
+          "target_system": "litellm-gateway",
+          "verb": "delete",
+          "verdict": "require_approval"
+        }
+      ],
+      "evidence_count": 4,
+      "framework": "EU AI Act",
+      "gaps": [],
+      "metrics": {
+        "anchor_shared_across_actors": 4,
+        "anchors_wellformed": 4,
+        "distinct_anchors": 1,
+        "distinct_rules": 2,
+        "malformed": 0,
+        "records": 4,
+        "timeline": {
+          "declared_after_arrival": 0,
+          "max_lag_seconds": 0,
+          "max_lead_seconds": 0,
+          "timed": 4,
+          "untimed": 0
+        },
+        "unknown_sig_alg": 0
+      },
+      "scope_note": "Evidences the automatic, append-only log of agent-action decisions; not the AI system's full internal telemetry. Integrity anchors are checked for WELL-FORMEDNESS, not recomputed and not re-verified: `signature`/`sig_alg` is one HMAC over the whole DELIVERY a record arrived in, checked at ingest against a key this organisation also holds and not re-verifiable afterwards by anyone, and `envelope_hash` is computed inside reeflex-core over an envelope Reeflex never receives, so no party \u2014 including Reeflex \u2014 can recompute it from this report. WHAT REEFLEX ITSELF CAN SAY ABOUT THIS POPULATION, exactly: for every record below, which registered gate delivered it (`gate_id`, resolved server-side from the bearer token) and when this server observed it arriving (`received_ts`, a database default), on a store the runtime role cannot UPDATE or DELETE. That is the whole of it. Reeflex did not witness the decisions these records describe, cannot check that the `rule` named is a rule that exists, and cannot detect a decision a gate never sent \u2014 so the counts below are counts of an account that any holder of a gate token can add to, not a census of what happened.",
+      "title": "Record-keeping (logging)"
+    },
+    {
+      "article": "Art.14",
+      "attestation_basis": {
+        "approvals_whose_acting_agent_the_gate_never_declared": 0,
+        "checked_at_ingest_only": [
+          "evidence.signature"
+        ],
+        "contradicted_by_reeflex": 0,
+        "corroborated_by_reeflex": 1,
+        "deadline_never_declared_by_the_gate": 0,
+        "expired_on_the_gate_s_evidence_alone": 0,
+        "gate_declared_admitted_one_way": [
+          "pending_holds.expires_ts -- admitted against the audited party only: it can turn 'never resolved' into 'timed out', never clear a finding",
+          "pending_holds.agent_id -- admitted DISAGREEMENT only: 'the approval was granted for one agent and spent by another' is a finding; the two matching corroborates nothing, since the gate wrote both",
+          "hold_resolution_acks.outcome -- admitted 'refused' only: it can withdraw a success, never establish one. 'applied' is the gate's word for its own compliance and is reported as such, corroborating nothing",
+          "hold_resolution_acks.core_reason -- admitted 'refused' only, as above"
+        ],
+        "held_because_the_gate_could_not_classify_the_action": 0,
+        "human_approvals_spent_by_a_different_agent": 0,
+        "human_decisions_reeflex_holds_outside_production": 0,
+        "human_decisions_reeflex_holds_that_core_refused": 0,
+        "known_to_reeflex_and_absent_from_the_feed": 0,
+        "of_those_a_human_decided": 0,
+        "on_the_audited_party_s_word_alone": 0,
+        "production_holds": 4,
+        "reeflex_corroborated": [
+          "hold_resolutions.decision",
+          "hold_resolutions.decided_by_type",
+          "hold_resolutions.decided_by_id",
+          "hold_resolutions.resolved_ts",
+          "hold_resolutions.reason",
+          "pending_holds.status",
+          "evidence.received_ts",
+          "evidence.gate_id"
+        ],
+        "tenant_attested": [
+          "evidence.hold_id",
+          "evidence.resolution",
+          "evidence.decided_by_type",
+          "evidence.decided_by_id",
+          "evidence.target_environment",
+          "evidence.verdict",
+          "evidence.agent_id",
+          "evidence.decision_id",
+          "evidence.occurred_ts",
+          "evidence.rule",
+          "pending_holds.rule",
+          "evidence.verb",
+          "evidence.target_system",
+          "evidence.envelope_hash",
+          "evidence.sig_alg",
+          "evidence.signature",
+          "evidence.parent_decision_id",
+          "evidence.agent_id",
+          "evidence.magnitude_count"
+        ],
+        "timed_out_per_the_gate_s_own_deadline": 0
+      },
+      "chain_population": "records belonging to a gated decision (the hold and its resolution)",
+      "count_population": "records belonging to a gated decision (the hold and its resolution)",
+      "coverage": "Evidences",
+      "evidence_chain": [
+        {
+          "agent_id": "agent:litellm-gateway/acme-payments/mock-tools",
+          "decided_by_id": null,
+          "decided_by_type": null,
+          "decision_id": "0d91be93474240618ee8a31a22a8af7c",
+          "envelope_hash": "250f44a723784ad66154b019a246772ba6c9414188611803592de927c69669d9",
+          "gate_id": "60717aa5-49d4-4014-8817-9e5cf862c940",
+          "hold_id": "f4edbaa9938549a6896907e8bd3105fe",
+          "magnitude_count": 1,
+          "occurred_ts": "2026-09-08T08:52:02+00:00",
+          "parent_decision_id": null,
+          "received_ts": "2026-09-08T08:52:02.746887+00:00",
+          "resolution": null,
+          "rule": "reeflex.policy/irreversible_broad_prod",
+          "sig_alg": "hmac-sha256",
+          "signature": "7a7ce47b2c1adba511705856bb67268bc1aef676ec02e098e93878f065d7e498",
+          "target_environment": "production",
+          "target_system": "litellm-gateway",
+          "verb": "delete",
+          "verdict": "require_approval"
+        },
+        {
+          "agent_id": "agent:litellm-gateway/acme-payments/mock-tools",
+          "decided_by_id": "alice.approver@acme.example",
+          "decided_by_type": "human",
+          "decision_id": "3465d2881f314e1db15739aa46358709",
+          "envelope_hash": "250f44a723784ad66154b019a246772ba6c9414188611803592de927c69669d9",
+          "gate_id": "60717aa5-49d4-4014-8817-9e5cf862c940",
+          "hold_id": "364237644c6a4dcd8b5c17c742e75810",
+          "magnitude_count": 1,
+          "occurred_ts": "2026-09-08T08:52:17+00:00",
+          "parent_decision_id": "4be0bffddae843288136096b78e73e1d",
+          "received_ts": "2026-09-08T08:52:17.625819+00:00",
+          "resolution": "approved",
+          "rule": "reeflex.policy/approved_resubmission",
+          "sig_alg": "hmac-sha256",
+          "signature": "cff3dbbf779cc11001a19876d471feed1b2cd97bb0e18e607a30da5a4b17b0bb",
+          "target_environment": "production",
+          "target_system": "litellm-gateway",
+          "verb": "delete",
+          "verdict": "allow"
+        },
+        {
+          "agent_id": "agent:litellm-gateway/acme-payments/mock-tools",
+          "decided_by_id": null,
+          "decided_by_type": null,
+          "decision_id": "eb802d2a313f4ec6ad16078bf41c8a36",
+          "envelope_hash": "250f44a723784ad66154b019a246772ba6c9414188611803592de927c69669d9",
+          "gate_id": "60717aa5-49d4-4014-8817-9e5cf862c940",
+          "hold_id": "b4085381030c41a5a9c9c7a1b7662f9f",
+          "magnitude_count": 1,
+          "occurred_ts": "2026-09-08T08:52:22+00:00",
+          "parent_decision_id": null,
+          "received_ts": "2026-09-08T08:52:22.327364+00:00",
+          "resolution": null,
+          "rule": "reeflex.policy/irreversible_broad_prod",
+          "sig_alg": "hmac-sha256",
+          "signature": "714a237f6dcaf6a019d8ab456616023dc7b30beca1fc9df388b8885240fb2b5b",
+          "target_environment": "production",
+          "target_system": "litellm-gateway",
+          "verb": "delete",
+          "verdict": "require_approval"
+        },
+        {
+          "agent_id": "agent:litellm-gateway/acme-payments/mock-tools",
+          "decided_by_id": null,
+          "decided_by_type": null,
+          "decision_id": "8a0d87f54a4746a8871adea08ab0b8fb",
+          "envelope_hash": "250f44a723784ad66154b019a246772ba6c9414188611803592de927c69669d9",
+          "gate_id": "60717aa5-49d4-4014-8817-9e5cf862c940",
+          "hold_id": "991c442a347546eda30b1621f5808bb6",
+          "magnitude_count": 1,
+          "occurred_ts": "2026-09-08T08:52:24+00:00",
+          "parent_decision_id": null,
+          "received_ts": "2026-09-08T08:52:24.732317+00:00",
+          "resolution": null,
+          "rule": "reeflex.policy/irreversible_broad_prod",
+          "sig_alg": "hmac-sha256",
+          "signature": "d7c20924c46e6f7046c131d674664cb47bf4931b11bee8526c118c151c5d10d4",
+          "target_environment": "production",
+          "target_system": "litellm-gateway",
+          "verb": "delete",
+          "verdict": "require_approval"
+        }
+      ],
+      "evidence_count": 4,
+      "framework": "EU AI Act",
+      "gaps": [
+        {
+          "code": "ART14_UNRESOLVED_PROD_HOLD",
+          "evidence_ref": "0d91be93474240618ee8a31a22a8af7c",
+          "message": "Production hold raised but never resolved \u2014 oversight interposed, not exercised.",
+          "severity": "medium"
+        },
+        {
+          "code": "ART14_APPROVER_CONTRADICTED",
+          "evidence_ref": "3465d2881f314e1db15739aa46358709",
+          "message": "Both sources agree this production hold was approved, but not on WHO decided it: the gate's evidence names human:alice.approver@acme.example, Reeflex's own record names human:eee6c19a-a783-4fc1-9205-400a1475f5a4. The Art.14 allocation of oversight is to the principal Reeflex recorded.",
+          "severity": "medium"
+        },
+        {
+          "code": "ART14_UNRESOLVED_PROD_HOLD",
+          "evidence_ref": "eb802d2a313f4ec6ad16078bf41c8a36",
+          "message": "Production hold raised but never resolved \u2014 oversight interposed, not exercised.",
+          "severity": "medium"
+        },
+        {
+          "code": "ART14_UNRESOLVED_PROD_HOLD",
+          "evidence_ref": "8a0d87f54a4746a8871adea08ab0b8fb",
+          "message": "Production hold raised but never resolved \u2014 oversight interposed, not exercised.",
+          "severity": "medium"
+        }
+      ],
+      "metrics": {
+        "approvals_whose_actor_was_never_declared": 0,
+        "contradicted": 0,
+        "contradicted_outside_production": 0,
+        "corroborated_outside_production": 0,
+        "denies": 0,
+        "expired_but_reported_resolved": 0,
+        "expired_per_the_gate_s_evidence_alone": 0,
+        "held_because_unclassifiable": 0,
+        "held_because_unclassifiable_outside_production": 0,
+        "hold_records": 4,
+        "holds": 4,
+        "human_resolved": 1,
+        "human_resolved_corroborated": 1,
+        "not_in_the_evidence_feed": 0,
+        "not_in_the_evidence_feed_timed_out": 0,
+        "not_in_the_portal": 0,
+        "refused_by_core": 0,
+        "refused_by_core_outside_production": 0,
+        "same_agent_spelled_differently": 0,
+        "spent_by_a_different_agent": 0,
+        "spent_by_a_different_agent_outside_production": 0,
+        "timed_out": 0,
+        "unclassified_resolved_by_a_human": 0,
+        "uncorroborated": 0,
+        "without_a_declared_deadline": 0
+      },
+      "scope_note": "Evidences that human oversight was interposed (require_approval / deny), where resolved who exercised it, and \u2014 where Reeflex holds it \u2014 the justification they wrote down at the time, verbatim: a refusal cannot be recorded in the holds inbox without one, and it is the closest thing in this artifact to the reasoning behind the decision. For every production hold the resolution is reconciled against `hold_resolutions` \u2014 Reeflex's own append-only record of what a human decided in the holds inbox, which no gate token can write. Where the two disagree the report states both and reports ours; where Reeflex holds no record of its own, the resolution is reported as resting on the audited party's word. A hold NOBODY answered is reported as timed out, against the deadline the gate itself declared for it \u2014 never against a TTL guessed here, and a hold pushed without a deadline is reported as one whose timeout status Reeflex cannot state. EVERY HOLD REEFLEX HOLDS ITS OWN RECORD FOR IS RECONCILED AND SHOWN, whatever environment it names: the production/non-production split is the gate's own declaration, so using it to decide what to reconcile let a `target_environment` of the gate's choosing delete a human decision this app had recorded itself. Findings about the governance of a PRODUCTION action stay scoped to production; a disagreement between two Reeflex-visible sources is reported wherever it occurs. Where Reeflex recorded a human decision and the gate then reported that core REFUSED to apply it, that refusal is reported too \u2014 oversight exercised and not effective is Art.14 evidence, not an absence of it. A hold the gate raised because it COULD NOT CLASSIFY the action (reeflex-core's `unclassified_action` rule) is reported as its own population and excluded from the corroborated-oversight counts: a human answering it is real oversight, but of a coverage gap rather than of a risk this control identified, and the two must not add up to the same number. AND AN APPROVAL BINDS AN AGENT, NOT ONLY AN ACTION: the agent a hold was raised for \u2014 the one the holds inbox showed the human on the card they clicked \u2014 is compared against the agent whose record consumed the approval, and a difference is reported as oversight that cannot be evidenced for the principal that actually acted. The two are compared the way reeflex-core compares an identity \u2014 case- and Unicode-folded \u2014 so that a re-spelling of one agent is not reported as two, and the number of approvals where the fold absorbed a difference is stated. Where the feed declares no agent on either side the comparison is impossible rather than clean, and the count of approvals it could not be made for is stated next to it.",
+      "tables": [
+        {
+          "columns": [
+            "hold_id",
+            "env",
+            "actor",
+            "gate evidence",
+            "Reeflex record",
+            "deadline",
+            "applied",
+            "reported"
+          ],
+          "note": "Two independent sources for the same fact. 'Gate evidence' is what the audited party's gate reported over the evidence wire. 'Reeflex record' is this app's own append-only hold_resolutions row, written by a human in the holds inbox and not writable with a gate token. Where they disagree, Reeflex reports its own record and raises a HIGH gap; '\u2014' under Reeflex record means Reeflex has no independent record and the row to its left is the audited party's unverified word. 'Deadline' is the expiry the gate itself declared for the hold; 'timed out' there means it passed with no decision recorded in the holds inbox, and 'not declared' means the gate never sent one, so Reeflex cannot say whether the hold has expired. 'Applied' answers a different question from 'reported': whether the decision LANDED. 'refused' is this app's own record that reeflex-core would not accept a human's decision \u2014 the action is still blocked and the hold is re-raised in the inbox; 'gate says applied' is the gate vouching for its own compliance and corroborates nothing. Rows are not production-only: every hold Reeflex recorded a decision of its own for is listed whatever environment the gate declared for it, because the environment is itself the gate's declaration and must not decide whether our own record gets shown. 'Actor' answers a third question, and one an approval that binds only an action cannot: WHICH AGENT. It names the agent the hold was raised for ('raised for:', what the human was shown) and, where they differ, the agent whose record spent the approval ('spent by:', what ran) \u2014 one per line, so a line break in this column always falls between the two identities and never inside one. A single line means one agent throughout. 'same agent, spelled differently' means the two records name the SAME agent and spell it differently: reeflex-core compares identities case- and Unicode-folded, so it allowed that resubmission on purpose and this is not a substitution \u2014 shown rather than folded away silently, because a control that normalises the evidence it reconciles is one you cannot check. TWO COLUMNS THIS TABLE USED TO HAVE ARE NOW LINES INSIDE OTHER CELLS, because at ten columns every long identity broke mid-character in the PDF. 'classified' was 'yes' on all but the rare row, so the exception now rides under the hold id as 'gate could not classify' and its absence means the gate did classify the action. 'source' named which of the two records Reeflex believes, which the two columns to the left already show for every ordinary row; the two states they cannot show ride under 'reported' instead \u2014 'sources disagree' where the gate and Reeflex reported different outcomes, and 'the gate reported a resolution after the deadline it declared had passed'. THE HOLD ID IS PRINTED WHOLE and wraps onto as many lines as it needs, because it is the join key this table and the one below are matched on. It used to be cut to twelve characters, which identifies a row only when the gate happens to name its holds so that they differ inside the first twelve \u2014 four holds from one gate rendered as the same string.",
+          "rows": [
+            [
+              "f4edbaa9938549a6896907e8bd3105fe",
+              "production",
+              "raised for: agent:litellm-gateway/acme-payments/mock-tools",
+              "\u2014",
+              "\u2014",
+              "2026-09-08T12:52:00+00:00",
+              "\u2014",
+              "unresolved"
+            ],
+            [
+              "364237644c6a4dcd8b5c17c742e75810",
+              "production",
+              "raised for: agent:litellm-gateway/acme-payments/mock-tools",
+              "approved by human:alice.approver@acme.example",
+              "approved by human:eee6c19a-a783-4fc1-9205-400a1475f5a4",
+              "2026-09-08T12:52:04+00:00",
+              "no ack received",
+              "approved by human:eee6c19a-a783-4fc1-9205-400a1475f5a4"
+            ],
+            [
+              "b4085381030c41a5a9c9c7a1b7662f9f",
+              "production",
+              "raised for: agent:litellm-gateway/acme-payments/mock-tools",
+              "\u2014",
+              "\u2014",
+              "2026-09-08T12:52:20+00:00",
+              "\u2014",
+              "unresolved"
+            ],
+            [
+              "991c442a347546eda30b1621f5808bb6",
+              "production",
+              "raised for: agent:litellm-gateway/acme-payments/mock-tools",
+              "\u2014",
+              "\u2014",
+              "2026-09-08T12:52:22+00:00",
+              "\u2014",
+              "unresolved"
+            ]
+          ],
+          "title": "Human-oversight reconciliation (every production hold, plus every other hold Reeflex holds its own record for)"
+        },
+        {
+          "columns": [
+            "hold_id",
+            "decided",
+            "by",
+            "at",
+            "written reason"
+          ],
+          "note": "The justification each named human recorded in the Reeflex holds inbox at the moment they decided, verbatim. This is the SAME `hold_resolutions` row the reconciliation above reports \u2014 written behind a human sign-in, on a table no gate token can write or amend \u2014 so it is Reeflex's own record and not the audited party's account of it. A reason is REQUIRED on a refusal (the inbox refuses a `deny` without one) and OPTIONAL on an approval, so 'none recorded' in this column means an approval was made without a stated justification and never that one was removed. Holds that simply timed out are not listed: nobody decided them, and they are reported as timeouts above. Match rows to the table above by `hold_id`, which both tables print WHOLE for that reason (RFX-240 \u2014 it used to be cut to twelve characters in both, so the one column an auditor was told to join on was the one that did not identify a row).",
+          "rows": [
+            [
+              "364237644c6a4dcd8b5c17c742e75810",
+              "approved",
+              "human:eee6c19a-a783-4fc1-9205-400a1475f5a4",
+              "2026-09-08T08:52:15.496172+00:00",
+              "none recorded"
+            ]
+          ],
+          "title": "What the human wrote when they decided (Reeflex's own record)"
+        }
+      ],
+      "title": "Human oversight"
+    },
+    {
+      "article": "Art.21(2)",
+      "attestation_basis": {
+        "checked_at_ingest_only": [
+          "evidence.signature"
+        ],
+        "escalations_reeflex_never_received": 0,
+        "gate_declared_admitted_one_way": [
+          "pending_holds.hold_id (present / absent) -- admitted ABSENCE only: 'the gate reports an escalation Reeflex never received' is a finding; presence corroborates no escalation"
+        ],
+        "records": 4,
+        "reeflex_corroborated": [
+          "evidence.received_ts",
+          "evidence.gate_id",
+          "evidence (append-only: the runtime role holds INSERT/SELECT and no UPDATE or DELETE)"
+        ],
+        "self_attested_sub_measures": 4,
+        "tenant_attested": [
+          "evidence.verdict",
+          "evidence.rule",
+          "evidence.agent_id",
+          "evidence.target_environment",
+          "evidence.magnitude_count",
+          "evidence.hold_id",
+          "evidence.decision_id",
+          "evidence.occurred_ts",
+          "evidence.verb",
+          "evidence.target_system",
+          "evidence.decided_by_type",
+          "evidence.decided_by_id",
+          "evidence.envelope_hash",
+          "evidence.sig_alg",
+          "evidence.signature",
+          "evidence.parent_decision_id",
+          "evidence.resolution"
+        ]
+      },
+      "chain_population": "records for decisions that were denied or held for a human",
+      "count_population": "all evidence records in the period",
+      "coverage": "Partial",
+      "evidence_chain": [
+        {
+          "agent_id": "agent:litellm-gateway/acme-payments/mock-tools",
+          "decided_by_id": null,
+          "decided_by_type": null,
+          "decision_id": "0d91be93474240618ee8a31a22a8af7c",
+          "envelope_hash": "250f44a723784ad66154b019a246772ba6c9414188611803592de927c69669d9",
+          "gate_id": "60717aa5-49d4-4014-8817-9e5cf862c940",
+          "hold_id": "f4edbaa9938549a6896907e8bd3105fe",
+          "magnitude_count": 1,
+          "occurred_ts": "2026-09-08T08:52:02+00:00",
+          "parent_decision_id": null,
+          "received_ts": "2026-09-08T08:52:02.746887+00:00",
+          "resolution": null,
+          "rule": "reeflex.policy/irreversible_broad_prod",
+          "sig_alg": "hmac-sha256",
+          "signature": "7a7ce47b2c1adba511705856bb67268bc1aef676ec02e098e93878f065d7e498",
+          "target_environment": "production",
+          "target_system": "litellm-gateway",
+          "verb": "delete",
+          "verdict": "require_approval"
+        },
+        {
+          "agent_id": "agent:litellm-gateway/acme-payments/mock-tools",
+          "decided_by_id": null,
+          "decided_by_type": null,
+          "decision_id": "eb802d2a313f4ec6ad16078bf41c8a36",
+          "envelope_hash": "250f44a723784ad66154b019a246772ba6c9414188611803592de927c69669d9",
+          "gate_id": "60717aa5-49d4-4014-8817-9e5cf862c940",
+          "hold_id": "b4085381030c41a5a9c9c7a1b7662f9f",
+          "magnitude_count": 1,
+          "occurred_ts": "2026-09-08T08:52:22+00:00",
+          "parent_decision_id": null,
+          "received_ts": "2026-09-08T08:52:22.327364+00:00",
+          "resolution": null,
+          "rule": "reeflex.policy/irreversible_broad_prod",
+          "sig_alg": "hmac-sha256",
+          "signature": "714a237f6dcaf6a019d8ab456616023dc7b30beca1fc9df388b8885240fb2b5b",
+          "target_environment": "production",
+          "target_system": "litellm-gateway",
+          "verb": "delete",
+          "verdict": "require_approval"
+        },
+        {
+          "agent_id": "agent:litellm-gateway/acme-payments/mock-tools",
+          "decided_by_id": null,
+          "decided_by_type": null,
+          "decision_id": "8a0d87f54a4746a8871adea08ab0b8fb",
+          "envelope_hash": "250f44a723784ad66154b019a246772ba6c9414188611803592de927c69669d9",
+          "gate_id": "60717aa5-49d4-4014-8817-9e5cf862c940",
+          "hold_id": "991c442a347546eda30b1621f5808bb6",
+          "magnitude_count": 1,
+          "occurred_ts": "2026-09-08T08:52:24+00:00",
+          "parent_decision_id": null,
+          "received_ts": "2026-09-08T08:52:24.732317+00:00",
+          "resolution": null,
+          "rule": "reeflex.policy/irreversible_broad_prod",
+          "sig_alg": "hmac-sha256",
+          "signature": "d7c20924c46e6f7046c131d674664cb47bf4931b11bee8526c118c151c5d10d4",
+          "target_environment": "production",
+          "target_system": "litellm-gateway",
+          "verb": "delete",
+          "verdict": "require_approval"
+        }
+      ],
+      "evidence_count": 4,
+      "framework": "NIS2",
+      "gaps": [],
+      "metrics": {
+        "by_agent": {
+          "agent:litellm-gateway/acme-payments/mock-tools": 4
+        },
+        "by_rule": {
+          "reeflex.policy/approved_resubmission": 1,
+          "reeflex.policy/irreversible_broad_prod": 3
+        },
+        "by_verdict": {
+          "allow": 1,
+          "require_approval": 3
+        },
+        "escalations_claimed": 3,
+        "escalations_reeflex_never_received": 0,
+        "gated_decision_records": 3,
+        "measures": [
+          {
+            "coverage": "Self-attested (uncorroborated)",
+            "measure": "a",
+            "note": "A codified action-risk policy is REPORTED to be operating: every record carries a `rule` label, and `by_rule` / `distinct_rules` count those labels. The label is free text chosen by the sending gate. Reeflex holds no copy of the policy bundle, no allowlist of valid rule names, and no way to check that the rule named is a rule that fired \u2014 or that it exists. These are counts of declarations, not of policies."
+          },
+          {
+            "coverage": "Self-attested (uncorroborated)",
+            "measure": "b",
+            "note": "Risky actions DETECTED and, for holds, ESCALATED. A `deny` record is the gate's own account of REFUSING an action at the gate \u2014 Reeflex holds no record that the refused action did not then happen, because a gate observes its own verdict and not its caller's obedience, and this wire carries no execution receipt. Read `deny` as 'refused at the gate', never as 'prevented'. The escalation half is the one thing in this control Reeflex can check: a `require_approval` record claims a human was given the decision, and the hold is also pushed to Reeflex's own inbox, so an escalation Reeflex never received is reported (NIS2_ESCALATION_NOT_IN_THE_PORTAL). Arriving there proves nothing \u2014 the gate pushed that too."
+          },
+          {
+            "coverage": "Not evidenced",
+            "measure": "c",
+            "note": "Business continuity / backup / crisis \u2014 out of action-governance scope."
+          },
+          {
+            "coverage": "Not evidenced",
+            "measure": "d",
+            "note": "Supply-chain security \u2014 out of scope."
+          },
+          {
+            "coverage": "Not evidenced",
+            "measure": "e",
+            "note": "Acquisition/development/vulnerability (SDLC) \u2014 out of scope."
+          },
+          {
+            "coverage": "Self-attested (uncorroborated)",
+            "measure": "f",
+            "note": "Effectiveness is measurable OVER THE RECORDS DELIVERED \u2014 allow/deny/hold counts by rule and by agent, over time. The population is the audited party's: Reeflex cannot detect a decision a gate never sent, and any holder of a gate token can add to it. Reeflex does stamp when each record ARRIVED and which registered gate delivered it (see (h) and the Scope section's gate roster), which is what makes a silent gate visible; it is not a census of what happened."
+          },
+          {
+            "coverage": "Not evidenced",
+            "measure": "g",
+            "note": "Cyber hygiene / training \u2014 out of scope."
+          },
+          {
+            "coverage": "Partial",
+            "measure": "h",
+            "note": "Evidence integrity \u2014 records are held on an append-only store (INSERT/SELECT only for the runtime role) and each carries the server's own received_ts alongside the gate-declared occurred_ts. sig_alg/signature is one HMAC over the whole delivery a record arrived in, checked at ingest against a key the audited party also holds, so it authenticates who SENT the records rather than anything in them, and it cannot be re-verified afterwards; envelope_hash is carried and shape-checked but is not recomputable by any party, including Reeflex. Neither anchor is independently verifiable by a third party today; see Art.12 and Verifiability."
+          },
+          {
+            "coverage": "Self-attested (uncorroborated)",
+            "measure": "i",
+            "note": "Action-level access control \u2014 allow/deny per `agent_id` + `rule`, counted in `by_agent`. The agent identity is ASSERTED BY THE GATE inside the record: Reeflex authenticates the gate that delivered it (`gate_id`, resolved from the bearer token) and never the agent named within, so one compromised or misconfigured gate can attribute an action to any agent string it likes."
+          },
+          {
+            "coverage": "Not evidenced",
+            "measure": "j",
+            "note": "MFA / continuous auth \u2014 not the gate's decision stream."
+          }
+        ]
+      },
+      "scope_note": "Partial: evidences action-level measures \u2014 codified policy operating (a), detection/escalation of risky actions (b), measurable effectiveness (f), evidence integrity (h), action access-control (i). Most 21(2) sub-measures are outside action-governance scope and honestly not evidenced. FOUR OF THE FIVE ARE SELF-ATTESTED, and that is the most important sentence in this control. 'Self-attested (uncorroborated)' means every input behind that sub-measure arrived over the evidence wire from the audited party's own gate, and Reeflex holds no record of its own to check it against. The records are real records and the counts are correct counts OF THOSE RECORDS; what Reeflex cannot say is that they describe actions that occurred, or that they are all of them. Anyone holding a gate token can add to this population, and Reeflex cannot tell an added record from an observed one. Only (h) has anything of Reeflex's behind it: the append-only grant on the store and the server-stamped `received_ts`/`gate_id` on every record. The one reconciliation available anywhere in this control is over the ESCALATION half of (b) \u2014 a hold the gate says it escalated is also pushed to Reeflex's own inbox, so a claimed escalation that never arrived there is a finding. Nothing corroborates the STOPPED half: see (b).",
+      "tables": [
+        {
+          "columns": [
+            "21(2)",
+            "coverage",
+            "what the coverage rests on"
+          ],
+          "note": "'Not evidenced' means this sub-measure is outside action-governance scope and Reeflex does not speak to it. 'Partial' means part of it is evidenced AND Reeflex holds some of that evidence itself. 'Self-attested (uncorroborated)' means every input behind that sub-measure arrived over the evidence wire from the audited party's own gate, and Reeflex holds no record of its own to check it against. The records are real records and the counts are correct counts OF THOSE RECORDS; what Reeflex cannot say is that they describe actions that occurred, or that they are all of them. Anyone holding a gate token can add to this population, and Reeflex cannot tell an added record from an observed one.",
+          "rows": [
+            [
+              "a",
+              "Self-attested (uncorroborated)",
+              "A codified action-risk policy is REPORTED to be operating: every record carries a `rule` label, and `by_rule` / `distinct_rules` count those labels. The label is free text chosen by the sending gate. Reeflex holds no copy of the policy bundle, no allowlist of valid rule names, and no way to check that the rule named is a rule that fired \u2014 or that it exists. These are counts of declarations, not of policies."
+            ],
+            [
+              "b",
+              "Self-attested (uncorroborated)",
+              "Risky actions DETECTED and, for holds, ESCALATED. A `deny` record is the gate's own account of REFUSING an action at the gate \u2014 Reeflex holds no record that the refused action did not then happen, because a gate observes its own verdict and not its caller's obedience, and this wire carries no execution receipt. Read `deny` as 'refused at the gate', never as 'prevented'. The escalation half is the one thing in this control Reeflex can check: a `require_approval` record claims a human was given the decision, and the hold is also pushed to Reeflex's own inbox, so an escalation Reeflex never received is reported (NIS2_ESCALATION_NOT_IN_THE_PORTAL). Arriving there proves nothing \u2014 the gate pushed that too."
+            ],
+            [
+              "c",
+              "Not evidenced",
+              "Business continuity / backup / crisis \u2014 out of action-governance scope."
+            ],
+            [
+              "d",
+              "Not evidenced",
+              "Supply-chain security \u2014 out of scope."
+            ],
+            [
+              "e",
+              "Not evidenced",
+              "Acquisition/development/vulnerability (SDLC) \u2014 out of scope."
+            ],
+            [
+              "f",
+              "Self-attested (uncorroborated)",
+              "Effectiveness is measurable OVER THE RECORDS DELIVERED \u2014 allow/deny/hold counts by rule and by agent, over time. The population is the audited party's: Reeflex cannot detect a decision a gate never sent, and any holder of a gate token can add to it. Reeflex does stamp when each record ARRIVED and which registered gate delivered it (see (h) and the Scope section's gate roster), which is what makes a silent gate visible; it is not a census of what happened."
+            ],
+            [
+              "g",
+              "Not evidenced",
+              "Cyber hygiene / training \u2014 out of scope."
+            ],
+            [
+              "h",
+              "Partial",
+              "Evidence integrity \u2014 records are held on an append-only store (INSERT/SELECT only for the runtime role) and each carries the server's own received_ts alongside the gate-declared occurred_ts. sig_alg/signature is one HMAC over the whole delivery a record arrived in, checked at ingest against a key the audited party also holds, so it authenticates who SENT the records rather than anything in them, and it cannot be re-verified afterwards; envelope_hash is carried and shape-checked but is not recomputable by any party, including Reeflex. Neither anchor is independently verifiable by a third party today; see Art.12 and Verifiability."
+            ],
+            [
+              "i",
+              "Self-attested (uncorroborated)",
+              "Action-level access control \u2014 allow/deny per `agent_id` + `rule`, counted in `by_agent`. The agent identity is ASSERTED BY THE GATE inside the record: Reeflex authenticates the gate that delivered it (`gate_id`, resolved from the bearer token) and never the agent named within, so one compromised or misconfigured gate can attribute an action to any agent string it likes."
+            ],
+            [
+              "j",
+              "Not evidenced",
+              "MFA / continuous auth \u2014 not the gate's decision stream."
+            ]
+          ],
+          "title": "NIS2 21(2) sub-measures \u2014 coverage, and what each rests on"
+        }
+      ],
+      "title": "Cybersecurity risk-management measures"
+    }
+  ],
+  "disclaimer": "Reeflex attests; the auditor certifies. This report is EVIDENCE that governance controls over agent actions were operating during the period \u2014 it is NOT a determination of compliance with any regulation, and NOT legal advice. Each mapped control shows the decision records this organisation's own gates delivered, plus detected gaps. Read four things exactly as written: the store is append-only, and Reeflex enforces that at the database-grant level; every record carries BOTH the time the gate declared it happened (occurred_ts) and the time this server observed it arriving (received_ts) \u2014 only the second is ours; the records are not individually signed, and Verifiability states what the two anchors on each record do and do not establish; and Reeflex reports what it received and cannot see most of what a gate never sent \u2014 read the Scope and completeness section before reading this as a full account of the period.",
+  "engine_version": "attest-mvp-0.4.0",
+  "gap_summary": [
+    {
+      "article": "Art.14",
+      "code": "ART14_UNRESOLVED_PROD_HOLD",
+      "evidence_ref": "0d91be93474240618ee8a31a22a8af7c",
+      "framework": "EU AI Act",
+      "message": "Production hold raised but never resolved \u2014 oversight interposed, not exercised.",
+      "severity": "medium"
+    },
+    {
+      "article": "Art.14",
+      "code": "ART14_APPROVER_CONTRADICTED",
+      "evidence_ref": "3465d2881f314e1db15739aa46358709",
+      "framework": "EU AI Act",
+      "message": "Both sources agree this production hold was approved, but not on WHO decided it: the gate's evidence names human:alice.approver@acme.example, Reeflex's own record names human:eee6c19a-a783-4fc1-9205-400a1475f5a4. The Art.14 allocation of oversight is to the principal Reeflex recorded.",
+      "severity": "medium"
+    },
+    {
+      "article": "Art.14",
+      "code": "ART14_UNRESOLVED_PROD_HOLD",
+      "evidence_ref": "eb802d2a313f4ec6ad16078bf41c8a36",
+      "framework": "EU AI Act",
+      "message": "Production hold raised but never resolved \u2014 oversight interposed, not exercised.",
+      "severity": "medium"
+    },
+    {
+      "article": "Art.14",
+      "code": "ART14_UNRESOLVED_PROD_HOLD",
+      "evidence_ref": "8a0d87f54a4746a8871adea08ab0b8fb",
+      "framework": "EU AI Act",
+      "message": "Production hold raised but never resolved \u2014 oversight interposed, not exercised.",
+      "severity": "medium"
+    }
+  ],
+  "generated_ts": "2026-09-08T08:52:26.930876+00:00",
+  "org_id": "101bd1a3-9949-4522-af6c-f1eca0506c1f",
+  "period": {
+    "from": "2026-09-07T00:00:00+00:00",
+    "to": "2026-09-09T23:59:59+00:00"
+  },
+  "report_hash": "sha256:2e7ba3cc3365ab9eb907b04f95a41edc4c7b6d4d607a7711238b35b69a04e919",
+  "scope": {
+    "basis": "This report covers the decision records this organisation's gates DECLARED as occurring during the period \u2014 the selection is made on `occurred_ts`, which the gate writes, because an auditor's question is what the agents did and not when Reeflex's inbox saw it. That choice has a cost and the scope block below states it in numbers: a record the server received inside this window but stamped outside it is not in the table, and the count of those is printed next to the count of those that are. There is no source-side total to reconcile against and no sequence number on the wire record, so Reeflex cannot measure how much of what occurred was sent: this report is complete with respect to what was received AND declared to fall in the period, not with respect to what occurred. There is ONE exception, and it is narrow \u2014 where a human decided a hold in the Reeflex holds inbox, or a hold timed out there, Reeflex holds its own record and does report a hold whose evidence never arrived (see the Art.14 findings). Everything else a gate did not send is invisible here, including any allow or deny, and any hold that never reached the inbox. The gate roster below is the strongest completeness signal the data supports \u2014 it names every gate registered to this organisation and what each delivered \u2014 and it is a basis for asking the operator questions, not a measurement of coverage.",
+    "findings": [],
+    "first_received_ts": "2026-09-08T08:52:02.746887+00:00",
+    "gates": [
+      {
+        "environment": "production",
+        "first_received_ts": "2026-09-08T08:52:02.746887+00:00",
+        "gate_id": "60717aa5-49d4-4014-8817-9e5cf862c940",
+        "in_service_during_period": true,
+        "last_received_ts": "2026-09-08T08:52:24.732317+00:00",
+        "last_seen_ts": "2026-09-08T08:52:24.738364+00:00",
+        "name": "litellm-gateway-demo",
+        "records_in_period": 4,
+        "registered_ts": "2026-09-08T08:46:44.213940+00:00",
+        "revoked_ts": null,
+        "status": "active"
+      }
+    ],
+    "gates_registered": 1,
+    "gates_reporting": 1,
+    "last_received_ts": "2026-09-08T08:52:24.732317+00:00",
+    "records_excluded_by_declared_time": 0,
+    "records_received": 4,
+    "records_received_in_period": 4
+  }
+}

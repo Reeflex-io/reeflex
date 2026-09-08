@@ -190,6 +190,24 @@ def build(*, data: dict, response: Any,
         "model": model,
         "model_requested": requested,
         "model_served": served,
+        # LiteLLM's own id for the deployment that served the request.
+        #
+        # WORTH KNOWING BEFORE YOU SHIP THIS FIELD ANYWHERE: for a deployment
+        # declared in a config with no explicit id, litellm derives it as a
+        # DIGEST WHOSE PREIMAGE INCLUDES THE DEPLOYMENT'S `api_key`. Measured
+        # 2026-09-08 on 1.100.0: two Routers differing only in `api_key`
+        # produce two different `model_info.id`s.
+        #
+        # It is therefore not a secret -- a sha256 preimage is not recoverable
+        # from it, and no rule about credential VALUES is broken by recording
+        # it -- but two consequences follow and both are better stated than
+        # discovered. (1) The id CHANGES WHEN THE KEY ROTATES, so it is a
+        # deployment identifier only for as long as the credential lives; do
+        # not join on it across a rotation. (2) It is a confirmation oracle
+        # for a guessed key. Against a provider key with real entropy that is
+        # not a practical attack; against a short or structured one it is a
+        # reason to give the deployment an explicit `model_info.id` in the
+        # proxy config, which litellm then uses verbatim.
         "deployment_id": _s(hidden.get("model_id")),
         "provider": _s(hidden.get("custom_llm_provider"))
                     or _s(_get(response, "custom_llm_provider")),

@@ -1,0 +1,50 @@
+# The gateway that DOES wait for a human.
+#
+#   reeflex_hold_wait: 180  -- withhold the response for up to three minutes
+#                              while a human decides.
+#
+# This is the arm that RELEASES a call after an approval. The seat polls the
+# hold; when a human approves it, `enforce.py` resubmits the ORIGINAL envelope
+# with the approval attached and releases the tool call ONLY IF CORE ANSWERS
+# ALLOW -- core's eight resubmission checks are the authority, not the hold
+# status. One of them (check 8, RFX-138) exists because a hold id by itself was
+# once enough to spend somebody else's approval.
+#
+# The other arm (`litellm-impatient.yaml`, wait 2s) is the same seat with a
+# window no human can answer inside; it produces the readable HOLD refusal.
+# The wait is the only difference between the two files, and it is the
+# operator's choice, not a property of the seat.
+#
+# LIMIT worth reading before you copy this: the release happens INSIDE ONE
+# REQUEST. There is no way for a caller to hand an already-approved hold id
+# back to the gateway, and core raises a NEW hold on every require_approval
+# decision -- so an approval that arrives after this window has closed cannot
+# be spent by a retry. run.sh measures exactly that (step 5b).
+model_list:
+  - model_name: mock-tools
+    litellm_params:
+      model: openai/mock-tools
+      api_base: http://127.0.0.1:18702/v1
+      api_key: sk-mock-not-a-real-key
+
+guardrails:
+  - guardrail_name: "reeflex-action-gate"
+    litellm_params:
+      guardrail: reeflex_litellm.guardrail.ReeflexActionGuardrail
+      mode: post_call
+      default_on: true
+      reeflex_hold_wait: 180
+      reeflex_session_header: x-reeflex-session
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+
+general_settings:
+  # A master key, deliberately. The tenancy map binds this gateway's caller by
+  # `key_hash`, and litellm replaces the master key's value with the constant
+  # alias `litellm_proxy_master_key` before the hook sees it -- so the binding
+  # matches a literal, and no key material is in any config file the demo
+  # ships. run.sh generates the value fresh on every run.
+  master_key: os.environ/LITELLM_MASTER_KEY
+  disable_spend_logs: true

@@ -169,6 +169,52 @@ def get_hold(hold_id: str) -> tuple:
     return st, None
 
 
+def hold_decision(hold_id: str) -> tuple:
+    """(decision_dict_or_None, error_or_None) -- WHO decided a hold, and how.
+
+    `{"resolution": "approved"|"rejected"|..., "decided_by": {"type","id"},
+      "verified": bool}` built from core's hold record.
+
+    WHY THIS EXISTS SEPARATELY FROM `get_hold()`
+    ============================================
+    `get_hold()` answers "may this be released", which needs only the status.
+    This answers "who released it", which is the EU AI Act Article 14 fact and
+    the one EVIDENCE-INGEST-SPEC-v1 §4 reserves `hold.resolution` and
+    `hold.decided_by.{type,id}` for.
+
+    Before this existed, the adapter pushed `hold: {hold_id}` and nothing else,
+    so a human could approve a gateway hold in the inbox and the Attest report
+    over the same period still read `of_those_a_human_decided: 0` -- measured on
+    the live app, 2026-09-08, with two real UI approvals in the period. The
+    resolution was in the app's own tables and not in the evidence feed the
+    report is computed from, so the report was right about its inputs and wrong
+    about the world.
+
+    `decided_by` is parsed from core's frozen `"{type}:{id}"` shape.  A record
+    core wrote with `decided_by_verified: false` -- an approver core could not
+    tie to a credential -- is returned WITH `verified: False` rather than
+    dropped: the caller decides what to do with an unverified attestation, and
+    silently discarding it would hide a real (weak) human decision.
+    """
+    status, body, err = _get("/v1/holds/%s" % hold_id)
+    if err is not None:
+        return None, err
+    if not isinstance(body, dict):
+        return None, "hold response not an object"
+    raw = body.get("decided_by")
+    if not isinstance(raw, str) or ":" not in raw:
+        return None, "hold record carries no decided_by"
+    ptype, _, pid = raw.partition(":")
+    ptype, pid = ptype.strip(), pid.strip()
+    if not ptype or not pid:
+        return None, "decided_by %r is not '<type>:<id>'" % raw[:60]
+    return {
+        "resolution": body.get("status"),
+        "decided_by": {"type": ptype, "id": pid},
+        "verified": bool(body.get("decided_by_verified")),
+    }, None
+
+
 def await_hold(hold_id: str, wait_seconds: Optional[float] = None,
                poll_seconds: Optional[float] = None) -> tuple:
     """Block until the hold leaves `pending`.  (final_status, error).
