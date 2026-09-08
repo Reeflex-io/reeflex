@@ -61,10 +61,20 @@ PKG_DIR = os.path.dirname(os.path.abspath(guardrail_mod.__file__))
 # The fragment as an operator receives it, rendered with the same substitution
 # `write_litellm_config` performs -- reading the template raw would skip the
 # formatting, which is where a stray `%` becomes a crash on a real run.
+GATE_ID = "11111111-1111-4111-8111-111111111111"
+
 FRAGMENT = connect_mod._LITELLM_FRAGMENT % {
     "core_url": "https://core.test",
     "environment": "staging",
     "gate_name": "acme-prod",
+    # RFX-224's second precondition added `%(gate_id)s` to the template, and
+    # this dict is why that mattered: a placeholder with no key here is a
+    # `KeyError` AT COLLECTION, so the whole file errors out rather than
+    # failing one case. It is the seam this suite exists for -- `reeflex-claude`
+    # is a different distribution, its own suite never collects this file and
+    # stayed green, and only `gate.py`'s `reeflex-litellm/tests` component sees
+    # it. Found exactly that way.
+    "gate_id": GATE_ID,
 }
 
 # The YAML litellm would actually load, with the comment lines removed. The
@@ -182,3 +192,49 @@ def test_the_install_line_names_this_distribution_and_the_proxy_extra():
 def test_no_credential_reaches_the_fragment():
     assert "rfx_" not in FRAGMENT
     assert "REEFLEX_CORE_TOKEN:" not in FRAGMENT
+
+
+def test_the_fragment_does_not_set_a_gate_id_this_package_would_ignore():
+    """RFX-224's second precondition, from this side of the seam -- and the
+    first draft of it set `REEFLEX_GATE_ID:` in this fragment.
+
+    THE TEST ABOVE CAUGHT IT: nothing in `reeflex_litellm` reads that name, so
+    setting it would have been the `REEFLEX_ENVIRONMENT` defect this file was
+    written for, repeated by the author of the code that had it. The
+    gate-scoped credential path lives in `reeflex-claude`'s adapter (Claude
+    Code and OpenCode share it); this package has its own `enforce.py` which
+    sends no `X-Reeflex-Gate` and reads no credential store, so a proxy
+    authenticates the way it always has, with the operator's own bearer.
+
+    This test pins the ABSENCE, so the variable cannot come back without the
+    code that reads it -- and the id stays in the fragment as a COMMENT, which
+    is where a value an operator may want to see but no program consumes
+    belongs.
+    """
+
+    assert "REEFLEX_GATE_ID" not in YAML_ONLY
+    assert f"id {GATE_ID}" in FRAGMENT, "the gate id should still be readable as a comment"
+    # And the limit is stated where an operator will hit it, not only in a
+    # commit message.
+    assert "does NOT yet send" in FRAGMENT
+    assert "REEFLEX_CORE_TOKEN" in FRAGMENT
+
+
+def test_the_fragment_names_the_credential_file_by_reference_and_never_a_value(tmp_path, monkeypatch):
+    """The invariant that did NOT change. `connect` now holds a credential; the
+    fragment must still carry none, and must point at the 0600 file rather than
+    copy a secret into a config that is often under version control."""
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    written = connect_mod.write_litellm_config(
+        core_url="https://core.test", environment="staging",
+        gate_name="acme-prod", dry_run=False, gate_id=GATE_ID,
+    )[0]
+    body = written.read_text(encoding="utf-8")
+
+    # No member of the portal's credential family, by prefix, so a future one
+    # is covered without anyone remembering to extend this list.
+    for prefix in ("rfx_ac_", "rfx_reg_", "rfx_gate_", "rfx_ek_"):
+        assert prefix not in body, prefix
+    assert "credentials.json" in body
+    assert "mode 0600" in body

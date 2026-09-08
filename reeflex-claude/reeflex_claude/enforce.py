@@ -35,6 +35,23 @@ Env:
                             "Authorization: Bearer <token>" to the request.  Never
                             logged.  Same env name as the WordPress adapter for
                             cross-adapter consistency.
+  REEFLEX_GATE_ID        -- optional gate id, written into settings.json by
+                            `reeflex-claude connect`.  NOT a secret.  Two jobs:
+                            it is sent as the "X-Reeflex-Gate" header (which an
+                            engine REQUIRES alongside a portal-issued
+                            credential, so that one gate's credential cannot be
+                            replayed as another's), and it selects which stored
+                            credential to use.
+
+WHERE THE BEARER COMES FROM, IN ORDER (RFX-224):
+  1. REEFLEX_CORE_TOKEN from the environment.  An operator running their own
+     engine keeps their own credential, and it wins -- unchanged behaviour.
+  2. failing that, the credential `connect` stored for this (core_url,
+     REEFLEX_GATE_ID) pair -- see credentials.py for why it is a 0600 file
+     outside the project directory and not settings.json.
+  3. failing that, no Authorization header at all, exactly as before: a core
+     with auth switched off needs none, and one with auth on answers 401 and
+     this module fails CLOSED.
 """
 
 from __future__ import annotations
@@ -81,12 +98,28 @@ def call_core_and_map(envelope: dict) -> _Result:
 
     headers = {"Content-Type": "application/json"}
 
-    # Bearer token (REEFLEX_CORE_TOKEN).  When set and non-empty, add the
-    # Authorization header.  The token is used here and is never logged anywhere
-    # in this module -- not in reason strings, audit records, or tracebacks.
-    # Same env name as the WordPress adapter (class-reeflex-config.php) for
-    # cross-adapter consistency.
+    # The gate this agent was connected to.  NOT a secret, and sent whether or
+    # not there is a credential: an engine that accepts a portal-issued
+    # credential REQUIRES this header (and answers 403 gate_not_declared
+    # without it), and an engine that does not care simply ignores it.
+    gate_id = os.environ.get("REEFLEX_GATE_ID", "").strip()
+    if gate_id:
+        headers["X-Reeflex-Gate"] = gate_id
+
+    # Bearer token.  Precedence is documented in the module docstring: the
+    # operator's own REEFLEX_CORE_TOKEN first, then the credential `connect`
+    # stored for this engine and gate.  The token is used here and is never
+    # logged anywhere in this module -- not in reason strings, audit records,
+    # or tracebacks.  Same env name as the WordPress adapter
+    # (class-reeflex-config.php) for cross-adapter consistency.
     token = os.environ.get("REEFLEX_CORE_TOKEN", "").strip()
+    if not token and gate_id:
+        # Imported lazily so that a deployment with no stored credential does
+        # not pay an import on every tool call, and so this module keeps
+        # working if the file is unreadable -- `lookup` never raises.
+        from .credentials import lookup
+
+        token = lookup(core_url=core_url, gate_id=gate_id) or ""
     if token:
         headers["Authorization"] = "Bearer " + token
     # token is not referenced beyond this point in this function.

@@ -39,6 +39,42 @@ Adapters also expose a mode:
 | `REEFLEX_AUTH_TOKEN` | — | If set, all routes except `GET /healthz` require this bearer token. |
 | `REEFLEX_MAX_BODY_BYTES` | `262144` | Max request body (256 KiB). |
 
+### Portal-issued gate credentials (`POST /v1/decide` only)
+
+Unset by default, and unset means none of this runs — a deployment that takes a
+new build sees no change. Setting the URL is the operator saying *"this portal
+may issue credentials for my engine"*, which is a real trust statement.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `REEFLEX_GATE_INTROSPECTION_URL` | — | A Reeflex portal's `/api/v1/agent/introspect`. When set, `POST /v1/decide` also accepts an `rfx_ac_` credential that portal minted, validated by asking it. |
+| `REEFLEX_GATE_INTROSPECTION_CACHE_SECONDS` | `30` | How long a POSITIVE answer is reused. `0` = a call per decision. Negative answers are never cached, so a freshly minted credential works on its first use. **This is the revocation window**: a core that has already seen a credential keeps honouring it for up to this long after the gate is revoked. |
+| `REEFLEX_GATE_INTROSPECTION_TIMEOUT` | `5.0` | Seconds. On timeout the credential is not validated and the request is refused (fail closed). |
+| `REEFLEX_GATE_INTROSPECTION_CA_BUNDLE` | *(system)* | CA bundle for the portal's certificate, for a self-hosted portal behind a private CA. There is no switch to disable verification: this call carries a credential. |
+
+**Where the credential comes from and what it is for.** A customer pastes a
+one-line onboarding command from their portal; the portal mints a credential for
+that one gate during the token exchange and the client stores it at `0600`. The
+line itself never carries it. Full write-up: `reeflex-core/app/gate_credential.py`.
+
+**The three refusals are three different answers**, so a log tells them apart:
+
+| | |
+|---|---|
+| portal says no, or is unreachable | `401 unauthorized` |
+| the declared gate is not the credential's | `403 {"reason": "gate_mismatch"}` |
+| no `X-Reeflex-Gate` header at all | `403 {"reason": "gate_not_declared"}` |
+
+A caller using such a credential MUST declare its gate in `X-Reeflex-Gate`.
+`REEFLEX_AUTH_TOKEN` is tried first and needs no header, so an operator's own
+traffic never makes an introspection call and is unaffected by the portal being
+down. Hold-resolution routes do **not** accept these credentials.
+
+**What it costs, since it is a network call on the decision path.** One outbound
+request per cache miss; a new fail-closed mode (portal unreachable ⇒ that
+caller's decisions are denied) that applies only to portal-credential callers;
+and revocation bounded by the cache TTL above. Measure it in your deployment.
+
 ## Policy engine (OPA)
 
 | Variable | Default | Purpose |

@@ -39,6 +39,20 @@ Auth (optional bearer token):
   If REEFLEX_AUTH_TOKEN is unset/empty, auth is disabled (backward compatible).
   GET /healthz is always unauthenticated.
 
+  PORTAL-ISSUED GATE CREDENTIALS (RFX-224), on POST /v1/decide only, and only
+  when REEFLEX_GATE_INTROSPECTION_URL is set -- unset is the default and means
+  none of it runs:
+    A bearer of the form `rfx_ac_<...>` is validated by asking that portal
+    whether it is still active and which gate it belongs to.  The request must
+    also declare the gate it is acting for in the X-Reeflex-Gate header.
+      accepted                      -> proceeds exactly like the shared token
+      portal says no / unreachable  -> 401 (fail closed)
+      declared gate != credential's -> 403 {"reason": "gate_mismatch"}
+      no X-Reeflex-Gate header      -> 403 {"reason": "gate_not_declared"}
+    Why an outbound call rather than a signature core can verify offline, what
+    it costs in latency and availability, and why revocation is what forced it:
+    app/gate_credential.py, in full.  Holds routes do NOT accept these.
+
 Security hardening (applied to all responses):
   - Server banner suppressed to "reeflex-core".
   - Security headers: X-Content-Type-Options: nosniff, Cache-Control: no-store.
@@ -243,11 +257,77 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
         if hmac.compare_digest(provided, expected):
             return True
         if allow_resolver_tokens:
+            # NOTE: portal-issued gate credentials are NOT accepted here.
+            # /v1/decide reaches them through _authorize_decide() instead,
+            # because a scope violation there is a 403 and this method can
+            # only say yes or no.  Same containment reasoning as the paragraph
+            # above: the submitting role and the approving role stay apart.
             # principal_for_token() is itself a constant-time compare against
             # every configured token (app/principal.py), so this does not
             # become a timing oracle for the resolver map.
             from .principal import principal_for_token  # type: ignore[import]
             return principal_for_token(provided) is not None
+        return False
+
+    def _presented_bearer(self) -> str:
+        """The raw bearer this request presented, or "" if it presented none."""
+
+        header = self.headers.get("Authorization", "")
+        prefix = "Bearer "
+        if not header.startswith(prefix):
+            return ""
+        return header[len(prefix):].strip()
+
+    def _authorize_decide(self) -> bool:
+        """Authorize POST /v1/decide.  Responds itself when refusing; the
+        caller only checks the boolean.
+
+        TWO WAYS IN, IN THIS ORDER, and the order is the compatibility
+        guarantee: the operator's own REEFLEX_AUTH_TOKEN is tried first and
+        behaves exactly as it always has, including when
+        REEFLEX_GATE_INTROSPECTION_URL is unset (in which case _authorized()
+        returning True for an auth-disabled core short-circuits everything
+        below and no deployment sees any change at all).
+
+        The second way is a portal-issued, gate-scoped credential -- see
+        app/gate_credential.py for what it is, what it costs, and the exact
+        sense in which "gate-scoped" is enforceable when the Action Envelope
+        has no gate axis.
+
+        THE THREE REFUSALS ARE THREE DIFFERENT FACTS AND GET THREE DIFFERENT
+        ANSWERS.  401 means "we do not know you".  403 `gate_mismatch` means
+        "we know you, and you are not that gate" -- a credential replayed from
+        one gate onto another.  403 `gate_not_declared` means "we know you, and
+        a scoped credential has to say which scope it is claiming".  Collapsing
+        them into one 401 would leave an operator reading a log unable to tell
+        a stale credential from a misrouted one.
+        """
+
+        if self._authorized():
+            return True
+
+        from .gate_credential import (  # local import: keeps the module optional
+            ACCEPT,
+            GATE_MISMATCH,
+            GATE_NOT_DECLARED,
+            authorize,
+        )
+
+        status, detail = authorize(
+            self._presented_bearer(), self.headers.get("X-Reeflex-Gate")
+        )
+        if status == ACCEPT:
+            return True
+
+        if status in (GATE_MISMATCH, GATE_NOT_DECLARED):
+            self._respond(403, {"error": "forbidden", "reason": status, "detail": detail})
+            return False
+
+        self._respond(
+            401,
+            {"error": "unauthorized"},
+            extra_headers={"WWW-Authenticate": "Bearer"},
+        )
         return False
 
     # ------------------------------------------------------------------
@@ -400,13 +480,8 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_decide(self) -> None:
         # Auth check BEFORE reading the body
-        if not self._authorized():
-            self._respond(
-                401,
-                {"error": "unauthorized"},
-                extra_headers={"WWW-Authenticate": "Bearer"},
-            )
-            return
+        if not self._authorize_decide():
+            return  # _authorize_decide already sent the response
 
         body = self._read_body()
         if body is None:
