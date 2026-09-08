@@ -422,24 +422,31 @@ guardrails:
 environment_variables:
   REEFLEX_CORE_URL: "%(core_url)s"
   REEFLEX_LITELLM_ENVIRONMENT: "%(environment)s"
-  # NOT a secret -- the portal prints it on screen. An engine that accepts a
-  # portal-issued credential requires it, so that one gate's credential cannot
-  # be replayed as another gate's.
-  REEFLEX_GATE_ID: "%(gate_id)s"
   # REQUIRED, and there is deliberately NO default org: each proxy key or team
   # must be mapped to a Reeflex org, or every tool call is refused. Write the
   # map, then validate it OFFLINE -- `reeflex-litellm tenancy` exits non-zero
   # if it would not load, and you want that at deploy time rather than as an
   # outage. An example ships at reeflex-litellm/examples/tenancy-map.example.json.
   REEFLEX_LITELLM_TENANCY_MAP_FILE: "/etc/reeflex/tenancy.json"
-  # This gate is %(gate_name)s. NO CREDENTIAL IS WRITTEN INTO THIS FILE, and
-  # for a proxy that is not merely tidiness. `connect` did store the engine
-  # credential the portal minted -- at ~/.reeflex/credentials.json, mode 0600,
-  # owned by the user who ran `connect`. A LiteLLM proxy usually runs as a
-  # different user (a systemd unit, a container), which cannot read that file
-  # and should not be given a copy of a config that could. So for a proxy:
-  # read the value out of that file yourself and put it in the proxy's own
-  # secret store as REEFLEX_CORE_TOKEN. It is deliberately not printed here.
+  # This gate is %(gate_name)s (id %(gate_id)s, in a comment because nothing in
+  # reeflex-litellm reads it -- see below).
+  #
+  # NO CREDENTIAL IS WRITTEN INTO THIS FILE, and for a proxy that is not merely
+  # tidiness. `connect` did store the engine credential the portal minted -- at
+  # ~/.reeflex/credentials.json, mode 0600, owned by the user who ran `connect`.
+  # A LiteLLM proxy usually runs as a DIFFERENT user (a systemd unit, a
+  # container) which cannot read that file, and handing it a config that could
+  # would be worse. So for a proxy: read the value out of that file yourself and
+  # put it in the proxy's own secret store as REEFLEX_CORE_TOKEN.
+  #
+  # THE LIMIT, STATED WHERE AN OPERATOR WILL HIT IT: the portal-issued,
+  # gate-scoped credential path (RFX-224's second precondition) is implemented
+  # in `reeflex-claude`'s adapter, which Claude Code and OpenCode both use.
+  # reeflex-litellm has its own `enforce.py` and does NOT yet send
+  # `X-Reeflex-Gate` or read the credential store, so a proxy authenticates the
+  # way it always has -- with the engine operator's own bearer in
+  # REEFLEX_CORE_TOKEN. Nothing here regressed; this seat simply does not have
+  # the new option yet.
 """
 
 
