@@ -338,7 +338,14 @@ class TestSessionDerivationStdio(unittest.TestCase):
         sid2, agent2, obo2 = gw._derive_session_and_agent()
         self.assertEqual(sid1, sid2)
         self.assertTrue(sid1.startswith("mcp-gateway:"))
-        self.assertEqual(agent1, "agent:mcp-client")
+        # RFX-138: this used to assert the bare constant "agent:mcp-client",
+        # which is precisely the value that made core's actor binding vacuous
+        # -- every anonymous front client presented the same actor key, so a
+        # human approval granted to one could be spent by another. The
+        # assertion is TIGHTENED rather than relaxed: the kind must still be
+        # readable, and the id must be bound to this process's session.
+        self.assertEqual(agent1, "agent:mcp-client/" + sid1)
+        self.assertEqual(agent1, agent2, "the id must be stable per process")
         self.assertIsNone(obo1)
 
 

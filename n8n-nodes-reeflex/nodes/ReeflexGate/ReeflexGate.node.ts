@@ -331,9 +331,43 @@ export class ReeflexGate implements INodeType {
 				name: 'agentId',
 				type: 'string',
 				required: true,
-				default: 'agent:n8n',
+				// RFX-138: the default used to be the bare constant 'agent:n8n',
+				// identical in every workflow and every execution. Core binds a
+				// human approval to the actor by comparing (agent.id,
+				// agent.on_behalf_of) against the held envelope (SPEC SS5.1
+				// condition 3), so a shared constant makes that comparison vacuous:
+				// two executions produce the same actor key and either can spend an
+				// approval a human granted to the other. Measured against a real
+				// core: with the constant, ALLOWED; with a per-execution id, denied
+				// reeflex_hold_actor_mismatch.
+				// This value is stable for the whole of one execution, so two gate
+				// nodes in the same run -- and a resubmission that stays inside it,
+				// e.g. across a Wait node -- still agree on the actor key.
+				//
+				// NOT the same scope as Session ID, and that is deliberate. Session
+				// ID defaults to `={{$workflow.id}}` (RFX-180..184) because the
+				// CUMULATIVE BUDGETS accumulate per `agent.session_id` and an
+				// execution-scoped session resets them on every run. Approvals are
+				// the opposite problem: they must NOT be shared, so `agent.id` is
+				// execution-scoped. Budgets per workflow, approvals per execution.
+				// An earlier draft of this comment said the two defaults were the
+				// same expression; they were when it was written, and #104 changed
+				// Session ID underneath it. The scopes now differ on purpose.
+				//
+				// WHAT THAT COSTS: a hold raised in execution A can no longer be
+				// resubmitted from execution B, even by the same workflow. That is
+				// the tightening this fix exists for, and it is a real behaviour
+				// change for a loop that resumes in a NEW execution. The documented
+				// approval loop (examples/n8n/demo3) is unaffected twice over: it
+				// resubmits by spreading `reeflex.envelope`, so it replays the
+				// ORIGINAL agent block verbatim, and it pins Agent ID explicitly
+				// rather than taking this default. An operator whose loop does end
+				// its execution should pin Agent ID to something stable across the
+				// resume, and accept that any agent able to set that value can then
+				// spend the approval.
+				default: '=agent:n8n/{{$execution.id}}',
 				// eslint-disable-next-line n8n-nodes-base/node-param-description-miscased-id -- "agent.id" is a literal Action Envelope JSON field name (lowercase by SPEC), not prose.
-				description: 'Identifier of the agent performing the action (Action Envelope agent.id)',
+				description: 'Identifier of the agent performing the action (Action Envelope agent.id). Defaults to a per-execution value: two concurrent runs must not share one identity, or a human approval granted to one can be spent by the other.',
 			},
 			{
 				displayName: 'Additional Fields',
