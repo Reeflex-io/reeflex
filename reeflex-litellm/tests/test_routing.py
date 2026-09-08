@@ -73,9 +73,15 @@ def test_it_names_the_gateway_and_the_adapter():
 
 
 def test_it_records_whether_the_caller_asked_for_a_stream():
-    """RFX-242: `mode: post_call` does not fire for a streamed response, so a
-    streamed tool call is UNGOVERNED by this seat. Recording the flag is what
-    lets an operator find the requests this seat could not rule on."""
+    """Both paths are governed since RFX-242, and they are still two paths.
+
+    The flag was originally recorded because a streamed tool call was
+    UNGOVERNED and an operator needed to find the requests this seat could not
+    rule on. That hole is closed -- `guardrail.async_post_call_streaming_
+    iterator_hook` now rules on them -- but the flag stays and is worth more,
+    not less: the two paths withhold differently (a stream releases prose
+    before the decision) and a record that did not say which one produced it
+    could not be reconciled with what the caller actually saw when."""
     assert build(data={"model": "m", "stream": True})["stream"] is True
     assert build(data={"model": "m"})["stream"] is False
 
