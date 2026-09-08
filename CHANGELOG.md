@@ -47,7 +47,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
   An allowance requires a reason **and** a ticket reference, is printed in full on every run, and an allowance whose target no longer exists is a FAILURE — so it cannot rot into standing permission for a file nobody declares any more.
 
 - **`Docs` now runs on pull requests (build only, never deploy).** The workflow that publishes `docs.reeflex.io` had `push`/`workflow_dispatch` triggers and nothing else, so a docs regression could only be discovered by turning `main` RED — which had already happened once (fixed forward through #128, and recorded as still-open by dev-3 round 039). A PR now builds the docs with `--strict`; the CNAME step, both Pages steps and the whole `deploy` job are gated on the event, so a pull request can never publish. Added in the same change that pins the docs build's dependencies, precisely so that pin is verifiable before it merges rather than after.
-### Added
 
 - **`reeflex-litellm` 0.1.0 — a Reeflex seat inside an LLM gateway (RFX-236, epic RFX-235).**
 
