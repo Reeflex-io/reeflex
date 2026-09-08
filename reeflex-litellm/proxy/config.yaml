@@ -1,0 +1,47 @@
+# LiteLLM proxy config WITH the Reeflex action seat.
+#
+#   python3 proxy/mock_model.py --port 18602 &
+#   litellm --config proxy/config.yaml --port 18600
+#
+# The `guardrail:` value is a dotted import path, which is what routes it
+# through litellm's GuardrailRegistry.initialize_custom_guardrail(); the class
+# is then constructed with guardrail_name / event_hook / default_on plus every
+# other key under litellm_params, so any `reeflex_*` key below arrives as a
+# constructor kwarg.
+#
+# Everything the seat needs from the environment (see the package README):
+#   REEFLEX_CORE_URL          where /v1/decide lives
+#   REEFLEX_CORE_TOKEN        the gateway's bearer for core, if core has one
+#   REEFLEX_LITELLM_HOLD_WAIT how long a response may be withheld awaiting a
+#                             human. Set it here as `reeflex_hold_wait` instead
+#                             if you prefer config to env.
+
+model_list:
+  - model_name: mock-tools
+    litellm_params:
+      model: openai/mock-tools
+      api_base: http://127.0.0.1:18602/v1
+      api_key: sk-mock-not-a-real-key
+
+guardrails:
+  - guardrail_name: "reeflex-action-gate"
+    litellm_params:
+      guardrail: reeflex_litellm.guardrail.ReeflexActionGuardrail
+      mode: post_call
+      default_on: true
+      # Seconds a response may be withheld while a hold waits for a human.
+      # 0 = never wait: refuse immediately and name the hold so the caller can
+      # retry after a decision.
+      reeflex_hold_wait: 30
+      # The request header carrying the session R5's cumulative budget is
+      # charged against. Without it (or an OpenAI `user` field) the budget is
+      # scoped to ONE REQUEST -- see the README on tenancy.
+      reeflex_session_header: x-reeflex-session
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  # No master key on purpose: this config is the measurement rig for the spike,
+  # not a deployment. A real deployment sets one.
+  disable_spend_logs: true
