@@ -1,0 +1,11 @@
+# python packaging + runtime byproducts
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# latency-run output (bench/latency.py --out); the numbers that matter live in
+# README.md and in the round's code-report, not in an untracked json
+latency*.json

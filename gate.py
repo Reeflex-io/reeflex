@@ -99,6 +99,7 @@ SUITE_ROOTS = [
     "reeflex-core/tests",
     "reeflex-claude/policy",
     "reeflex-claude/tests",
+    "reeflex-litellm/tests",
     "reeflex-mcp/tests",
     "reeflex-holds/tests",
     "n8n-nodes-reeflex/test",
@@ -474,14 +475,27 @@ class Gate:
         self.component(key, "PASS" if ok else "FAIL", detail)
 
     def run_pytest_suites(self):
-        keys = [("pytest-mcp", "reeflex-mcp"), ("pytest-holds", "reeflex-holds"),
-                ("pytest-claude", "reeflex-claude")]
+        # (component key, package dir, extra LOCAL packages to install editable)
+        keys = [("pytest-mcp", "reeflex-mcp", []),
+                ("pytest-holds", "reeflex-holds", []),
+                ("pytest-claude", "reeflex-claude", []),
+                # RFX-236: reeflex-litellm depends on reeflex-claude for the ONE
+                # classifier, and `reeflex-claude>=0.1.7` resolves off PyPI to a
+                # wheel uploaded 2026-07-06 -- BEFORE RFX-144/145/146 landed on
+                # 2026-08-22. Measured against the published core v0.2.0, that
+                # wheel prices `echo x && rm -rf /var/lib/pgsql` as
+                # reversible/single and core ALLOWS it. So this suite must be
+                # run against the CHECKOUT, not the index, or it certifies a
+                # classifier the repo does not contain.
+                # tests/test_classifier_vintage.py is the tripwire under this
+                # line: it goes red if the stale wheel ever wins the resolve.
+                ("pytest-litellm", "reeflex-litellm", ["reeflex-claude"])]
         # One venv PER package, not one shared venv (RFX-26): reeflex-mcp pins
         # mcp>=1.2,<2 while reeflex-holds (ported to MCPServer) now requires
         # mcp>=2 -- installing both editable into a single venv is an
         # unsatisfiable pip resolve, not a real conflict in the tree (each
         # package's own dependency contract is internally consistent).
-        for key, pkg in keys:
+        for key, pkg, local_deps in keys:
             venv_path, err = self.make_venv("venv-suite-%s" % pkg)
             if not venv_path:
                 self.component(key, "FAIL", "suite venv creation failed: %s" % err)
@@ -493,8 +507,15 @@ class Gate:
             # same shape as the mcp 2.1.1 breakage, one layer up, and this time
             # in the thing that decides whether the tree is healthy. The range
             # is what was measured green on all three suites (2026-09-08).
-            code, out = self.run_cmd(
-                [py, "-m", "pip", "install", "-q", PYTEST_PIN, "-e", os.path.join(REPO_ROOT, pkg)])
+            #
+            # The local_deps loop is #130's half and it is load-bearing for a
+            # DIFFERENT reason (see pytest-litellm above): either side of this
+            # hunk taken wholesale drops the other's fix, so both are here.
+            install = [py, "-m", "pip", "install", "-q", PYTEST_PIN]
+            for dep in local_deps:
+                install += ["-e", os.path.join(REPO_ROOT, dep)]
+            install += ["-e", os.path.join(REPO_ROOT, pkg)]
+            code, out = self.run_cmd(install)
             if code != 0:
                 self.show(out, full=True)
                 self.component(key, "FAIL", "suite venv install failed")
@@ -896,7 +917,7 @@ class Gate:
             ("rego-core       opa test reeflex-core/policy/", lambda: self.run_rego("rego-core", "reeflex-core/policy")),
             ("rego-claude     opa test reeflex-claude/policy/", lambda: self.run_rego("rego-claude", "reeflex-claude/policy")),
             ("unittest-core   full discovery over reeflex-core/tests", self.run_core_unittest),
-            ("pytest suites   reeflex-mcp + reeflex-holds + reeflex-claude", self.run_pytest_suites),
+            ("pytest suites   reeflex-mcp + reeflex-holds + reeflex-claude + reeflex-litellm", self.run_pytest_suites),
             ("npm-n8n         n8n-nodes-reeflex npm ci + npm test", self.run_n8n),
             ("entrypoints     build wheels from tree + invoke every entry point", self.run_entrypoints),
             ("pypi-smoke      fresh install of the PUBLISHED packages", self.run_pypi_smoke),

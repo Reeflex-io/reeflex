@@ -1,0 +1,21 @@
+# The SAME proxy with the Reeflex seat removed -- the control for the latency
+# table in the README.
+#
+#   litellm --config proxy/config-nohook.yaml --port 18610
+#
+# Identical to config.yaml except for the missing `guardrails:` block. Nothing
+# else may differ, or the measured delta is a difference between two configs
+# rather than the cost of the hook.
+
+model_list:
+  - model_name: mock-tools
+    litellm_params:
+      model: openai/mock-tools
+      api_base: http://127.0.0.1:18602/v1
+      api_key: sk-mock-not-a-real-key
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  disable_spend_logs: true
