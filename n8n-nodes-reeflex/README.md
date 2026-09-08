@@ -102,8 +102,19 @@ Core URL, even though the node's real `/v1/decide` calls do.
 - Requires n8n with community nodes support and Node.js >= 20.15.
 - Requires `reeflex-core` v0.1.5 or later for the credential test (the
   Holds API). `POST /v1/decide` itself works against any reeflex-core v0.1.x.
-- Built and tested against `n8n-workflow` as a peer dependency (no pinned
-  version - see `package.json`).
+- `n8n-workflow` is a peer dependency, declared as **`>=1.83 <3`**. It used to
+  say `*` (the value n8n's own community-node template ships), which claimed
+  compatibility with all 494 published versions of `n8n-workflow` including
+  `0.1.0`. Measured, not assumed: this node imports `NodeConnectionTypes` from
+  `n8n-workflow`, and that export is **absent in 1.82.0 and present from
+  1.83.0 onwards** (checked against the published type declarations for
+  0.157.0, 1.0.0, 1.60.0, 1.82.0, 1.83.0-1.89.0, 1.90.0, 1.100.0, 1.120.29,
+  2.0.0 and 2.16.0). On a host below 1.83 the node cannot load, so an
+  install-time peer refusal is strictly better than a load-time crash; `<3`
+  bounds a major that does not exist yet.
+  **What is TESTED is narrower than what is DECLARED:** CI resolves and runs
+  the suite against `n8n-workflow` 2.16.0 only. 1.83-1.120 is declared
+  compatible on the evidence above, not exercised.
 
 ## Usage
 

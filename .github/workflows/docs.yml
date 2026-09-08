@@ -2,6 +2,21 @@ name: Docs
 
 # Docs-as-code: any push to main that touches docs/, mkdocs.yml, or this
 # workflow rebuilds and deploys docs.reeflex.io. No manual publishing step.
+#
+# THE `pull_request` TRIGGER IS NEW, and it is here for a measured reason.
+# Until now this workflow could only run AFTER a merge, so a docs regression
+# could only ever be discovered by turning `main` RED — which is exactly what
+# happened once already (dev-3 round 039 had to fix-forward through #128, and
+# recorded the missing trigger as still-open). The build's dependencies were
+# also two unbounded floors (`pip install "mkdocs-material[imaging]" ...`), the
+# worst case of the PR #123 class: nothing this side of a merge could have
+# caught an upstream release. They are now pinned in
+# `.github/requirements-docs.txt`, and this trigger is what makes that pin, and
+# every future docs change, verifiable BEFORE it lands.
+#
+# On a pull request the BUILD runs and the DEPLOY does not: the three
+# Pages-touching steps and the whole `deploy` job are gated on the event, so a
+# PR can never publish to docs.reeflex.io.
 on:
   push:
     branches: [main]
@@ -9,19 +24,31 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - ".github/workflows/docs.yml"
+      - ".github/requirements-docs.txt"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/workflows/docs.yml"
+      - ".github/requirements-docs.txt"
   workflow_dispatch:
 
 # Deploy via the GitHub Pages artifact path (actions/deploy-pages) — no
-# gh-pages branch clutter in the repo history.
+# gh-pages branch clutter in the repo history. On a `pull_request` event the
+# token is read-only anyway and no Pages step runs; the write scopes here are
+# for the push-to-main path.
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# One deploy at a time; don't cancel an in-flight publish.
+# One deploy at a time on main, and don't cancel an in-flight publish. PR
+# builds get their own per-ref group so they neither queue behind a publish nor
+# block one, and a superseded PR build is cancelled rather than paid for.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('docs-pr-{0}', github.ref) || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -42,11 +69,17 @@ jobs:
           sudo apt-get install -y libcairo2-dev libfreetype6-dev libffi-dev \
             libjpeg-dev libpng-dev libz-dev pngquant
 
-      - name: Install MkDocs Material + plugins
+      # Bounded floors, in a file `scripts/check_dependency_floors.py` walks.
+      # `--upgrade pip` stays: pip is the resolver, not a dependency of the
+      # docs, and an old pip is a resolve failure rather than a silent
+      # behaviour change.
+      - name: Install MkDocs Material + plugins (pinned)
         run: |
           python -m pip install --upgrade pip
-          pip install "mkdocs-material[imaging]" \
-            mkdocs-git-revision-date-localized-plugin
+          pip install -r .github/requirements-docs.txt
+
+      - name: Show what resolved (so a future red run is diagnosable from the log)
+        run: pip freeze
 
       # CI=true flips the `social` plugin on (enabled: !ENV [CI, false]).
       # --strict fails the build on any broken link or missing reference.
@@ -56,14 +89,19 @@ jobs:
         run: mkdocs build --strict
 
       - name: Add CNAME (custom domain)
+        if: github.event_name != 'pull_request'
         run: echo "docs.reeflex.io" > site/CNAME
 
       - uses: actions/configure-pages@v5
+        if: github.event_name != 'pull_request'
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
         with:
           path: site
 
   deploy:
+    # A pull request BUILDS the docs and never publishes them.
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     environment:

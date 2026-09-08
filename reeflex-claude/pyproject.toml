@@ -1,5 +1,12 @@
 [build-system]
-requires = ["setuptools>=68.0"]
+# UPPER BOUND (the sweep PR #123 asked for). This package has NO runtime
+# dependencies -- it is stdlib-only, which is why `pip show reeflex-claude` has
+# nothing to resolve and smoke-pypi.yml skips its `pip show mcp` line. But the
+# BUILD backend is still a dependency on something we do not own: the surface
+# used is the PEP 517 `build_meta` entry point plus
+# [tool.setuptools.packages.find]. The ceiling is one major above the version
+# release.yml builds the published wheel with (84.0.0 as of 2026-09-08).
+requires = ["setuptools>=68.0,<85"]
 build-backend = "setuptools.build_meta"
 
 [project]

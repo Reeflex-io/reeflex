@@ -38,14 +38,23 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install reeflex-mcp + pytest
+      - name: Install reeflex-mcp + pytest (pinned)
         working-directory: reeflex-mcp
         # Editable install pulls the runtime deps (mcp, pyyaml); pytest is the runner.
         # The suite is pure-Python (no OPA/core needed) — the gateway's fail-closed
         # and normalization paths are exercised against in-process stubs.
+        #
+        # pytest is BOUNDED (the PR #123 sweep). It was a bare `pytest`, so the
+        # runner that judges this package was re-resolved to whatever was newest
+        # on every run. `>=8,<10` is the range MEASURED green on this suite:
+        # 342 passed on 8.4.2 and 342 passed on 9.1.1 (2026-09-08). Widen it
+        # after running the suite on the new major, not before.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest
+          python -m pip install -e . "pytest>=8,<10"
+
+      - name: Show what resolved (diagnosability)
+        run: python -m pip freeze
 
       - name: Run reeflex-mcp unit tests
         working-directory: reeflex-mcp

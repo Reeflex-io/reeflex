@@ -126,6 +126,20 @@ TEST_FILE_PATTERNS = ["test_*.py", "*_test.py", "*_test.rego", "*.test.ts", "*.t
 # what it was measured against.
 DRIFT_MIN_TEST_FILES = 30
 
+# The test RUNNER this gate installs into every suite venv. Bounded on purpose
+# (PR #123 sweep): a bare `pytest` meant the instrument re-resolved itself to
+# whatever was newest on every run, so an upstream major could redden the gate
+# on a commit that touched nothing. Range measured green on 2026-09-08, on
+# BOTH ends of it (8.4.2 and 9.1.1), in a venv per package:
+#   reeflex-mcp     342 passed / 342 passed
+#   reeflex-holds    81 passed /  81 passed   (mcp resolves 2.1.1 — the <2.2
+#                                              ceiling from #123 holding 2.2.0
+#                                              out, 2.2.0 having landed on PyPI
+#                                              2026-09-07T16:06Z)
+#   reeflex-claude  286 passed / 286 passed (+63 subtests reported on 9.1.1)
+# Widen it after running the suites on the new major, not before.
+PYTEST_PIN = "pytest>=8,<10"
+
 # RFX-108: the ONLY component keys whose SKIP may be silenced via --allow-skips,
 # each with the reason it can be structurally unrunnable. An --allow-skips key
 # that is not registered here is REFUSED by the skip-ledger component: a skip
@@ -178,6 +192,7 @@ UNITTEST_RAN_RE = re.compile(r"^Ran (\d+) tests? in [0-9.]+s$", re.M)
 UNITTEST_OK_RE = re.compile(r"^OK(?: \((?P<detail>[^)]*)\))?$", re.M)
 N8N_PASS_RE = re.compile(r"^(\d+) passed, (\d+) failed, (\d+) total$", re.M)
 MIGRATION_HEADS_RE = re.compile(r"^MIGRATION-HEADS: (PASS|FAIL) \((.*)\)$", re.M)
+DEP_FLOORS_RE = re.compile(r"^DEP-FLOORS: (PASS|FAIL) \((.*)\)$", re.M)
 TEST_CENSUS_RE = re.compile(r"^TEST-CENSUS: (PASS|FAIL) \((.*)\)$", re.M)
 USAGE_RE_TMPL = r"^usage: %s\b"
 COMPONENT_RE = re.compile(r"^COMPONENT ([a-z0-9-]+): (PASS|FAIL|SKIPPED|DELEGATED)\b(?: \((.*)\))?$")
@@ -243,6 +258,21 @@ def parse_migration_heads(exit_code, text):
         return False, m.group(2)
     if exit_code == 0:
         return False, "exit 0 but no anchored 'MIGRATION-HEADS: PASS' summary — cannot confirm"
+    return False, "exit %d" % exit_code
+
+
+def parse_dep_floors(exit_code, text):
+    """PASS iff exit 0 AND the checker's own anchored 'DEP-FLOORS: PASS (...)'
+    line — same shape as parse_migration_heads (DoD 5). Deliberately identical
+    in spirit: the one thing that must not happen to a floor check is that it
+    reports green because it printed nothing."""
+    m = DEP_FLOORS_RE.search(text)
+    if exit_code == 0 and m and m.group(1) == "PASS":
+        return True, m.group(2)
+    if m and m.group(1) == "FAIL":
+        return False, m.group(2)
+    if exit_code == 0:
+        return False, "exit 0 but no anchored 'DEP-FLOORS: PASS' summary — cannot confirm"
     return False, "exit %d" % exit_code
 
 
@@ -457,8 +487,14 @@ class Gate:
                 self.component(key, "FAIL", "suite venv creation failed: %s" % err)
                 continue
             py = self.venv_python(venv_path)
+            # PYTEST IS BOUNDED (the PR #123 sweep). This was a bare `pytest`:
+            # an unbounded floor inside the INSTRUMENT, so a pytest major could
+            # turn the whole gate red on a commit that changed nothing — the
+            # same shape as the mcp 2.1.1 breakage, one layer up, and this time
+            # in the thing that decides whether the tree is healthy. The range
+            # is what was measured green on all three suites (2026-09-08).
             code, out = self.run_cmd(
-                [py, "-m", "pip", "install", "-q", "pytest", "-e", os.path.join(REPO_ROOT, pkg)])
+                [py, "-m", "pip", "install", "-q", PYTEST_PIN, "-e", os.path.join(REPO_ROOT, pkg)])
             if code != 0:
                 self.show(out, full=True)
                 self.component(key, "FAIL", "suite venv install failed")
@@ -770,6 +806,40 @@ class Gate:
         self.show(out, full=True)
         self.component(key, "PASS" if ok else "FAIL", detail)
 
+    # -- dependency floors (the PR #123 sweep) -------------------------------
+
+    def run_dep_floors(self):
+        # Static, no network, no installs: every requirement this repo DECLARES
+        # must be bounded above. #123's `mcp>=2` turned main red on a commit
+        # that touched none of the package, and worse, changed what a holds
+        # operator sees. Not skippable — there is no environment in which this
+        # cannot run, which is exactly why it is not in SKIP_REGISTRY.
+        key = "dep-floors"
+        code, out = self.run_cmd(
+            [sys.executable, os.path.join(REPO_ROOT, "scripts",
+                                          "check_dependency_floors.py"), REPO_ROOT])
+        ok, detail = parse_dep_floors(code, out)
+        self.show(out, full=not ok, tail=12)
+        self.component(key, "PASS" if ok else "FAIL", detail)
+
+    def run_dep_floors_selftest(self):
+        # The instrument before the verdict (same pattern as the census
+        # selftest in gate.yml): a manifest reader is worth exactly what its
+        # parser is worth, and three defects this month were a correct tree
+        # measured by a wrong instrument.
+        key = "dep-floors-selftest"
+        code, out = self.run_cmd(
+            [sys.executable, os.path.join(REPO_ROOT, "scripts",
+                                          "check_dependency_floors.py"), "--selftest"])
+        ok = code == 0
+        m = re.search(r"^selftest: (\d+) properties, (\d+) failed$", out, re.M)
+        detail = ("%s properties, %s failed" % (m.group(1), m.group(2))) if m \
+            else "no anchored 'selftest: N properties' line — cannot confirm"
+        if not m:
+            ok = False
+        self.show(out, full=not ok, tail=6)
+        self.component(key, "PASS" if ok else "FAIL", detail)
+
     # -- migration graph (RFX-49) --------------------------------------------
 
     def run_migration_heads_selftest(self):
@@ -832,7 +902,9 @@ class Gate:
             ("pypi-smoke      fresh install of the PUBLISHED packages", self.run_pypi_smoke),
             ("wp-conformance  WordPress live-core harness", self.run_wp),
             ("wp-spec-conformance  SPEC axis vectors, no live core (RFX-131, RFX-164)", self.run_wp_spec),
-            ("migration-heads-selftest  scripts/tests: check_migration_heads correctness", self.run_migration_heads_selftest),
+            ("dep-floors-selftest  the manifest parser, on fixtures, before its verdict is trusted", self.run_dep_floors_selftest),
+            ("dep-floors      every DECLARED requirement is bounded above (PR #123 sweep)", self.run_dep_floors),
+            ("migration-heads-selftest  scripts/tests: checker-tool correctness (migration heads, dependency floors)", self.run_migration_heads_selftest),
             ("migration-heads  static alembic graph (reeflex-app, if checked out) — single head, no DB", self.run_migration_heads),
             ("test-census     every enumerated test file must YIELD TESTS (RFX-87)", self.run_test_census),
             ("drift           test files outside every enumerated suite", self.run_drift),
@@ -919,6 +991,23 @@ def selftest():
           not parse_migration_heads(0, "well, MIGRATION-HEADS: PASS (1 head: x) I guess\n")[0])
     check("migration-heads rejects exit 0 with no anchored line",
           not parse_migration_heads(0, "some other output\n")[0])
+
+    # dep-floors: only the checker's own anchored PASS/FAIL line counts (PR #123
+    # sweep). Same five properties as migration-heads, on purpose — the failure
+    # this guards is "the floor check went green because it printed nothing".
+    check("dep-floors accepts real PASS",
+          parse_dep_floors(0, "DEP-FLOORS: PASS (20 requirements over 7 manifests; 0 unbounded; 1 allowed)\n")[0])
+    check("dep-floors rejects real FAIL even at exit 0",
+          not parse_dep_floors(0, "DEP-FLOORS: FAIL (20 requirements over 7 manifests; 6 unbounded; 1 allowed)\n")[0])
+    check("dep-floors rejects nonzero exit despite PASS line",
+          not parse_dep_floors(1, "DEP-FLOORS: PASS (20 requirements over 7 manifests; 0 unbounded; 1 allowed)\n")[0])
+    check("dep-floors rejects prose mention",
+          not parse_dep_floors(0, "I ran it and DEP-FLOORS: PASS (all fine) honestly\n")[0])
+    check("dep-floors rejects exit 0 with no anchored line",
+          not parse_dep_floors(0, "checked everything, looks good\n")[0])
+    ok, detail = parse_dep_floors(0, "DEP-FLOORS: FAIL (20 requirements over 7 manifests; 6 unbounded; 1 allowed)\n")
+    check("dep-floors carries the counts into the component detail",
+          not ok and "6 unbounded" in detail)
 
     # test-census: only the census's own anchored PASS/FAIL line counts (RFX-108)
     check("test-census accepts real PASS",
