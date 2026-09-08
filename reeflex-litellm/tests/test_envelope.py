@@ -27,11 +27,19 @@ def build(**kw):
 
 # -- the overlay -------------------------------------------------------------
 
-def test_the_agent_id_names_the_gateway_and_the_model():
+def test_the_agent_id_names_the_gateway_the_tenant_and_the_model():
     """RFX-138: an approval is granted to a PARTY. Every agent behind one
-    gateway shipping the same agent.id is that ticket's defect."""
+    gateway shipping the same agent.id is that ticket's defect.
+
+    RFX-243 CHANGED THIS STRING: the tenant org sits between the gateway and
+    the model. `unscoped` is the library-API default -- the hook never produces
+    it, because a request that reaches the hook is resolved to an org or
+    refused. Pinned exactly rather than by prefix because this is the ONE
+    adapter-controlled field that reaches an Attest report (§4 `agent_id`), so
+    a silent change to it changes what a customer's report says.
+    """
     env = build(model="gpt-4o-mini")
-    assert env["agent"]["id"] == "agent:litellm-gateway/gpt-4o-mini"
+    assert env["agent"]["id"] == "agent:litellm-gateway/unscoped/gpt-4o-mini"
 
 
 def test_two_models_behind_one_gateway_are_different_actors():
@@ -42,9 +50,13 @@ def test_two_models_behind_one_gateway_are_different_actors():
 
 def test_the_session_is_namespaced_so_it_cannot_collide_with_another_seat():
     """R5's cumulative budget is keyed on agent.session_id. A collision with a
-    Claude Code session would make two unrelated callers spend one budget."""
+    Claude Code session would make two unrelated callers spend one budget.
+
+    RFX-243 added the tenant segment (`litellm:<org>:<session>`), which is what
+    keeps two DEPARTMENTS' budgets apart too -- see test_tenancy_isolation.py.
+    """
     env = build(session_id="abc")
-    assert env["agent"]["session_id"] == "litellm:abc"
+    assert env["agent"]["session_id"] == "litellm:unscoped:abc"
     claude = claude_envelope.build_envelope(
         {"session_id": "abc", "tool_name": "Bash",
          "tool_input": {"command": "ls"}},

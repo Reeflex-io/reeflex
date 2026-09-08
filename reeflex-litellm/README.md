@@ -61,6 +61,41 @@ An evidence pipeline that collapses `refused_at_gateway` into the same bucket as
 an execution-side prevention is claiming a guarantee this seat cannot deliver.
 Keep them distinct.
 
+Since 0.2.0 that distinction is also **machine-readable in the decision
+ledger**, not only in the refusal the caller reads. Every record this package
+writes carries three fields whose whole purpose is to stop a report
+over-reading it:
+
+```json
+{"enforcement_stage": "refused_at_gateway",
+ "observed": "proposal",
+ "prevents_execution": false}
+```
+
+`prevented_at_execution` is defined in the same vocabulary — so this seat and
+the execution-side seats share one — and this package **cannot emit it**:
+`evidence.assert_never_claims_prevention()` raises, and the test suite pins
+that it does.
+
+#### These two fields cannot go on the evidence wire, and that is flagged, not fixed
+
+`EVIDENCE-INGEST-SPEC-v1.md` §4 is a **closed** schema — "unknown top-level
+keys → `422` (fail closed — never store un-vetted data)" — and the contract is
+**FROZEN**. There is no §4 field for `enforcement_stage` and none for
+`gateway_routing`. So this package does not send them: `evidence.wire_record()`
+is a closed allowlist built by naming each §4 field, and
+`assert_wire_is_spec_clean()` re-checks its own output before every request.
+
+**The consequence, stated rather than papered over:** an Attest report built
+from the §4 feed alone cannot distinguish a gateway refusal from an
+execution-side prevention. The one adapter-controlled field that does reach a
+report is `agent_id`, which this seat sets to
+`agent:litellm-gateway/<org>/<model>` — so a report row can say *which
+department, behind which gateway, on which model*, but not *what the refusal
+achieved*. Closing that gap needs a spec change from the spec owner, which is
+not a change an adapter may make. Full truth lives in the local ledger
+(`REEFLEX_LITELLM_LEDGER_PATH`).
+
 ### No prompt reading. No PII masking. No LLM in the decision path.
 
 This seat is **blind to prose by construction**. It reads `tool_calls` and
@@ -152,7 +187,26 @@ guardrails:
 ```bash
 export REEFLEX_CORE_URL=http://your-core:8080
 export REEFLEX_CORE_TOKEN=…            # if your core sets REEFLEX_AUTH_TOKEN
+
+# REQUIRED: which Reeflex org each gateway key/team belongs to. There is no
+# default org, so without this every tool call is refused. See "Tenancy" below.
+export REEFLEX_LITELLM_TENANCY_MAP_FILE=/etc/reeflex/tenancy.json
+
+# Optional: the local decision ledger, and pushing its §4 projection to a gate.
+export REEFLEX_LITELLM_LEDGER_PATH=/var/log/reeflex/decisions.jsonl
+export REEFLEX_LITELLM_EVIDENCE_PUSH=true
+export RFX_GATE_TOKEN_PAYMENTS=…       # referenced BY NAME from the map
+export RFX_EVIDENCE_KEY_PAYMENTS=…     # the derived 32-byte signing key, hex
+
 litellm --config proxy/config.yaml --host 127.0.0.1 --port 4000
+```
+
+Validate the map before you deploy it — every tenancy misconfiguration is a
+total refusal at runtime, and you want it as a non-zero exit instead:
+
+```bash
+reeflex-litellm tenancy              # prints what it binds, or exits 1
+reeflex-litellm key-hash sk-…        # the digest a `key_hash` binding needs
 ```
 
 To try it with no model and no API key, this package ships a mock model that
@@ -168,7 +222,113 @@ curl -s localhost:18600/v1/chat/completions -H 'Content-Type: application/json' 
     "messages": [{"role":"user","content":"TOOL run_shell {\"command\": \"rm -rf /\"}"}]}'
 ```
 
-## The four outcomes
+## Tenancy: two departments behind one gateway
+
+One proxy fronts every agent in a company. Without a tenancy binding, two
+departments' decisions carry the same `agent.id`, spend the same R5 budget and
+land in one Reeflex org — where either department can read the other's holds.
+That is not a reporting inconvenience: core's hold check 8 binds an approval to
+an actor, so a shared `agent.id` means the payments team's approval can be
+spent by the marketing team's agent.
+
+**The binding is explicit, and there is deliberately no default org.**
+
+```bash
+export REEFLEX_LITELLM_TENANCY_MAP_FILE=/etc/reeflex/tenancy.json
+```
+
+```json
+{
+  "version": 1,
+  "tenants": {
+    "acme-payments": {
+      "org": "acme-payments",
+      "principal": "payments-oncall@acme.example",
+      "environment": "production",
+      "on_prem_hosts": ["llm.internal.acme.example"],
+      "evidence": {
+        "ingest_url": "https://app.reeflex.io/api/v1/evidence",
+        "gate_token_env": "RFX_GATE_TOKEN_PAYMENTS",
+        "signing_key_env": "RFX_EVIDENCE_KEY_PAYMENTS"
+      }
+    }
+  },
+  "bind": {
+    "key_alias": {"payments-bot": "acme-payments"},
+    "team_id":   {"team_9f2c": "acme-payments"},
+    "key_hash":  {"<sha256 of the virtual key>": "acme-payments"}
+  }
+}
+```
+
+The identity comes from `user_api_key_dict` — LiteLLM's own authentication
+result, which **the caller cannot set**. Resolution is most-specific-first:
+`key_hash`, then `key_alias`, then `team_id`. Compute a `key_hash` with
+`reeflex-litellm key-hash sk-…` (it is LiteLLM's `hash_token()`).
+
+Credentials are **by reference only**: the map names environment variable
+*names*. A map carrying a token or a signing key *value* is a load error, on
+purpose — it is a file operators copy between hosts and paste into tickets.
+
+**What refuses, and why there is no fallback:**
+
+| situation | result |
+|---|---|
+| no map configured | every tool call refused — this is *not* "tenancy off" |
+| key/team not in the map | refused, `reeflex_tenant_unmapped`, **core never called** |
+| a `*` / `default` / `fallback` entry | **load error** — a catch-all is the defect this exists to prevent |
+| map unreadable or not JSON | every tool call refused |
+| a response with no tool calls | untouched; tenancy is not even resolved |
+
+An unmapped caller gets a refusal naming the identity that arrived and the env
+var to fix, so an operator sees something actionable instead of evidence
+quietly filed under the wrong company. A single-tenant operator writes eight
+lines of JSON and has *named* their org rather than defaulted into one.
+
+Editing the map file takes effect on the next request — the cache is keyed on
+the file's mtime and size, so adding a department needs no proxy restart.
+
+### Where the isolation is actually enforced — two mechanisms, two codebases
+
+1. **The actor identity — here.** `agent.id` becomes
+   `agent:litellm-gateway/<org>/<model>` and `agent.session_id` becomes
+   `litellm:<org>:<session>`. That is what makes one department's approval
+   unspendable by another's agent (core's hold check 8) and one department's
+   R5 budget unchargeable to another's session. Two teams that both call their
+   nightly job `nightly` no longer share one budget.
+
+2. **The evidence org — the server, not this adapter.** SPEC §3 resolves
+   `(gate_id, org_id)` from the gate **token**, server-side, and §4 has no org
+   field at all. So this adapter's whole obligation is to present the *right
+   tenant's* gate token; Postgres row-level security on `org_id` in
+   **reeflex-app** is what keeps two orgs' stored evidence and holds apart.
+
+`tests/test_tenancy_isolation.py` measures both halves — two keys producing two
+actor identities in the bodies core actually received, and two batches signed
+with two different tenants' credentials. It does **not** exercise reeflex-app's
+RLS or core's hold check 8; those live in those repos' suites.
+
+### `gateway_routing`: which model answered, and where it ran
+
+A hook sits in front of one system; a gateway does not. Every decision record
+carries a routing block — the model requested and the model that answered, the
+deployment id, the provider, the `api_base` host, the calling key/team, and
+whether the caller asked for a stream.
+
+`placement` is `on_prem` / `cloud` / `undeclared` and is **declared by the
+operator** (`on_prem_hosts` / `cloud_hosts`, or the proxy-wide
+`REEFLEX_LITELLM_ONPREM_HOSTS` / `REEFLEX_LITELLM_CLOUD_HOSTS`). It is never
+inferred: a VPC endpoint in a public cloud is private too, and a reverse proxy
+in the building can be public. A separate `api_base_is_private` field carries
+the *measured* hint, and is `null` for a DNS name because this code did not
+resolve it. An undeclared host stays `undeclared` rather than being guessed
+into `cloud`.
+
+No prompt, no completion, no tool arguments. The `api_base` is reduced to
+`HOST[:PORT]`, dropping userinfo, path and query — a URL can carry a credential
+and this value is written to a ledger.
+
+## The outcomes
 
 | core says | what the caller receives |
 |---|---|
@@ -176,6 +336,7 @@ curl -s localhost:18600/v1/chat/completions -H 'Content-Type: application/json' 
 | `deny` | the tool call **removed**; a structured refusal in `message.content`; `finish_reason` flips to `stop` if nothing is left to call |
 | `require_approval` | the response is **withheld** up to `reeflex_hold_wait` seconds while the hold is polled. Approved → the original envelope is resubmitted and released **only if core allows it**. Rejected → refused. Nobody decided in time → refused, naming the still-open hold so the caller can retry |
 | unreachable / unparseable / unknown | **fail closed**: refused, `reeflex_unavailable`, rule `reeflex.core/fail_closed`, with the reason in the payload the model reads |
+| *core is never asked* | the caller's key/team is not bound to a Reeflex org: refused, `reeflex_tenant_unmapped`, rule `reeflex.litellm/tenancy_unmapped`. This is decided **before** core, so no decision is recorded against the wrong tenant and no R5 budget is charged to a session that belongs to nobody |
 
 A response with several tool calls is ruled on **per call**: one denied call
 beside one allowed call removes exactly one.
@@ -281,6 +442,44 @@ concurrently would make the verdict depend on which decision reached the ledger
 first. Measured at 2 calls per response, concurrency 1: added p50 **+158.2 …
 +159.5 ms** — twice the one-call number, as designed.
 
+### Does tenancy change that? No — it is still one decision
+
+Re-measured on 2026-09-08 with the tenancy lookup, the routing block and the
+evidence ledger all on the request path. Three proxies against one core and one
+mock model, requests **rotated** across the arms so no arm is systematically
+last, keep-alive per thread, `TCP_NODELAY`, zero errors:
+
+| concurrency | no guardrail | guardrail, pre-tenancy | guardrail, tenancy on |
+|---|---|---|---|
+| 1 | 12.0 ms | 88.3 ms | **89.0 ms** |
+| 10 | 14.2 ms | 171.1 ms | **173.3 ms** |
+
+The RFX-243 delta (tenancy on − pre-tenancy) has a **median of +1.9 ms at
+concurrency 1**, but individual repeats ran from **−9.6 ms to +4.0 ms** — it
+straddles zero, so this instrument cannot resolve it. What *can* be bounded is
+the work itself, measured directly:
+
+| on the request path, per tool call | cost |
+|---|---|
+| `tenancy.resolve()` (map from file, cached, includes the `stat`) | 11.8 µs |
+| `routing.build()` (the `gateway_routing` block) | 12.7 µs |
+| `evidence.ledger_record()` | 12.0 µs |
+| **all RFX-243 CPU work together** | **68 µs** |
+| `evidence.append_ledger()` — one `write` + `fsync` | 273 µs |
+
+So ~0.34 ms of real work against a ~85 ms decision: **0.4%**. And the count that
+"one decision" actually means is exact — 20 proxy requests carrying one tool
+call each produced **exactly 20** `POST /v1/decide` in core's log. The tenancy
+lookup adds **no** core round trip; it is a local map read.
+
+Two caveats worth more than the numbers. **The bigger envelope is free:**
+`context.gateway_routing` grows the body from 1119 to 1823 bytes (1.6×) and
+costs core **−0.26 ms p50** over 300 interleaved requests — i.e. nothing. And
+**a fixed arm order lies:** the first version of this table read +4.6 ms, all of
+which turned out to be a position effect in the harness — the arm that ran last
+in each interleaved triple paid a systematic penalty. Reversing the order
+collapsed it to +0.3 ms and one repeat went negative. Rotating fixed it.
+
 **Two measurement errors this table already survived**, both recorded in
 `bench/latency.py`'s docstring because the corrected numbers are only worth
 anything next to them:
@@ -303,13 +502,23 @@ every constant it holds fixed and why).
 
 ## Not in this version
 
-* **Tenancy.** A gateway virtual key or team is not mapped to a Reeflex org or
-  session; see "One session per request" above. This is the next ticket.
 * **Streaming.** See the limit above. Refuse `stream: true` meanwhile.
 * **Pre-call blocking.** The seat cannot stop a request from reaching a model;
   it rules on what comes back.
-* **Evidence push.** Refusals are in the response and in core's audit log. This
-  package does not itself push to an Attest pipeline.
+* **`enforcement_stage` and `gateway_routing` on the evidence wire.** They are
+  in the local ledger, not on the §4 feed, because §4 is a closed schema and
+  frozen. An Attest report built from that feed cannot tell a gateway refusal
+  from an execution-side prevention. Flagged for the spec owner; not an
+  adapter's change to make.
+* **A cumulative session budget without a session header.** Unchanged by
+  tenancy — see "One session per request" above. Tenancy changed the
+  *namespace*, not the value.
+* **Counting unmapped callers.** An unmapped caller is refused and logged, but
+  writes no ledger row: a governance row naming no org would be worse than an
+  absent one, because a report could total it. Read the proxy log.
+* **Authenticating the caller.** `user_api_key_dict` is LiteLLM's
+  authentication result and this package trusts it exactly as far as LiteLLM's
+  own code does. If the proxy's key auth is wrong, this is wrong with it.
 
 ## Development
 

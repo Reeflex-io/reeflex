@@ -92,11 +92,12 @@ class Verdict:
     """
 
     __slots__ = ("kind", "decision", "reason", "rule", "core_reachable",
-                 "hold_id", "expires_ts", "obligations", "http_status")
+                 "hold_id", "expires_ts", "obligations", "http_status",
+                 "decision_id")
 
     def __init__(self, kind, decision="", reason="", rule="unknown",
                  core_reachable=True, hold_id=None, expires_ts=None,
-                 obligations=None, http_status=None):
+                 obligations=None, http_status=None, decision_id=None):
         self.kind = kind
         self.decision = decision
         self.reason = reason
@@ -106,6 +107,14 @@ class Verdict:
         self.expires_ts = expires_ts
         self.obligations = obligations or []
         self.http_status = http_status
+        # Core's primary key for this /v1/decide transit, returned in the
+        # Decision body (`decide.py` sets it on every response shape, including
+        # the fail-closed and denial ones).  Carried because
+        # EVIDENCE-INGEST-SPEC-v1 §4 makes `decision_id` REQUIRED and §6 makes
+        # it the idempotency key -- an evidence record cannot be built without
+        # it, and inventing one locally would break dedupe against the same
+        # decision arriving through core's audit log.
+        self.decision_id = decision_id
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return ("Verdict(kind=%r, rule=%r, hold_id=%r, core_reachable=%r)"
@@ -231,6 +240,7 @@ def _map(body: dict, http_status=None) -> Verdict:
     common = dict(decision=decision, rule=rule, obligations=obligations,
                   core_reachable=True, http_status=http_status,
                   hold_id=body.get("hold_id"), expires_ts=body.get("expires_ts"),
+                  decision_id=body.get("decision_id"),
                   reason="Reeflex: %s [rule=%s]" % (reason, rule))
     if decision == "allow":
         return Verdict("allow", **common)

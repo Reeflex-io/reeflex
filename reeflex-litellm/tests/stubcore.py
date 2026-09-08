@@ -27,6 +27,14 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
+# A uuid4 hex, 32 chars -- the shape EVIDENCE-INGEST-SPEC-v1 §4 requires of
+# `decision_id` and §6 uses as the idempotency key.  Core's `decide.py` sets one
+# on EVERY response shape, including the denial and fail-closed ones, so a stub
+# that omitted it would let an evidence test pass on a record core would never
+# have allowed to exist.  Fixed rather than random so a test can assert on it.
+DECISION_ID = "9f2c4b1ea7d3465fb08c15d2e6a37c40"
+
+
 class StubCore:
     """A localhost HTTP server that answers /v1/decide and /v1/holds/{id}.
 
@@ -45,7 +53,8 @@ class StubCore:
         self.decide_queue = []
         self.decide_default = (200, {"decision": "allow", "reason": "ok",
                                      "rule": "reeflex.policy/default_allow",
-                                     "obligations": []})
+                                     "obligations": [],
+                                     "decision_id": DECISION_ID})
         self.hold_status = "pending"
         self.hold_http = None
         self.requests = []
@@ -122,22 +131,28 @@ class StubCore:
 
     # -- convenience scripting --------------------------------------------
 
-    def answer_allow(self, rule="reeflex.policy/read_only_internal"):
+    def answer_allow(self, rule="reeflex.policy/read_only_internal",
+                     decision_id=None):
         self.decide_default = (200, {"decision": "allow", "reason": "read-only",
-                                     "rule": rule, "obligations": []})
+                                     "rule": rule, "obligations": [],
+                                     "decision_id": decision_id or DECISION_ID})
 
     def answer_deny(self, rule="reeflex.policy/irreversible_systemic_prod",
-                    reason="irreversible systemic change in production"):
+                    reason="irreversible systemic change in production",
+                    decision_id=None):
         self.decide_default = (200, {"decision": "deny", "reason": reason,
-                                     "rule": rule, "obligations": []})
+                                     "rule": rule, "obligations": [],
+                                     "decision_id": decision_id or DECISION_ID})
 
     def answer_hold(self, hold_id="hold-1",
                     rule="reeflex.policy/irreversible_broad_prod",
-                    reason="irreversible broad change in production requires human approval"):
+                    reason="irreversible broad change in production requires human approval",
+                    decision_id=None):
         self.decide_default = (200, {"decision": "require_approval",
                                      "reason": reason, "rule": rule,
                                      "obligations": [], "hold_id": hold_id,
-                                     "expires_ts": "2026-09-08T12:00:00Z"})
+                                     "expires_ts": "2026-09-08T12:00:00Z",
+                                     "decision_id": decision_id or DECISION_ID})
 
 
 def unused_port() -> int:
