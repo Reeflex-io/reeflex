@@ -5,6 +5,20 @@
 # and INVOKES each entry point; "the file exists" is not proof (WoW §18.5).
 # `workflow_call` so the future uniform preflight gate (TICKET P1) can invoke
 # this job instead of reimplementing it.
+#
+# WHAT A GREEN RUN HERE DOES NOT MEAN (RFX-246). It installs whatever PyPI
+# serves as LATEST — it pins no version and takes no input — so:
+#
+#   * It cannot tell you a release shipped. Run it the minute after a tag whose
+#     packages did not move and it is green against the PREVIOUS versions. On
+#     `Release v0.2.0`, two of these three were skipped as already-existing;
+#     a green smoke afterwards was measuring 0.1.7 and 0.1.3, which is exactly
+#     what it should measure and is not evidence about 0.2.0.
+#   * It asserts `--help` exits 0. That catches import-time death and nothing
+#     else. A gate that fails to REFUSE exits 0 on `--help`.
+#
+# It is the right instrument for "did an upstream release break what customers
+# already have", and the wrong one for "is this release healthy".
 
 name: smoke-pypi
 
@@ -24,9 +38,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # All THREE packages a human can `pip install` from PyPI (RFX-18):
-        # reeflex-claude joins reeflex-mcp/reeflex-holds so a broken fresh
-        # install of any of the three turns CI red on its own.
+        # The three packages this repo PUBLISHES to PyPI (RFX-18): a broken
+        # fresh install of any of them turns CI red on its own.
+        #
+        # NOT "all three packages a human can pip install", which is what this
+        # comment used to say and is false (RFX-246). A FOURTH name resolves:
+        # `pip install reeflex-core` succeeds and installs 0.0.1 — a name
+        # reservation uploaded 2026-07-04, 1829 bytes, no executable behavior.
+        # It is absent from this matrix on purpose: it has no console script to
+        # invoke, and release.yml builds no dist for it (core's artefact is the
+        # GHCR image). The honest summary is that PyPI serves four Reeflex
+        # names, three of which are the product and one of which is a
+        # placeholder that has never moved.
         package: [reeflex-mcp, reeflex-holds, reeflex-claude]
     steps:
       - name: Set up Python 3.12

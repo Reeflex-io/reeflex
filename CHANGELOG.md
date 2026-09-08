@@ -7,6 +7,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ### Changed
 
+- **What a Reeflex release actually publishes, stated once — the release was right and its job name was not (RFX-246).** `Release v0.2.0` was green on a job named *"PyPI publish (reeflex-claude + reeflex-holds + reeflex-mcp)"* having uploaded **one** of those three. Read from that run's own transcript (run `34135622240`, 2026-09-07):
+
+  ```
+  Skipping reeflex_claude-0.1.7-py3-none-any.whl because it appears to already exist
+  Uploading reeflex_holds-0.2.0-py3-none-any.whl
+  Skipping reeflex_mcp-0.1.3-py3-none-any.whl because it appears to already exist
+  ```
+
+  **Nothing about the release was wrong.** `reeflex-claude` 0.1.7 and `reeflex-mcp` 0.1.3 deliberately did not move for 0.2.0 — the CHANGELOG at the tag says so — and `skip-existing: true` is what makes a re-run idempotent. The defect was entirely in the claim: a job name that promises three publications, and a summary table that prints the same ✅ on three rows for one upload. **So the fix is to the claim, not to the release**; no publishing behaviour changes here.
+
+  **What a core release publishes, since this is the question that keeps being asked.** For 0.2.0, measured:
+
+  | channel | artefact | shipped for 0.2.0? |
+  |---|---|---|
+  | GHCR | `ghcr.io/reeflex-io/reeflex-core:v0.2.0` **and** `:latest` | **yes** — both tags pushed from revision `373a5ec` |
+  | GitHub Release | every built artefact + `SHA256SUMS` | yes |
+  | PyPI | `reeflex-holds` 0.2.0 | yes — uploaded 14:58Z |
+  | PyPI | `reeflex-claude` 0.1.7, `reeflex-mcp` 0.1.3 | no — versions unchanged, skipped as already-existing |
+  | PyPI | `reeflex-core` | **no, and no release has ever published it.** `release.yml` builds no sdist or wheel for core |
+  | wordpress.org | `reeflex-gate` plugin (trunk + tag + assets) | no — `wporg-deploy.yml` ran on the release, its `guard` job passed and its `deploy` job was **skipped**, because `WPORG_SVN_USERNAME`/`WPORG_SVN_PASSWORD` are not set while the plugin is still in the wordpress.org review queue (RFX-22) |
+  | n8n | `n8n-nodes-reeflex` | not from this repo — it publishes from `Reeflex-io/n8n-nodes-reeflex` |
+
+  The GHCR digest is the same object under both tags: `ghcr.io/reeflex-io/reeflex-core:v0.2.0` and `:latest` both resolve to `sha256:58a0a531dfa1aa9bdfaf82baf94c4a1388303520cae755ffbbe1a28d9e64845b`, and `:v0.1.13` to a different one — so `:latest` did move at this tag. Read from the registry, not from the run.
+
+  **A fifth channel reported success and shipped nothing, which is the same shape as the PyPI rows.** `wporg-deploy.yml` is *designed* to skip rather than fail while the SVN slot is pending, and that is the right call — a release must not go red on a channel that does not exist yet. But its run conclusion is `success`, so the only place the skip is visible is a `::notice::` inside the guard job's log. Two of the five channels above therefore print green for "did not ship", for two different and individually defensible reasons. That is worth knowing before reading any release run as a shipping report.
+
+  **`reeflex-core`'s release artefact is the GHCR image, and the PyPI name is a trap rather than an absence.** `pip install reeflex-core` does not fail — it **succeeds**, and installs `0.0.1`: a 1829-byte wheel uploaded **2026-07-04**. Unzipped and read, it holds one module — `reeflex_core/__init__.py`, 335 bytes — whose entire body is a docstring saying *"This is a placeholder name-reservation release (0.0.1). It has no executable behavior"* and `__version__ = "0.0.1"`. There is no `entry_points.txt`, so nothing to invoke. `0.0.1` is the only version PyPI has ever served under that name (`releases` in the JSON API has exactly that one key). So an install that looks like it worked leaves you with no decision engine, which is worse than a missing package, and it is why `reeflex-core` is absent from `smoke-pypi.yml`'s matrix. To install core you pull the image.
+
+  **To ship a package you move its `version` in its `pyproject.toml`. A tag alone republishes nothing.** Recorded in `release.yml`'s header, in the `pypi` job's name (now *"offer 3 packages, upload those whose version moved"*), and in the run summary, which now tells the reader to grep the job log for `Uploading` versus `Skipping … already exist` rather than trusting a tick.
+
+  **And `smoke-pypi.yml` said something false in passing**: *"All THREE packages a human can `pip install` from PyPI"*. Four Reeflex names resolve on PyPI; the fourth is the `reeflex-core` placeholder above. Its header now also states what a green smoke run cannot mean — it pins no version, so run the day after a tag whose packages did not move it is green against the *previous* ones, and it asserts `--help` exits 0, which a gate that fails to refuse also does.
+
 - **Every dependency this repo declares is now bounded ABOVE, and a CI check refuses a new open floor (the sweep PR #123 asked for).** #123 fixed one package and closed with *"Not fixed here: every other package with an unbounded dependency floor. Worth a sweep."* This is that sweep. The defect it generalises: `reeflex-holds` declared `mcp>=2`, `mcp 2.1.1` arrived, and an SDK **minor** changed what our users see — a holds operator could no longer tell a typo from an outage — on a commit that touched none of this repo. `main` went red on PR #112, which changed no file in the package.
 
   **Six open floors were found and closed.** Each ceiling is justified by the API surface this repo actually uses from the dependency, with the reasoning in a comment beside the pin:
@@ -32,7 +64,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
   1. **It measures the published version, so a defect in the code being released is invisible to it until after the publish.** A green smoke on the day of a tag is a statement about yesterday's artefact.
   2. **It asserts `--help` exits 0.** That catches import-time death and nothing else. A core that fails to *refuse*, or a holds tool that masks the reason a call failed (#123 exactly), exits 0 on `--help`.
-  3. **`reeflex-core` is not in its matrix, because it is not on PyPI.** `pypi.org/pypi/reeflex-core/json` has exactly one release — **`0.0.1`, uploaded 2026-07-04** — and `release.yml` builds sdists and wheels for the other three only. So `pip install reeflex-core` gets a July name reservation, not 0.2.0, and the package that *is* the decision engine gets no PyPI smoke at all. Its published artefact is the GHCR image (`ghcr.io/reeflex-io/reeflex-core:v0.2.0`, byte-identical to `:latest`).
+  3. **`reeflex-core` is not in its matrix, because no release publishes it there.** Not quite "because it is not on PyPI", which is how this line first read and is too kind: the name resolves and an install *succeeds*. `pypi.org/pypi/reeflex-core/json` has exactly one release — **`0.0.1`, uploaded 2026-07-04** — and `release.yml` builds sdists and wheels for the other three only. So `pip install reeflex-core` gets a July name reservation, not 0.2.0, and the package that *is* the decision engine gets no PyPI smoke at all. Its published artefact is the GHCR image (`ghcr.io/reeflex-io/reeflex-core:v0.2.0`, byte-identical to `:latest`).
 
   **The near-miss that makes this concrete rather than theoretical.** `reeflex-holds 0.2.0` went to PyPI at **2026-09-07T14:58Z** carrying #123's `mcp<2.2,>=2`. `mcp 2.2.0` was published at **16:06Z the same day** — **1h08m later**. The ceiling landed in the published wheel with just over an hour to spare, and on the pre-#123 metadata that release would have resolved `mcp 2.2.0` on any fresh install from that afternoon onward. The published `reeflex-mcp 0.1.3` still declares `['mcp<2,>=1.2', 'pyyaml', 'anyio>=4.5']` today, so two of the floors this entry closes are live in front of customers until the next publish.
 

@@ -6,8 +6,33 @@
 #
 # Fan-out (from a single tagged commit):
 #   - GitHub Release  <- all built artifacts + SHA256SUMS attached
-#   - PyPI            <- reeflex-claude + reeflex-holds + reeflex-mcp (OIDC Trusted Publishing)
+#   - PyPI            <- reeflex-claude + reeflex-holds + reeflex-mcp ATTEMPTED
+#                        (OIDC Trusted Publishing). Only a package whose
+#                        `version` MOVED since the last tag actually uploads —
+#                        see "what a green PyPI job means" below.
 #   - GHCR            <- ghcr.io/reeflex-io/reeflex-core  (ONLY if core changed)
+#
+# WHAT A GREEN PyPI JOB MEANS, AND WHAT IT DOES NOT (RFX-246).  `skip-existing:
+# true` makes a re-run idempotent, and it also makes the job GREEN over a
+# version PyPI already has.  Measured on `Release v0.2.0` (run 34135622240,
+# 2026-09-07), from that run's own transcript:
+#
+#     Skipping reeflex_claude-0.1.7-py3-none-any.whl because it appears to
+#             already exist
+#     Uploading reeflex_holds-0.2.0-py3-none-any.whl
+#     Skipping reeflex_mcp-0.1.3-py3-none-any.whl because it appears to
+#             already exist
+#
+# One package of the three was published, and the job — then named "PyPI
+# publish (reeflex-claude + reeflex-holds + reeflex-mcp)" — reported success.
+# That was CORRECT behaviour and a FALSE claim: reeflex-claude 0.1.7 and
+# reeflex-mcp 0.1.3 deliberately did not move for 0.2.0 (see CHANGELOG at the
+# tag), so there was nothing to upload.  The release was right; its job name
+# was not.  A green PyPI job means "each of these three versions IS on PyPI",
+# never "this run published three packages".
+#
+# So: to ship a package, MOVE ITS `version` IN ITS pyproject.toml. A tag alone
+# republishes nothing.
 #
 # n8n-nodes-reeflex now lives in its own dedicated repo (Reeflex-io/n8n-nodes-reeflex)
 # with its own OIDC publish workflow — it is NOT built or published from here anymore.
@@ -246,14 +271,18 @@ jobs:
           generate_release_notes: false
 
   # ---------------------------------------------------------------------------
-  # pypi: publish reeflex-claude AND reeflex-holds via OIDC Trusted Publishing.
-  # No token in the workflow — id-token: write does the auth. A Trusted Publisher
-  # must be configured on PyPI for EACH project (see docs/RELEASING.md).
-  # skip-existing: true makes re-runs idempotent (a version already on PyPI is
-  # skipped, not an error).
+  # pypi: OFFER reeflex-claude, reeflex-holds and reeflex-mcp to PyPI via OIDC
+  # Trusted Publishing. No token in the workflow — id-token: write does the
+  # auth. A Trusted Publisher must be configured on PyPI for EACH project (see
+  # docs/RELEASING.md).
+  #
+  # `skip-existing: true` makes re-runs idempotent (a version already on PyPI is
+  # skipped, not an error) — and therefore makes this job green over a version
+  # that did not move. The job NAME says "offer", not "publish", for exactly
+  # that reason: RFX-246, measured in the header of this file.
   # ---------------------------------------------------------------------------
   pypi:
-    name: PyPI publish (reeflex-claude + reeflex-holds + reeflex-mcp)
+    name: PyPI — offer 3 packages, upload those whose version moved
     runs-on: ubuntu-latest
     needs: [prepare, build]
     permissions:
@@ -395,7 +424,7 @@ jobs:
           {
             echo "# Reeflex release ${TAG} — channel checklist"
             echo ""
-            echo "| Channel | Package | Version | Status | Link |"
+            echo "| Channel | Package | Version | Job result | Link |"
             echo "|---|---|---|---|---|"
             echo "| GitHub Release | reeflex (${TAG}) | ${TAG} | $(mark "$R_RELEASE") | https://github.com/${REPO}/releases/tag/${TAG} |"
             echo "| PyPI | reeflex-claude | ${CLAUDE_V} | $(mark "$R_PYPI") | https://pypi.org/project/reeflex-claude/${CLAUDE_V}/ |"
@@ -407,6 +436,35 @@ jobs:
             echo ""
             echo "WordPress adapter (reeflex-gate) version in the attached zips: ${GATE_V}."
             echo ""
-            echo "> PyPI status shows the result of the combined publish job (both dists)."
+            echo "### How to read the three PyPI rows (RFX-246)"
+            echo ""
+            echo "The column is the **job's** result, and all three rows carry the same value because"
+            echo "there is one \`pypi\` job for all three dists. A ✅ means *each of those versions is on"
+            echo "PyPI now*. It does **not** mean this run uploaded three packages: \`skip-existing: true\`"
+            echo "skips a version PyPI already has, and reports success. On \`Release v0.2.0\` exactly one"
+            echo "of the three uploaded (\`reeflex-holds\` 0.2.0); the other two were skipped as already"
+            echo "existing, by design, because their versions did not move."
+            echo ""
+            echo "**So to ship a package, move its \`version\` in its \`pyproject.toml\`. A tag alone"
+            echo "republishes nothing.** To see which of the three actually uploaded on this run, read the"
+            echo "\`pypi\` job log for \`Uploading\` versus \`Skipping … already exist\`."
+            echo ""
+            echo "> \`reeflex-core\` is NOT in the PyPI rows: this workflow builds no sdist or wheel for it."
+            echo "> Its release artefact is the GHCR image above. The name \`reeflex-core\` does resolve on"
+            echo "> PyPI — to \`0.0.1\`, a name reservation uploaded 2026-07-04 with no executable behavior —"
+            echo "> and no release has ever moved it, so \`pip install reeflex-core\` does not get you ${TAG}."
             echo "> n8n-nodes-reeflex is released from its own repo (Reeflex-io/n8n-nodes-reeflex), not from here."
+            echo ""
+            echo "### One channel is missing from the table above, on purpose (RFX-246)"
+            echo ""
+            echo "**wordpress.org is not a row here and this workflow cannot report it.** The"
+            echo "\`reeflex-gate\` plugin deploys from a SEPARATE workflow, \`wporg-deploy.yml\`, triggered by"
+            echo "the *release being published* rather than by this tag push — so it is not in this job's"
+            echo "\`needs\` and its result is not knowable from here. Do not read this table's absence of a"
+            echo "WP.org row as \"nothing to ship there\": docs/RELEASING.md lists it as a release channel."
+            echo "It is also \`success\`-when-skipped by design — while \`WPORG_SVN_USERNAME\` /"
+            echo "\`WPORG_SVN_PASSWORD\` are unset (the slot is still in the wordpress.org review queue,"
+            echo "RFX-22) its \`guard\` job passes, its \`deploy\` job is SKIPPED, and the run's conclusion is"
+            echo "\`success\`. Check it directly:"
+            echo "https://github.com/${REPO}/actions/workflows/wporg-deploy.yml"
           } >> "$GITHUB_STEP_SUMMARY"
