@@ -231,8 +231,13 @@ TREATMENTS: dict[str, Treatment] = {
         conservative_default=_AXIS_DEFAULTS["externality"],
         unverifiable_assertion=True,
         approval_binding=BIND_HASH,
-        note="Read by R1 (internal) and the external_sends budget "
-             "(outbound). 'physical' appears in no rule.",
+        note="Read by R1 (internal) and by R5's external_sends budget "
+             "(outbound). 'physical' appears in no rule -- which is why it is "
+             "NOT the conservative default: RFX-129 measured that coercing "
+             "here to the one member no rule reads left external_sends "
+             "chargeable only by a caller that spelled 'outbound' exactly. "
+             "The conservative default is the member that restricts most, "
+             "and for this axis that is 'outbound'.",
     ),
 
     # -- target.environment (SPEC §2) -- RFX-86 / PR #89 --------------------

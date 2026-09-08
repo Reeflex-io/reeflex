@@ -78,6 +78,10 @@ def _normalize_token(raw: str) -> str:
 # Anything NOT in the allowed set (including absent) -> most-restrictive member.
 # This means a non-canonical value like "Irreversible" or "permanent" is treated
 # as "irreversible" (deny-class), never silently passed to OPA as unknown.
+#
+# "Most-restrictive" is decided by what the RULES do with each member, not by
+# where SPEC §4's prose lists it -- see the block above _AXIS_DEFAULTS for the
+# axis where those two answers disagreed and the measurement that settled it.
 # ---------------------------------------------------------------------------
 
 _AXIS_ALLOWED: dict[str, frozenset[str]] = {
@@ -86,10 +90,66 @@ _AXIS_ALLOWED: dict[str, frozenset[str]] = {
     "externality": frozenset({"internal", "outbound", "physical"}),
 }
 
+# WHICH MEMBER IS "MOST-RESTRICTIVE" IS A MEASURABLE QUESTION, NOT A LADDER
+# (RFX-129). F1's promise above is that a non-canonical value coerces to the
+# member that RESTRICTS MOST. For two of the three axes the enum's written
+# order and its decision effect agree, so the promise held by accident. For
+# `externality` they do not, and it shipped inverted:
+#
+#   externality member   what any rule in the shipped pack does with it
+#   -------------------  ----------------------------------------------------
+#   internal             gates R1 (read_only_internal) -- an ALLOW, and R1 is
+#                        itself decision-inert (RFX-130). Charges no budget.
+#   outbound             charged against R5's `external_sends` budget
+#                        (budgets.rego current_for/cumulative_for). THE ONLY
+#                        MEMBER WITH A RESTRICTIVE EFFECT ANYWHERE.
+#   physical            *nothing*. `grep physical policy/*.rego` is empty
+#                        (RFX-129). No rule reads it.
+#
+# So coercing to `physical` -- because SPEC §4's prose lists it last and it
+# sounds like the worst thing that can happen -- pointed F1 at the one member
+# the policy pack cannot see, and the effect was a FAIL-OPEN on the budget
+# externality exists to feed. Measured on origin/main 759b83f, one session of
+# `emit`/production actions at magnitude.count=1, external_sends limit 50:
+#
+#   axes.externality: "outbound"   -> require_approval at call 51  (control works)
+#   axes.externality  OMITTED      -> 200 allowed, held at 201 by objects_touched
+#   axes.externality: "Outbound"   -> 200 allowed, held at 201 by objects_touched
+#   axes.externality: "outbound "  -> 200 allowed, held at 201 by objects_touched
+#
+# i.e. the external_sends budget could only ever be charged by a caller that
+# affirmatively spelled `outbound` byte-for-byte -- an opt-in control on the
+# audited party's own word, which is the RFX-133 defect one field over ("omit
+# one optional field and the spend leaves the budget entirely"). The residual
+# 200 is `objects_touched`, not this dimension doing its job: an operator who
+# TIGHTENS external_sends to 5 still gets 200 for the same traffic, so editing
+# the limit in budgets.rego bought a 40x tightening worth exactly nothing.
+#
+# Hence `outbound`: the member that is measurably most-restrictive, which is
+# also what the shipped n8n node already calls "the safe-conservative value"
+# for this axis (ReeflexGate.node.ts) -- core was the outlier among its own
+# adapters.
+#
+# THE COST, STATED. An adapter that omits or misspells `externality` on more
+# than `external_sends` actions in one session now collects a require_approval
+# it did not before. That is a wrong-HOLD, and it is the documented bias (see
+# F5's trade-off note). It is also unreachable for every adapter in this repo:
+# reeflex-claude sets all three axes always, reeflex-wordpress's
+# resolve_externality() returns internal|outbound and never nothing, and the
+# n8n node's parameter defaults to outbound. Only reeflex-mcp filled this axis
+# from a mirror of THIS dict, and that mirror moves with it.
+#
+# NOT FIXED HERE, AND DELIBERATELY: `physical` remains read by no rule, so an
+# adapter that AFFIRMATIVELY declares it still charges nothing. Whether the
+# base pack should gain a rule that reads it (RFX-129's option (a):
+# irreversible + physical + production -> require_approval) is a canon
+# question, it is not this fail-open, and closing it would not have closed
+# this one -- a reversible outbound send with an undeclared axis escaped the
+# budget no matter what `physical` means. Flagged on RFX-129, not smuggled in.
 _AXIS_DEFAULTS: dict[str, str] = {
     "reversibility": "irreversible",
     "blast_radius": "systemic",
-    "externality": "physical",
+    "externality": "outbound",
 }
 
 # ---------------------------------------------------------------------------

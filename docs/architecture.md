@@ -111,6 +111,8 @@ Every backend action is normalized onto three universal axes before evaluation. 
 | `blast_radius` | `single` → `scoped` → `broad` → `systemic` |
 | `externality` | `internal` → `outbound` → `physical` |
 
+Ascending risk is not ascending restriction: in the base pack `physical` is read by no rule (RFX-129) and `outbound` is the member that restricts, via R5's `external_sends` budget.
+
 A policy rule like `irreversible + broad + production → require_approval` governs Postgres, S3, and WordPress identically. See [`reeflex-spec/SPEC.md §4`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-spec/SPEC.md) for the full specification.
 
 ---

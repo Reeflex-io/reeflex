@@ -317,15 +317,24 @@ If an adapter sends axis values that are not in the canonical set (e.g.
 `"Irreversible"` instead of `"irreversible"`, or a completely unknown string),
 the envelope validation layer coerces them to the most-restrictive default:
 
-| Axis | Most-restrictive default |
-|---|---|
-| `reversibility` | `irreversible` |
-| `blast_radius` | `systemic` |
-| `externality` | `physical` |
+| Axis | Most-restrictive default | What reads it |
+|---|---|---|
+| `reversibility` | `irreversible` | R2, R3, the unrecognised-verb fallback |
+| `blast_radius` | `systemic` | R2, R3 |
+| `externality` | `outbound` | R5's `external_sends` budget |
 
-This means a production action with coerced axes is very likely to receive
-`deny`. This is intentional. If you are testing and see unexpected denies, check
-that your adapter sends lowercase canonical values.
+"Most-restrictive" is decided per axis by what the rules do with each member,
+not by the order SPEC §4 lists them in. `externality` defaulted to `physical`
+until RFX-129 — the one member no rule in the shipped pack reads — so a coerced
+externality was charged against nothing at all.
+
+A production action whose `reversibility` **and** `blast_radius` are both
+coerced receives `require_approval` under R0 (`unclassified_action`), or `deny`
+under R3 if the adapter affirmatively declared them. A coerced `externality`
+alone changes no single decision: it is a cumulative budget input, and it shows
+up as a `require_approval` once the session crosses the `external_sends` limit.
+If you are testing and see unexpected holds or denies, check that your adapter
+sends lowercase canonical values.
 
 Missing axis values (absent `axes` object) are handled the same way: all three
 axes are set to their most-restrictive defaults.

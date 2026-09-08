@@ -655,6 +655,7 @@ needs):
 | `input.target.environment` | `production`/`staging`/`dev` | R2, R3, R6 |
 | `input.target.ref` | string or `null`; canonicalized by core (SPEC §4.3) | R6 |
 | `input.magnitude.count` | integer | R5, R7 |
+| `input.axes.externality` | `internal`/`outbound`/`physical` | R1 (`internal`), R5's `external_sends` budget (`outbound`). `physical`: **no rule** — RFX-129 |
 | `input.target.environment` | `production`/`staging`/`dev` | R2, R3 |
 | `input.magnitude.count` | integer >= 1; absent -> 1, and the fill is recorded in `input.provenance.undeclared` (RFX-143) | R5, R6 |
 | `input.cumulative.count_by_verb.*` | object, injected by core before eval (SPEC §4.1) | R5 (`.delete`) |

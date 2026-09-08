@@ -233,6 +233,10 @@ vocabulary across any backend:
 | `blast_radius` | `single` → `scoped` → `broad` → `systemic` |
 | `externality` | `internal` → `outbound` → `physical` |
 
+Of `externality`'s three members the base pack reads two: `outbound` (R5's
+`external_sends` budget) and `internal` (R1's label). `physical` is reserved for
+extension packs and is read by no base rule — see SPEC §4 (RFX-129).
+
 A rule such as *"irreversible + broad + production → require human approval"*
 protects Postgres, S3, and WordPress identically.
 

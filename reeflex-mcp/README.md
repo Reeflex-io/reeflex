@@ -148,10 +148,18 @@ magnitude:
 
 **Partial axes are fine.** Any axis you don't specify for a tool is filled
 with reeflex-core's OWN restrictive default (`irreversible`/`systemic`/
-`physical` -- `reeflex_mcp/mappings.py`'s `CORE_AXIS_DEFAULTS`, verified to
-match `reeflex-core/app/envelope.py` exactly) -- never a different,
+`outbound` -- `reeflex_mcp/mappings.py`'s `CORE_AXIS_DEFAULTS`, now
+cross-checked against `reeflex-core/app/envelope.py` by a test that parses
+core's source rather than re-asserting a literal) -- never a different,
 gateway-invented guess. An axis you omit here ends up exactly where core
 would have coerced it anyway if you had sent nothing at all.
+
+The `externality` entry was `physical` until RFX-129. Because this gateway
+FILLS the axis before sending, core saw it as declared and never applied its
+own coercion — and `physical` is read by no rule in the base pack, so a partial
+mapping that omitted `externality` was charged against nothing. If you are
+authoring mappings, specify `externality` explicitly wherever you know it: the
+fill is a floor, not a measurement of your tool.
 
 Point `reeflex-mcp.yaml`'s `mappings_dir:` (or `REEFLEX_MCP_MAPPINGS_DIR`) at
 the directory containing your file, or drop it directly into this package's

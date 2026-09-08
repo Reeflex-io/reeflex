@@ -27,10 +27,17 @@ Axis mapping decisions (NORMALIZE contract rationale):
   bulk_delete in prod with count=50 -> irreversible / broad / production  (hits R2)
   delete in staging  -> recoverable / single or scoped    (does NOT hit prod rules)
 
-Conservative defaults applied everywhere per SPEC §2:
+Conservative defaults applied everywhere per SPEC §2 (each one is the member
+the shipped rules actually restrict on, not the one whose prose sounds worst --
+see RFX-129, where `physical` was neither):
   - unknown reversibility -> irreversible
   - unknown blast_radius  -> systemic
-  - unknown externality   -> physical
+
+`externality` has no "unknown" branch here at all: this adapter AFFIRMATIVELY
+declares `internal` for every op, because the mock backend has no outbound
+side-effect to declare (see the axis notes in classify()). This list used to
+say "unknown externality -> physical", describing a coercion this file does not
+perform -- corrected under RFX-129 rather than restated with a new value.
 """
 
 from __future__ import annotations
