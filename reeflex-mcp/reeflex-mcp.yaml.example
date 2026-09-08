@@ -20,6 +20,15 @@ upstreams:
       system: filesystem       # matches the bundled mappings/filesystem.yaml starter (Track 4) automatically
       environment: staging     # production | staging | dev -- the strictness lever
     required: true             # default true: unreachable at boot -> refuse to boot
+    # OPTIONAL, default FALSE (RFX-173). Let THIS upstream classify its own
+    # tools from its declared `readOnlyHint`/`destructiveHint` MCP annotations
+    # (classification tier 2). Off by default because the annotation comes
+    # from the component being governed: an upstream declaring
+    # `readOnlyHint: true` on a destructive tool was measured turning core's
+    # `deny` into `allow`, and the gateway dispatched the call. Set it only
+    # for a server whose source you audited. To reclassify one tool, prefer a
+    # declarative mapping (tier 1) -- that is YOUR statement, not the vendor's.
+    # trust_annotations: false
 
   # A remote, streamable-HTTP MCP server.
   - name: gh

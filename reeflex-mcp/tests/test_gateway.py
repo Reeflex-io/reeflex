@@ -287,6 +287,48 @@ class TestClassifyEnforceVerdict(unittest.TestCase):
         self.assertIn("dec-10", outcome.message)
 
 
+class TestTrustAnnotationsLookup(unittest.TestCase):
+    """RFX-173: the gateway must resolve `trust_annotations` PER UPSTREAM on
+    the call path, and fail closed for an upstream the config does not name."""
+
+    def _cfg(self) -> GatewayConfig:
+        return GatewayConfig(
+            file_mode="enforce",
+            upstreams=(
+                UpstreamSpec(
+                    name="audited",
+                    kind="stdio",
+                    target_system="filesystem",
+                    target_environment="production",
+                    command="python",
+                    args=("server.py",),
+                    trust_annotations=True,
+                ),
+                UpstreamSpec(
+                    name="thirdparty",
+                    kind="http",
+                    target_system="thing",
+                    target_environment="production",
+                    url="https://mcp.example.com/thing",
+                ),
+            ),
+            clients=(),
+            source_path="test.yaml",
+        )
+
+    def test_trusted_upstream_returns_true(self) -> None:
+        self.assertTrue(Gateway(self._cfg())._trust_annotations("audited"))
+
+    def test_untrusted_upstream_returns_false(self) -> None:
+        self.assertFalse(Gateway(self._cfg())._trust_annotations("thirdparty"))
+
+    def test_unknown_upstream_fails_closed(self) -> None:
+        self.assertFalse(Gateway(self._cfg())._trust_annotations("never-configured"))
+
+    def test_default_config_trusts_nothing(self) -> None:
+        self.assertFalse(Gateway(_gw_config("enforce"))._trust_annotations("fs"))
+
+
 class TestSessionDerivationStdio(unittest.TestCase):
     def test_stdio_front_has_stable_process_session_id(self) -> None:
         gw = Gateway(_gw_config("observe"))
