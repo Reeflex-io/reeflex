@@ -108,16 +108,31 @@ class Outcome:
     """
 
     __slots__ = ("allowed", "refusal", "verdict", "hold_id",
-                 "released_after_approval", "ledger")
+                 "released_after_approval", "ledger", "hold_announced",
+                 "hold_decision", "parent_decision_id")
 
     def __init__(self, allowed, refusal=None, verdict=None, hold_id=None,
-                 released_after_approval=False, ledger=None):
+                 released_after_approval=False, ledger=None,
+                 hold_announced=None, hold_decision=None,
+                 parent_decision_id=None):
         self.allowed = allowed
         self.refusal = refusal
         self.verdict = verdict
         self.hold_id = hold_id
         self.released_after_approval = released_after_approval
         self.ledger = ledger
+        # None when no hold was raised; otherwise one of evidence.ANNOUNCE_*.
+        # Recorded because "a human was asked" and "we could not reach the
+        # inbox to ask" must not read the same in a report.
+        self.hold_announced = hold_announced
+        # WHO decided the hold, read off core's own record: the Article 14
+        # fact. None when no hold was raised, when nobody decided, or when the
+        # record could not be read -- and `None` never reads as "no human
+        # decided", because the wire simply omits the fields, which is what §4
+        # already means by absent.
+        self.hold_decision = hold_decision
+        # The decision that RAISED the hold, for the §6 chain.
+        self.parent_decision_id = parent_decision_id
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return ("Outcome(allowed=%r, error=%r, hold_id=%r)"
@@ -200,7 +215,7 @@ def rule_one_call(call, *, session_id: str, model: str,
             "Reeflex: could not build an action envelope for this tool call, "
             "so it was not ruled on and is refused: %s" % _short(exc)))
 
-    outcome = _decide_and_enforce(call, env, hold_wait)
+    outcome = _decide_and_enforce(call, env, hold_wait, tenant)
     # The ledger is written from the DECIDED outcome, so the recorded
     # `enforcement_stage` is what the caller actually got -- not what the
     # verdict said before the hold loop, the resubmission and the fail-closed
@@ -218,6 +233,9 @@ def rule_one_call(call, *, session_id: str, model: str,
             hold_id=outcome.hold_id,
             released_after_approval=outcome.released_after_approval,
             refusal=outcome.refusal,
+            hold_announced=outcome.hold_announced,
+            hold_decision=outcome.hold_decision,
+            parent_decision_id=outcome.parent_decision_id,
         )
     except Exception:
         # A ledger we could not build must not change a decision already made.
@@ -226,7 +244,8 @@ def rule_one_call(call, *, session_id: str, model: str,
     return outcome
 
 
-def _decide_and_enforce(call, env: dict, hold_wait: Optional[float]) -> Outcome:
+def _decide_and_enforce(call, env: dict, hold_wait: Optional[float],
+                        tenant=None) -> Outcome:
     """Decide one built envelope and apply the verdict.  Never raises.
 
     Split out of `rule_one_call` so the decision paths stay byte-identical
@@ -257,6 +276,23 @@ def _decide_and_enforce(call, env: dict, hold_wait: Optional[float]) -> Outcome:
             "hold id, so no approval can be recorded against it -- refused. "
             + verdict.reason), verdict=verdict)
 
+    # ASK THE HUMAN BEFORE WAITING FOR THE ANSWER.
+    #
+    # Core raising a hold means "a human decides".  Core is where the hold
+    # LIVES; it is not where a human looks.  So unless the hold reaches an
+    # approval inbox, the wait below is a wait for somebody who was never told,
+    # and the honest outcome of the whole request is a timeout that reads like
+    # a human declining to answer.
+    #
+    # This is the ONLY network call this package makes before enforcement, and
+    # it is guarded accordingly: `announce_hold()` never raises, never denies,
+    # and returns a state that goes on the ledger line.  With the push
+    # disabled -- the default -- it is a dictionary lookup and the behaviour is
+    # byte-identical to the version of this file that had no announcement.
+    announced, announce_detail = _evidence.announce_hold(
+        envelope=env, verdict=verdict,
+        tenant=_tenancy.UNSCOPED if tenant is None else tenant)
+
     status, err = _core.await_hold(hold_id, wait_seconds=hold_wait)
 
     if err is not None:
@@ -264,7 +300,23 @@ def _decide_and_enforce(call, env: dict, hold_wait: Optional[float]) -> Outcome:
             call, ERROR_HOLD_UNREADABLE, verdict.rule,
             "Reeflex: this action needs human approval and the hold could not "
             "be read, so it is refused: %s" % err, hold_id=hold_id),
-            verdict=verdict, hold_id=hold_id)
+            verdict=verdict, hold_id=hold_id, hold_announced=announced)
+
+    # WHO DECIDED IT, read once, for every status a human could have produced.
+    #
+    # Not only on approval: a REJECTION is human oversight too, and Article 14
+    # is about oversight being exercised, not about it saying yes. A report
+    # that recorded only approvals would make "a person looked at a production
+    # DROP TABLE and said no" invisible -- the single most valuable row in the
+    # whole trail.
+    #
+    # One extra GET, on a path that has already polled N times. A failure here
+    # is recorded as unknown and never blocks or changes the outcome: the
+    # approval is core's to honour either way, and an evidence gap must not
+    # become a governance outage.
+    decision = None
+    if status in ("approved", "rejected", "expired", "consumed"):
+        decision, _decision_err = _core.hold_decision(hold_id)
 
     if status == "pending":
         return Outcome(False, refusal(
@@ -272,22 +324,27 @@ def _decide_and_enforce(call, env: dict, hold_wait: Optional[float]) -> Outcome:
             "Reeflex: this action needs human approval. No decision arrived "
             "within the gateway's wait window, so the call is refused for now. "
             "The hold is still open -- retry after a human resolves it. "
+            + _announce_note(announced, announce_detail)
             + verdict.reason, hold_id=hold_id),
-            verdict=verdict, hold_id=hold_id)
+            verdict=verdict, hold_id=hold_id, hold_announced=announced)
 
     if status == "rejected":
         return Outcome(False, refusal(
             call, ERROR_REJECTED, verdict.rule,
             "Reeflex: a human reviewed this action and rejected it. "
             + verdict.reason, hold_id=hold_id),
-            verdict=verdict, hold_id=hold_id)
+            verdict=verdict, hold_id=hold_id, hold_announced=announced,
+            hold_decision=decision,
+            parent_decision_id=verdict.decision_id)
 
     if status in ("expired", "consumed"):
         return Outcome(False, refusal(
             call, ERROR_HOLD_EXPIRED, verdict.rule,
             "Reeflex: the approval hold for this action is %s, so the call is "
             "refused. " % status + verdict.reason, hold_id=hold_id),
-            verdict=verdict, hold_id=hold_id)
+            verdict=verdict, hold_id=hold_id, hold_announced=announced,
+            hold_decision=decision,
+            parent_decision_id=verdict.decision_id)
 
     if status != "approved":
         # An unknown hold status is not an approval.
@@ -296,21 +353,57 @@ def _decide_and_enforce(call, env: dict, hold_wait: Optional[float]) -> Outcome:
             "Reeflex: the approval hold for this action reported an "
             "unrecognized status %r, which is not an approval -- refused. "
             % status + verdict.reason, hold_id=hold_id),
-            verdict=verdict, hold_id=hold_id)
+            verdict=verdict, hold_id=hold_id, hold_announced=announced,
+            hold_decision=decision,
+            parent_decision_id=verdict.decision_id)
 
     # Approved by a human.  Core, not the hold status, releases the call.
+    # `decision` (who approved it) was already read above, for every terminal
+    # status, so this path adds no request of its own.
     approver = os.environ.get("REEFLEX_LITELLM_APPROVER") or None
     resubmission = _envelope.with_approval(env, hold_id, approver=approver)
     second = _core.resubmit_with_approval(resubmission)
+    # `parent_decision_id` is the decision that RAISED the hold, not the
+    # resubmission -- §4/§6 use it to stitch decision -> hold -> approval ->
+    # re-decision into one navigable chain, and a report that pointed it at
+    # the resubmission would make every chain a self-loop.
+    common = dict(hold_id=hold_id, hold_announced=announced,
+                  hold_decision=decision,
+                  parent_decision_id=verdict.decision_id)
     if second.kind == "allow":
-        return Outcome(True, verdict=second, hold_id=hold_id,
-                       released_after_approval=True)
+        return Outcome(True, verdict=second, released_after_approval=True,
+                       **common)
     return Outcome(False, refusal(
         call, ERROR_DENIED if second.core_reachable else ERROR_UNAVAILABLE,
         second.rule,
         "Reeflex: a human approved this action but core refused the "
         "resubmission, so it is not released. " + second.reason,
-        hold_id=hold_id), verdict=second, hold_id=hold_id)
+        hold_id=hold_id), verdict=second, **common)
+
+
+def _announce_note(announced: str, detail: str) -> str:
+    """One clause telling the caller whether anyone was actually asked.
+
+    A timeout with the inbox unreachable and a timeout with a human who simply
+    has not answered yet call for different next steps from whoever reads the
+    refusal -- fix the wiring, or wait.  The refusal says which.  It names the
+    failure class, never the URL and never a credential.
+    """
+    if announced == _evidence.ANNOUNCE_SENT:
+        return "The hold was delivered to the approval inbox. "
+    if announced == _evidence.ANNOUNCE_FAILED:
+        return ("NOTE: the hold could NOT be delivered to the approval inbox "
+                "(%s), so nobody may have been asked -- this is a gateway "
+                "configuration problem, not a human declining. "
+                % _short_reason(detail))
+    return ("NOTE: no approval inbox is configured on this gateway, so the "
+            "hold exists in reeflex-core and was not delivered anywhere a "
+            "human is watching. ")
+
+
+def _short_reason(detail: str) -> str:
+    d = (detail or "").strip() or "no detail"
+    return d if len(d) <= 120 else d[:120] + "...[truncated]"
 
 
 def _short(exc: Exception) -> str:

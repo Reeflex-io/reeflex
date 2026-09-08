@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "_comment": [
+    "The tenancy map for the demo. ONE department, because one is enough to",
+    "show that the org is NAMED rather than defaulted into -- reeflex-litellm",
+    "has no default org and refuses an unmapped caller before it calls core.",
+    "",
+    "Credentials are BY REFERENCE ONLY: this file names environment VARIABLE",
+    "NAMES, never values. A map carrying a token or a signing key value is a",
+    "load error on purpose -- it is a file operators copy between hosts and",
+    "paste into tickets. run.sh generates the values into the environment and",
+    "they never touch this file or any transcript.",
+    "",
+    "`environment: production` is what makes the demo's action a PRODUCTION",
+    "action in the envelope. It is declared by the operator here, not sniffed:",
+    "the axes are computed in the adapter process (SPEC 6) and core observes",
+    "none of them.",
+    "",
+    "`on_prem_hosts` lists the mock model's own host, so `gateway_routing.",
+    "placement` reads `on_prem` -- also a declaration. An undeclared host stays",
+    "`undeclared`; it is never guessed into `cloud`."
+  ],
+  "tenants": {
+    "acme-payments": {
+      "org": "acme-payments",
+      "label": "ACME Payments",
+      "principal": "payments-oncall@acme.example",
+      "environment": "production",
+      "on_prem_hosts": ["127.0.0.1", "localhost"],
+      "evidence": {
+        "ingest_url": "https://app.reeflex.io/api/v1/evidence",
+        "holds_url": "https://app.reeflex.io/api/v1/holds",
+        "gate_token_env": "RFX_DEMO_GATE_TOKEN",
+        "signing_key_env": "RFX_DEMO_EVIDENCE_KEY"
+      }
+    }
+  },
+  "_bind_comment": [
+    "The demo binds the proxy's MASTER key. LiteLLM replaces the master key's",
+    "value with the constant alias `litellm_proxy_master_key` before the hook",
+    "sees it, so that literal is what a `key_hash` binding matches -- and no",
+    "key material is ever in this file.",
+    "",
+    "Virtual keys with a `key_alias`, and teams with a `team_id`, are the",
+    "shape a real multi-department deployment uses, and both are shown below",
+    "commented into the file for copy/paste. They are NOT used by run.sh",
+    "because litellm needs a Postgres to issue a virtual key at all, and a",
+    "demo that needs a database is not a five-minute demo. What tenancy does",
+    "with two departments is measured in reeflex-litellm's own suite",
+    "(tests/test_tenancy_isolation.py), not here."
+  ],
+  "bind": {
+    "key_hash": {
+      "litellm_proxy_master_key": "acme-payments"
+    },
+    "key_alias": {},
+    "team_id": {}
+  }
+}

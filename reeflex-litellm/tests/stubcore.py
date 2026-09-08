@@ -56,6 +56,11 @@ class StubCore:
                                      "obligations": [],
                                      "decision_id": DECISION_ID})
         self.hold_status = "pending"
+        # WHO decided the hold, in core's frozen `"{type}:{id}"` shape, plus
+        # core's own verification flag. `None` = core recorded no decider,
+        # which is what a pending hold looks like.
+        self.hold_decided_by = None
+        self.hold_decided_by_verified = False
         self.hold_http = None
         self.requests = []
         self.auth_seen = []
@@ -111,6 +116,9 @@ class StubCore:
                             status, payload = 200, {
                                 "id": self.path.rsplit("/", 1)[-1],
                                 "status": stub.hold_status,
+                                "decided_by": stub.hold_decided_by,
+                                "decided_by_verified":
+                                    stub.hold_decided_by_verified,
                             }
                     else:
                         status, payload = 404, {"error": "not_found"}
@@ -143,6 +151,12 @@ class StubCore:
         self.decide_default = (200, {"decision": "deny", "reason": reason,
                                      "rule": rule, "obligations": [],
                                      "decision_id": decision_id or DECISION_ID})
+
+    def approve(self, who="human:alice.approver@acme.example", verified=True):
+        """A human decided it -- what core's record looks like afterwards."""
+        self.hold_status = "approved"
+        self.hold_decided_by = who
+        self.hold_decided_by_verified = verified
 
     def answer_hold(self, hold_id="hold-1",
                     rule="reeflex.policy/irreversible_broad_prod",

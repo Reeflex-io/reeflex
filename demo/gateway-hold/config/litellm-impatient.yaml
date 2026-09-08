@@ -1,0 +1,42 @@
+# The gateway that does NOT wait for a human.
+#
+#   reeflex_hold_wait: 2   -- withhold the response for at most two seconds,
+#                             then refuse it and NAME the still-open hold so
+#                             the caller can come back.
+#
+# This is the arm that produces a HOLD the caller can read: a structured
+# refusal with `error: reeflex_hold_timeout`, the `hold_id`, and
+# `stage: refused_at_gateway`, with the tool call REMOVED from the response.
+#
+# The other arm (`litellm-patient.yaml`, wait 180s) is the same seat with a
+# window a human can actually answer inside. The wait is the only difference
+# between the two files, and it is the operator's choice, not a property of
+# the seat.
+model_list:
+  - model_name: mock-tools
+    litellm_params:
+      model: openai/mock-tools
+      api_base: http://127.0.0.1:18702/v1
+      api_key: sk-mock-not-a-real-key
+
+guardrails:
+  - guardrail_name: "reeflex-action-gate"
+    litellm_params:
+      guardrail: reeflex_litellm.guardrail.ReeflexActionGuardrail
+      mode: post_call
+      default_on: true
+      reeflex_hold_wait: 2
+      reeflex_session_header: x-reeflex-session
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+
+general_settings:
+  # A master key, deliberately. The tenancy map binds this gateway's caller by
+  # `key_hash`, and litellm replaces the master key's value with the constant
+  # alias `litellm_proxy_master_key` before the hook sees it -- so the binding
+  # matches a literal, and no key material is in any config file the demo
+  # ships. run.sh generates the value fresh on every run.
+  master_key: os.environ/LITELLM_MASTER_KEY
+  disable_spend_logs: true

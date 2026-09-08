@@ -129,6 +129,39 @@ WIRE_TOP_LEVEL_FIELDS = frozenset({
     "action", "magnitude", "agent_id", "traceparent", "hold", "sig_alg",
 })
 WIRE_ACTION_FIELDS = frozenset({"verb", "target_system", "target_environment"})
+# §4's `hold` block. All four are DEFINED BY §4 -- filling them is not a spec
+# change, it is sending fields the frozen contract already reserves and the
+# ingest already maps onto columns (`parent_decision_id`, `resolution`,
+# `decided_by_type`, `decided_by_id` in reeflex-app's evidence table).
+WIRE_HOLD_FIELDS = frozenset({"hold_id", "parent_decision_id", "resolution",
+                              "decided_by"})
+WIRE_DECIDED_BY_FIELDS = frozenset({"type", "id"})
+
+# The PENDING-HOLD wire, `POST /api/v1/holds` (CONTRACT holds-v1), which is a
+# DIFFERENT closed schema from §4 and a different route.  Same discipline: an
+# allowlist, an explicit builder, and a re-check before the request.
+#
+# WHY THIS ROUTE EXISTS SEPARATELY FROM THE EVIDENCE ROUTE, measured 2026-09-08
+# against the deployed `reeflex-app:main-dbfe954`: the evidence ingest stores
+# `hold.hold_id` ON the evidence row and creates NO `pending_holds` row --
+# `PendingHold(...)` is constructed in exactly one place in that codebase, the
+# `/api/v1/holds` handler.  No `pending_holds` row means no hold in the inbox
+# and no Approve control.  So an adapter that pushes only evidence has recorded
+# that a human was asked and has not actually asked one.
+HOLD_TOP_LEVEL_FIELDS = frozenset({
+    "hold_id", "decision_id", "verb", "target_system", "target_environment",
+    "magnitude_count", "rule", "agent_id", "envelope_hash", "reason",
+    "created_ts", "expires_ts", "sig_alg",
+})
+HOLD_REQUIRED_FIELDS = ("hold_id", "decision_id", "verb", "target_environment",
+                        "rule", "envelope_hash", "created_ts")
+HOLDS_PUSH_ENV = "REEFLEX_LITELLM_HOLDS_PUSH"
+
+# §4's enums for the hold block. Anything else is omitted rather than sent:
+# the ingest validates against a closed schema and an unknown value rejects
+# the WHOLE batch, taking valid evidence down with the invalid record.
+HOLD_RESOLUTIONS = frozenset({"approved", "rejected", "expired"})
+DECIDED_BY_TYPES = frozenset({"human", "agent"})
 
 # §4's projection for the integrity anchor, matching reeflex-core's
 # `holds.canonical_hash()` (`_HASH_ALLOWLIST` in reeflex-core/app/holds.py).
@@ -180,7 +213,10 @@ def ledger_record(*, envelope: dict, verdict, outcome_allowed: bool,
                   gateway_routing: dict, call, tenant, hold_id=None,
                   released_after_approval: bool = False,
                   refusal: Optional[dict] = None,
-                  occurred_ts: Optional[str] = None) -> dict:
+                  occurred_ts: Optional[str] = None,
+                  hold_announced: Optional[str] = None,
+                  hold_decision: Optional[dict] = None,
+                  parent_decision_id: Optional[str] = None) -> dict:
     """One line of the adapter's own append-only decision ledger.
 
     A SUPERSET of the wire record: it carries everything the wire cannot
@@ -225,6 +261,19 @@ def ledger_record(*, envelope: dict, verdict, outcome_allowed: bool,
         "normalization": getattr(call, "mapping_source", None),
         "tenant_org": getattr(tenant, "org", None),
         "hold_id": hold_id,
+        # WAS A HUMAN ACTUALLY ASKED?  One of the ANNOUNCE_* states, or None
+        # when no hold was raised at all.  A report that counts holds as
+        # "human oversight exercised" needs this: `not_configured` and
+        # `failed` are holds nobody was told about, and reading them as
+        # oversight would be the Art.14 overclaim in miniature.
+        "hold_announced": hold_announced,
+        # WHO decided it, from core's own hold record:
+        # {"resolution", "decided_by": {"type","id"}, "verified"}. None when
+        # no hold was raised, nobody decided, or the record was unreadable.
+        "hold_decision": hold_decision,
+        # The decision that RAISED the hold (§6's chain key), so a report can
+        # walk decision -> hold -> approval -> re-decision.
+        "parent_decision_id": parent_decision_id,
         "released_after_approval": bool(released_after_approval),
         "refusal_error": (refusal or {}).get("error"),
         "core_reachable": bool(getattr(verdict, "core_reachable", True)),
@@ -315,7 +364,32 @@ def wire_record(ledger: dict) -> dict:
         wire["traceparent"] = ledger["traceparent"]
 
     if ledger.get("hold_id"):
-        wire["hold"] = {"hold_id": ledger["hold_id"]}
+        # THE ARTICLE 14 BLOCK, and the reason it is not just `hold_id`.
+        #
+        # Measured on the live app, 2026-09-08: with `hold: {hold_id}` alone,
+        # two holds APPROVED BY A HUMAN IN THE UI produced an Attest report
+        # reading `production_holds: 7, of_those_a_human_decided: 0` and
+        # `decided_by_id: null` on every evidence-chain row. The resolution
+        # existed in the application's own tables; the report is computed from
+        # this feed, so it was right about its inputs and wrong about the
+        # world. §4 reserves all four of these fields; none of them is a spec
+        # change.
+        hold = {"hold_id": ledger["hold_id"]}
+        if ledger.get("parent_decision_id"):
+            hold["parent_decision_id"] = ledger["parent_decision_id"]
+        decision = ledger.get("hold_decision") or {}
+        resolution = decision.get("resolution")
+        if resolution in HOLD_RESOLUTIONS:
+            hold["resolution"] = resolution
+        by = decision.get("decided_by") or {}
+        ptype, pid = by.get("type"), by.get("id")
+        # §4 constrains `decided_by.type` to an ENUM. An approver core recorded
+        # under some other type is dropped rather than sent, because an unknown
+        # value 422s the whole batch -- and dropped is honest: §4 reads an
+        # absent field as "not stated", never as "no human".
+        if ptype in DECIDED_BY_TYPES and isinstance(pid, str) and pid.strip():
+            hold["decided_by"] = {"type": ptype, "id": pid.strip()}
+        wire["hold"] = hold
 
     assert_wire_is_spec_clean(wire)
     return wire
@@ -343,6 +417,222 @@ def assert_wire_is_spec_clean(wire: dict) -> None:
         raise EvidenceConfigError(
             "evidence record `action` carries field(s) §4 does not define: %s"
             % ", ".join(sorted(unknown_action)))
+    hold = wire.get("hold") or {}
+    unknown_hold = set(hold) - WIRE_HOLD_FIELDS
+    if unknown_hold:
+        raise EvidenceConfigError(
+            "evidence record `hold` carries field(s) §4 does not define: %s"
+            % ", ".join(sorted(unknown_hold)))
+    unknown_by = set(hold.get("decided_by") or {}) - WIRE_DECIDED_BY_FIELDS
+    if unknown_by:
+        raise EvidenceConfigError(
+            "evidence record `hold.decided_by` carries field(s) §4 does not "
+            "define: %s" % ", ".join(sorted(unknown_by)))
+    resolution = hold.get("resolution")
+    if resolution is not None and resolution not in HOLD_RESOLUTIONS:
+        raise EvidenceConfigError(
+            "evidence record `hold.resolution` is %r; §4's enum is %s"
+            % (resolution, sorted(HOLD_RESOLUTIONS)))
+    ptype = (hold.get("decided_by") or {}).get("type")
+    if ptype is not None and ptype not in DECIDED_BY_TYPES:
+        raise EvidenceConfigError(
+            "evidence record `hold.decided_by.type` is %r; §4's enum is %s"
+            % (ptype, sorted(DECIDED_BY_TYPES)))
+
+
+# ---------------------------------------------------------------------------
+# The PENDING-HOLD wire -- asking the human, not merely recording that we did
+# ---------------------------------------------------------------------------
+
+def hold_record(*, hold_id: str, decision_id: str, verb: str,
+                target_environment: str, rule: str, envelope_hash: str,
+                created_ts: str, target_system=None, magnitude_count=None,
+                agent_id=None, reason=None, expires_ts=None) -> dict:
+    """Build one `POST /api/v1/holds` record (CONTRACT holds-v1).
+
+    Keyword-only and built by NAMING each field, for the same reason
+    `wire_record()` is: the server's allowlist is closed (`unknown field(s)` ->
+    422 on the WHOLE BATCH), so a field this adapter grows later must not be
+    able to reach the wire because some dict happened to carry it.
+
+    `reason` is the one field worth a note.  It is the sentence a human reads
+    in the inbox next to an Approve button, so it carries core's decision
+    reason -- which for this seat's holds names the rule and, for a mapped
+    shell tool, the classifier's read of the command.  It does NOT carry the
+    tool arguments, the prompt or the completion: this seat never sends prose,
+    and `context.command_preview` stays in the envelope core holds, which is
+    the record an operator reads through core, not through this wire.
+    """
+    rec = {
+        "hold_id": hold_id,
+        "decision_id": decision_id,
+        "verb": verb,
+        "target_environment": target_environment,
+        "rule": rule,
+        "envelope_hash": envelope_hash,
+        "created_ts": created_ts,
+        "sig_alg": SIG_ALG_V1,
+    }
+    missing = [f for f in HOLD_REQUIRED_FIELDS
+               if not isinstance(rec.get(f), str) or not rec[f]]
+    if missing:
+        raise EvidenceConfigError(
+            "cannot build a pending-hold record, required field(s) missing or "
+            "not a non-empty string: %s" % ", ".join(missing))
+    if target_system:
+        rec["target_system"] = target_system
+    if isinstance(magnitude_count, int) and not isinstance(magnitude_count, bool) \
+            and magnitude_count >= 0:
+        rec["magnitude_count"] = magnitude_count
+    if agent_id:
+        rec["agent_id"] = agent_id
+    if reason:
+        rec["reason"] = reason
+    # OPTIONAL AND STAYS OPTIONAL.  `expires_ts` is core's own deadline for
+    # this hold, read off the /v1/decide response; a core that does not emit
+    # one leaves it absent rather than having this adapter invent a deadline
+    # from a local TTL.  The app leaves a hold with no deadline open (its
+    # `hold_expiry.py` says so in as many words), which is the correct
+    # handling of "deadline unknown" -- but it does mean an older core buys an
+    # unbounded inbox row, and that is worth knowing rather than papering over.
+    if expires_ts:
+        rec["expires_ts"] = expires_ts
+    assert_hold_is_spec_clean(rec)
+    return rec
+
+
+def hold_record_from_ledger(ledger: dict, *, hold_id: str,
+                            expires_ts=None) -> dict:
+    """The pending-hold record for a ledger line that raised a hold."""
+    action = ledger.get("action") or {}
+    magnitude = ledger.get("magnitude") or {}
+    return hold_record(
+        hold_id=hold_id,
+        decision_id=ledger.get("decision_id") or "",
+        verb=action.get("verb") or "",
+        target_environment=action.get("target_environment") or "",
+        rule=ledger.get("rule") or "",
+        envelope_hash=ledger.get("envelope_hash") or "",
+        created_ts=ledger.get("occurred_ts") or _rfc3339_now(),
+        target_system=action.get("target_system") or action.get("namespace"),
+        magnitude_count=magnitude.get("count")
+        if isinstance(magnitude, dict) else None,
+        agent_id=ledger.get("agent_id"),
+        reason=ledger.get("reason"),
+        expires_ts=expires_ts,
+    )
+
+
+def assert_hold_is_spec_clean(rec: dict) -> None:
+    """Re-check a pending-hold record against holds-v1's closed allowlist.
+
+    Same one-hop-earlier check as `assert_wire_is_spec_clean()`, and it matters
+    more here: the holds route rejects the WHOLE BATCH on the first bad record
+    ("whole-batch reject on the first bad record" in the handler), so one
+    unknown key would drop every other hold in the batch -- i.e. it would take
+    other actions' holds out of a human's inbox.
+    """
+    unknown = set(rec) - HOLD_TOP_LEVEL_FIELDS
+    if unknown:
+        raise EvidenceConfigError(
+            "pending-hold record carries field(s) CONTRACT holds-v1 does not "
+            "define: %s. The route's schema is closed (unknown key -> 422 for "
+            "the whole batch); the field belongs in the adapter ledger."
+            % ", ".join(sorted(unknown)))
+
+
+def holds_push_enabled() -> bool:
+    """Separate switch from the evidence push, deliberately.
+
+    Pushing a pending hold is not a recording action -- it makes a human's
+    inbox ring, on a route that writes a row a person is then expected to
+    answer.  An operator who wants the decision RECORD without wiring their
+    holds inbox to this gateway must be able to have exactly that, and an
+    operator who turns the holds push on must have said so about the holds
+    push.  Defaults OFF for the same reason: a package upgrade must not start
+    writing into somebody's approval queue.
+    """
+    return (os.environ.get(HOLDS_PUSH_ENV, "") or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def push_holds(records: list, tenant) -> PushResult:
+    """POST pending-hold records to the tenant's holds route.  NEVER raises.
+
+    Separate URL from the evidence ingest, resolved from the tenancy map's
+    `evidence.holds_url`; the gate TOKEN and signing key are the same ones,
+    because §3 resolves `(gate_id, org_id)` from that token and both routes
+    authenticate identically.  A tenant with no `holds_url` cannot push holds
+    and gets a named configuration error -- never a silent skip, because a
+    silent skip here means a human is never asked.
+    """
+    return _push_signed(records, tenant, url_key="holds_url",
+                        validator=assert_hold_is_spec_clean,
+                        what="pending-hold")
+
+
+#: What `announce_hold()` reports back, for the ledger line.
+ANNOUNCE_OFF = "not_configured"
+ANNOUNCE_SENT = "sent"
+ANNOUNCE_FAILED = "failed"
+
+
+def announce_hold(*, envelope: dict, verdict, tenant) -> tuple:
+    """Put a hold core has just raised into the tenant's approval inbox.
+
+    Returns `(state, detail)` where state is one of the ANNOUNCE_* constants.
+    NEVER raises.
+
+    WHY THIS IS CALLED WHERE IT IS -- and it is the whole point of the function.
+    Everything else this module writes is recorded AFTER enforcement, on
+    purpose, so that an evidence outage can never change or delay a verdict.  A
+    pending hold is the one exception, and the reason is arithmetic: the seat
+    then blocks for up to `reeflex_hold_wait` seconds waiting for a human, so a
+    row pushed after the response is final reaches the inbox AFTER the window
+    it was supposed to be answered in.  Recorded-after would mean asking
+    somebody a question and hanging up before they could hear it.
+
+    So this runs before the wait, and it pays for that with two properties it
+    must have:
+
+      * it never raises and never denies -- a holds-inbox outage leaves the
+        seat behaving exactly as it did before this function existed (the hold
+        is still open in core, still resolvable by any other route), and
+      * its outcome is RECORDED on the ledger line (`hold_announced`), because
+        "a human was asked" and "we tried to ask a human and the inbox was
+        unreachable" are different facts and a report must not read the second
+        as the first.
+    """
+    if not holds_push_enabled():
+        return ANNOUNCE_OFF, "%s is not enabled" % HOLDS_PUSH_ENV
+    hold_id = getattr(verdict, "hold_id", None)
+    if not hold_id:
+        return ANNOUNCE_FAILED, "core raised a hold with no hold_id"
+    try:
+        action = envelope.get("action") or {}
+        target = envelope.get("target") or {}
+        magnitude = envelope.get("magnitude") or {}
+        agent = envelope.get("agent") or {}
+        rec = hold_record(
+            hold_id=hold_id,
+            decision_id=getattr(verdict, "decision_id", None) or "",
+            verb=action.get("verb") or "",
+            target_environment=target.get("environment") or "",
+            rule=getattr(verdict, "rule", None) or "",
+            envelope_hash=envelope_hash(envelope),
+            created_ts=_rfc3339_now(),
+            target_system=action.get("namespace"),
+            magnitude_count=magnitude.get("count"),
+            agent_id=agent.get("id"),
+            reason=getattr(verdict, "reason", None),
+            expires_ts=getattr(verdict, "expires_ts", None),
+        )
+    except Exception as exc:
+        return ANNOUNCE_FAILED, "%s: %s" % (type(exc).__name__, exc)
+    result = push_holds([rec], tenant)
+    if result.ok:
+        return ANNOUNCE_SENT, "HTTP %s" % result.status
+    return ANNOUNCE_FAILED, result.error or "push failed"
 
 
 # ---------------------------------------------------------------------------
@@ -385,21 +675,29 @@ class GateCredentials:
                 "signing_key=<redacted>)" % (self.org, self.ingest_url))
 
 
-def credentials_for(tenant) -> GateCredentials:
+def credentials_for(tenant, url_key: str = "ingest_url") -> GateCredentials:
     """Resolve a tenant's gate credentials.  Raises EvidenceConfigError.
 
     The error names the env var that is missing -- never its value, and never
     a prefix of its value.
+
+    `url_key` selects WHICH route's URL to resolve -- `ingest_url` for §4
+    evidence, `holds_url` for the pending-hold route.  The token and the
+    signing key are shared between them on purpose: §3 resolves
+    `(gate_id, org_id)` from the gate token, so one gate is one org on every
+    route it serves, and giving the two routes separate credentials would
+    invite a deployment where a department's holds and its evidence land in
+    two different orgs.
     """
     spec = dict(getattr(tenant, "evidence", None) or {})
-    url = (spec.get("ingest_url") or "").strip()
+    url = (spec.get(url_key) or "").strip()
     token_env = (spec.get("gate_token_env") or "").strip()
     key_env = (spec.get("signing_key_env") or "").strip()
     org = getattr(tenant, "org", None)
 
     missing = []
     if not url:
-        missing.append("evidence.ingest_url")
+        missing.append("evidence.%s" % url_key)
     if not token_env:
         missing.append("evidence.gate_token_env")
     if not key_env:
@@ -469,10 +767,24 @@ def push(records: list, tenant) -> PushResult:
     outage deny traffic that core allowed.  So: never raises, and the failure is
     returned.
     """
+    return _push_signed(records, tenant, url_key="ingest_url",
+                        validator=assert_wire_is_spec_clean,
+                        what="evidence")
+
+
+def _push_signed(records: list, tenant, *, url_key: str, validator,
+                 what: str) -> PushResult:
+    """One §5-signed POST of a record batch.  NEVER raises.
+
+    Shared by the evidence push and the pending-hold push so the signing, the
+    ±300s timestamp window, the header shape and the never-raise posture cannot
+    drift between the two routes -- which is exactly the class of bug that once
+    shipped a DIR-2 response wrapped in an object the other side rejected.
+    """
     if not records:
         return PushResult(True, records=0, org=getattr(tenant, "org", None))
     try:
-        creds = credentials_for(tenant)
+        creds = credentials_for(tenant, url_key)
     except EvidenceConfigError as exc:
         return PushResult(False, error=str(exc),
                           org=getattr(tenant, "org", None),
@@ -480,7 +792,7 @@ def push(records: list, tenant) -> PushResult:
 
     try:
         for r in records:
-            assert_wire_is_spec_clean(r)
+            validator(r)
         body = canonical_body(records)
         ts = int(time.time())
         signature = sign(body, ts, creds.signing_key)
@@ -504,10 +816,12 @@ def push(records: list, tenant) -> PushResult:
         except Exception:
             pass
         return PushResult(False, status=exc.code, body=raw,
-                          error="HTTP %s" % exc.code, org=creds.org,
-                          records=len(records))
+                          error="%s push: HTTP %s" % (what, exc.code),
+                          org=creds.org, records=len(records))
     except Exception as exc:
-        return PushResult(False, error="%s: %s" % (type(exc).__name__, exc),
+        return PushResult(False,
+                          error="%s push: %s: %s" % (what, type(exc).__name__,
+                                                     exc),
                           org=creds.org, records=len(records))
 
 

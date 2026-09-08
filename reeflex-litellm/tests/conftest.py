@@ -28,6 +28,10 @@ _ENV_KEYS = (
     "REEFLEX_LITELLM_ONPREM_HOSTS", "REEFLEX_LITELLM_CLOUD_HOSTS",
     "REEFLEX_LITELLM_LEDGER_PATH", "REEFLEX_LITELLM_EVIDENCE_PUSH",
     "REEFLEX_LITELLM_EVIDENCE_TIMEOUT",
+    # The pending-hold push. In _ENV_KEYS for the same reason as the rest: it
+    # makes a network call on the DECISION path, so a value leaking in from the
+    # shell would change what other tests measure.
+    "REEFLEX_LITELLM_HOLDS_PUSH",
 )
 
 
