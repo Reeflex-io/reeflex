@@ -5,6 +5,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+### Added
+
+- **`reeflex-claude connect` — one pasted line installs the hook, asks one real question and reports the answer (RFX-224).** `reeflex-claude` **0.1.7 → 0.2.0**. The portal half (`/app/onboard`) lives in the private app repo; this is the client it hands out:
+
+  ```
+  pip install 'reeflex-claude>=0.2.0' && reeflex-claude connect \
+    --gate <gate-id> --token <rfx_reg_...> --portal https://app.reeflex.io
+  ```
+
+  Four steps and it stops: exchange the registration token, write **one** agent config, `POST /v1/decide` once, report the verdict. `--agent claude|opencode|litellm`, `--dry-run` to print every path it would write and exit without exchanging, writing, deciding or reporting.
+
+  **It does NOT fetch a document and execute it, and that is the feature.** The pattern this copies — *"fetch this URL and follow it"* — is the exact instruction shape Reeflex exists to put a gate in front of: an agent running unverified remote instructions with the customer's privileges. An onboarding that used it would contradict the product on its first screen. So the procedure is fixed in `reeflex_claude/connect.py`, published as **`docs/setup/v1/agent-setup.md`**, rendered in full by the portal beside the copy button, and pinned by SHA-256 in both repositories against one written-down constant (`connect.SETUP_DOC_SHA256`, asserted by `reeflex-claude/tests/test_connect.py`; the portal asserts the identical number against its byte-identical copy). Neither repo's CI can see the other, so a document that drifts turns **both** suites red naming the digest.
+
+  **No credential is written into any config file, on any of the three paths** — asserted per path, over the file's bytes. `reeflex-core`'s bearer is the operator's own `REEFLEX_AUTH_TOKEN`; `connect` reads `REEFLEX_CORE_TOKEN` from the environment if it is there, says so when it is not, and never invents one. A `rfx_gate_` or `rfx_ek_` value pasted into `--token` is refused **before any request is sent**, by name — forwarding the customer's long-lived credential to a server that will reject it anyway would still have put it somewhere new.
+
+  **The smoke call is a real decision, not a ping.** A benign read goes through this package's OWN `classify()` and `build_envelope()` — the path the hook uses — so a core pointed at the wrong policy fails here rather than on the customer's first real tool call. If core is unreachable, `connect` exits non-zero and **reports nothing**: a verdict we did not receive is not a verdict. The hook config is still written, and the message says why that is the safe direction (it fails closed until core answers).
+
+  **OpenCode is governed by the same adapter, not a second one.** `--agent opencode` writes `~/.config/opencode/plugin/reeflex.js` (~40 lines) whose `tool.execute.before` shells out to the published `reeflex-claude hook` binary and **throws** on anything other than `allow` — a throw from that handler aborts the tool call, which is OpenCode's analogue of `permissionDecision: "deny"`. Every failure path throws, including the plugin's own: hook missing, hook non-zero, unparseable output, and `ask` (nothing there can prompt a human, so an approval it cannot ask for is a refusal). It writes a file into the plugin *directory* and refuses to overwrite one it did not write. Verified against opencode **1.18.23**.
+
+  **`--agent litellm` says what is true about publication.** `reeflex-litellm` (this repo's `integrations/`) is on no package index, so the fragment names the `git+https://` install rather than printing a `pip install reeflex-litellm` that cannot resolve, and it writes to `~/.reeflex/litellm/reeflex.yaml` rather than editing a proxy's own `config.yaml`.
+
+  **Stated limit:** what the portal shows for this is the **agent's report**. The `/v1/decide` round trip is real, but the report of it travels bearer-over-TLS with no signature over the body (this package does not carry the portal's evidence-signing module), so it is not an evidence record and nothing that makes a compliance claim reads it. Signed decision records still come from the evidence connector. 25 new tests; suite **291 → 316**.
+
 ### Changed
 
 - **What a Reeflex release actually publishes, stated once — the release was right and its job name was not (RFX-246).** `Release v0.2.0` was green on a job named *"PyPI publish (reeflex-claude + reeflex-holds + reeflex-mcp)"* having uploaded **one** of those three. Read from that run's own transcript (run `34135622240`, 2026-09-07):
