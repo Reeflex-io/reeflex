@@ -340,23 +340,69 @@ def write_opencode_config(
 # paste -- it does NOT edit a running proxy's config.yaml, because that file is
 # the operator's and may be templated, mounted read-only or under version
 # control.
-_LITELLM_FRAGMENT = """# Reeflex governance callback for LiteLLM -- written by `reeflex-claude connect`.
-# Add the two keys below to your proxy's config.yaml (they are not merged for
-# you: that file is yours, and it may be templated or mounted read-only).
 #
-# The callback package `reeflex-litellm` is NOT on PyPI yet. Until it is,
-# install it from the public repository:
+# EVERY LINE IN IT IS PINNED BY tests/test_connect.py AGAINST THE PACKAGE IT
+# CONFIGURES, because the first version of this fragment was wrong in three
+# ways at once and nothing could see it: no test read it, `reeflex-litellm` is
+# a different distribution, and a fragment is inert until an operator starts a
+# proxy with it. Measured with litellm's OWN resolver (1.100.0,
+# `litellm.proxy.proxy_server.get_instance_fn`):
 #
-#     pip install 'git+https://github.com/Reeflex-io/reeflex@main#subdirectory=integrations/reeflex-litellm'
+#   reeflex_litellm.ReeflexGate                         -> AttributeError:
+#       module 'reeflex_litellm' has no attribute 'ReeflexGate'
+#   reeflex_litellm.guardrail.ReeflexActionGuardrail    -> the class
 #
-litellm_settings:
-  callbacks: ["reeflex_litellm.ReeflexGate"]
+# The three: (1) that class name does not exist in the package
+# (`__all__ = ["__version__"]`); (2) the seat is a GUARDRAIL under `guardrails:`
+# with `mode: post_call` -- what lets it read the tool calls a model proposed
+# and CHANGE the response -- not a `litellm_settings.callbacks` entry, which
+# only observes; (3) `REEFLEX_ENVIRONMENT` is read by nothing, the variable is
+# `REEFLEX_LITELLM_ENVIRONMENT`, so a staging gate was silently priced against
+# `production` (the default). Keep this fragment and
+# `reeflex-litellm/proxy/config.yaml` in step.
+_LITELLM_FRAGMENT = """# Reeflex governance seat for LiteLLM -- written by `reeflex-claude connect`.
+#
+# Add the `guardrails:` entry below to your proxy's config.yaml and set the
+# environment beside it. Nothing is merged for you: that file is yours, and it
+# may be templated, mounted read-only or under version control.
+#
+#     pip install 'reeflex-litellm[proxy]'
+#
+# The `proxy` extra is what pulls litellm itself. To run it from the source
+# tree instead of the index:
+#
+#     pip install 'git+https://github.com/Reeflex-io/reeflex@main#subdirectory=reeflex-litellm'
+#
+# IT IS A GUARDRAIL, NOT A CALLBACK. `mode: post_call` is what lets it read the
+# tool calls a model proposed and remove or withhold them; a
+# `litellm_settings.callbacks` entry only observes. The `guardrail:` value is a
+# dotted import path litellm resolves itself, so it must name the class exactly.
+guardrails:
+  - guardrail_name: "reeflex-action-gate"
+    litellm_params:
+      guardrail: reeflex_litellm.guardrail.ReeflexActionGuardrail
+      mode: post_call
+      default_on: true
+      # Seconds a response may be withheld while a hold waits for a human.
+      # 0 = do not wait: refuse now and name the hold so the caller can retry.
+      reeflex_hold_wait: 30
+      # The request header carrying the session R5's cumulative budget is
+      # charged against. Without it (or an OpenAI `user` field) the budget is
+      # scoped to ONE REQUEST.
+      reeflex_session_header: x-reeflex-session
 
 environment_variables:
   REEFLEX_CORE_URL: "%(core_url)s"
-  REEFLEX_ENVIRONMENT: "%(environment)s"
-  # Reeflex org/tenancy mapping is configured per proxy key -- see the
-  # integrations/reeflex-litellm README. This gate is %(gate_name)s.
+  REEFLEX_LITELLM_ENVIRONMENT: "%(environment)s"
+  # REQUIRED, and there is deliberately NO default org: each proxy key or team
+  # must be mapped to a Reeflex org, or every tool call is refused. Write the
+  # map, then validate it OFFLINE -- `reeflex-litellm tenancy` exits non-zero
+  # if it would not load, and you want that at deploy time rather than as an
+  # outage. An example ships at reeflex-litellm/examples/tenancy-map.example.json.
+  REEFLEX_LITELLM_TENANCY_MAP_FILE: "/etc/reeflex/tenancy.json"
+  # This gate is %(gate_name)s. No credential is written into this file: if
+  # your core requires a bearer, export REEFLEX_CORE_TOKEN in the proxy's own
+  # environment.
 """
 
 

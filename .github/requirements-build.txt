@@ -1,4 +1,4 @@
-# Pinned build front-end for release.yml.
+# Pinned build + dist-check toolchain for release.yml.
 #
 # WHY THIS FILE EXISTS. release.yml ran `python -m pip install --upgrade build`
 # — not merely an unbounded floor but an instruction to take the newest thing
@@ -12,5 +12,17 @@
 #
 # NOTE, said plainly: release.yml runs only on a tag push, so this pin is NOT
 # exercised by any PR's CI. It is bounded on reasoning, and the first tag cut
-# after it lands is what proves it.
+# after it lands is what proves it. Both entries below were exercised by hand
+# on the devbox against this tree's four dists before they landed (dev-1 round
+# 061): `python -m build` produced all four, `twine check --strict` PASSED on
+# all eight files.
 build>=1.2,<2
+
+# `twine check --strict` in release.yml's `verify-dist` job. METADATA is the
+# one class of defect that survives a green build and a green suite and then
+# renders as raw text on the project page a customer reads; `--strict` makes a
+# warning an error. Bounded by the surface used: the `check` subcommand and its
+# `--strict` flag, stable across 5.x and 6.x (latest 6.2.0). `upload` is NOT
+# used — publishing is `pypa/gh-action-pypi-publish` over OIDC, and no PyPI
+# credential exists in this repo for twine to find.
+twine>=5,<7

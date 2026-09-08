@@ -158,16 +158,33 @@ human.
 pip install reeflex-litellm[proxy]     # the proxy extra pulls litellm
 ```
 
-> **Check your `reeflex-claude`.** The classifier lives in `reeflex-claude`, and
-> the version on PyPI is **0.1.7, uploaded 2026-07-06** — which predates the
-> RFX-144/145/146 fix. Measured against `reeflex-core:v0.2.0` with that wheel:
+That line is true from **Reeflex v0.2.1** and was not true before it. This
+package was written for v0.2.0 and published with v0.2.1 — until that tag it
+was in this repository and on no package index, so the same line resolved
+nothing. If `pip` cannot find it, you are ahead of the release: install from
+source with
+`pip install 'git+https://github.com/Reeflex-io/reeflex@main#subdirectory=reeflex-litellm'`.
+
+> **Why the classifier's version matters here, and what the floor now does
+> about it.** The classifier lives in `reeflex-claude`, and the wheel on PyPI
+> was **0.1.7, uploaded 2026-07-06** — predating the RFX-144/145/146 fix.
+> Measured against `reeflex-core:v0.2.0` with that wheel:
 > `echo starting && rm -rf /var/lib/pgsql` is priced `reversible/single` and
 > **core allows it**. With the classifier from the repository's `main`, the same
 > command is denied `irreversible_systemic_prod`.
 >
-> `tests/test_classifier_vintage.py` fails loudly on the stale wheel. Run the
-> suite after installing, or install `reeflex-claude` from source until a newer
-> wheel is published.
+> This package requires `reeflex-claude>=0.2.0,<0.3` (RFX-224), and 0.2.0 is
+> the first published wheel carrying that fix — so the stale classifier is
+> excluded **by version** rather than by whichever copy happens to win a
+> resolve. `tests/test_classifier_vintage.py` is still there as the tripwire:
+> it fails loudly if a pre-fix classifier ever ends up in the venv anyway.
+
+**Then write a tenancy map before you start the proxy.** There is no default
+org, so without one every tool call is refused. An example ships at
+[`examples/tenancy-map.example.json`](examples/tenancy-map.example.json), and
+`reeflex-litellm tenancy` validates yours offline — it exits non-zero if the
+map would not load, which is what you want at deploy time rather than as an
+outage. See "Tenancy: two departments behind one gateway" below.
 
 ## Wire it in
 

@@ -12,7 +12,29 @@ version = "0.1.0"
 description = "Reeflex governance seat for an LLM gateway: a LiteLLM post-call guardrail that rules on every tool call the models behind the proxy propose (allow/deny/require_approval), fail-closed -- one integration for every agent behind the gateway."
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.9"
+# >=3.10, NOT >=3.9, AND THE 3.9 CLASSIFIER IS GONE (RFX-248). This said
+# `>=3.9` with a matching classifier while the `proxy` extra required
+# `litellm[proxy]>=1.100,<2` — and litellm 1.100.0's own metadata declares
+# `Requires-Python: >=3.10,<3.15` (read from the index, 2026-09-08). So on the
+# interpreter this package advertised, `pip install 'reeflex-litellm[proxy]'`
+# was unsatisfiable: an invitation to an install that cannot work.
+#
+# `requires-python` cannot differ per extra, so this is a choice, and it is
+# made in the direction of the package's purpose: the only reason to install
+# this is to run it inside a LiteLLM proxy, and litellm's floor is 3.10. A
+# 3.9-installable base whose guardrail module cannot import is not support.
+#
+# Lowering the litellm floor instead (1.83.9 is the newest release admitting
+# 3.9) was the alternative and was NOT taken: the floor comment below says an
+# unmeasured floor is a guess about somebody else's API, and nothing here has
+# been run against 1.83.
+#
+# The recurrence guard is that `release.yml`'s `verify-dist` job installs the
+# `[proxy]` extra for real, and `scripts/verify_release_artifacts.py` compares
+# this floor against litellm's own declared one — RFX-248's own note was that
+# "a check that actually resolves the extra would be the thing that stops it
+# recurring", and the gate deliberately never installs it.
+requires-python = ">=3.10"
 keywords = ["reeflex", "governance", "litellm", "llm-gateway", "ai-agent-safety", "tool-calls", "guardrail"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -20,7 +42,6 @@ classifiers = [
     "Topic :: Security",
     "Topic :: Software Development :: Quality Assurance",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",

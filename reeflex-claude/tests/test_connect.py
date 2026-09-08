@@ -294,23 +294,59 @@ def test_the_opencode_writer_replaces_its_own_previous_plugin(tmp_path, monkeypa
     assert "https://old.test" not in path.read_text(encoding="utf-8")
 
 
-def test_the_litellm_fragment_says_the_package_is_not_published(tmp_path, monkeypatch):
-    """The honest half of the third tab. `reeflex-litellm` lives in this repo's
-    `integrations/` and is on no package index, so the fragment names the
-    git install rather than printing a `pip install reeflex-litellm` that
-    cannot resolve."""
+def test_the_litellm_fragment_configures_the_seat_that_exists(tmp_path, monkeypatch):
+    """THE VERSION OF THIS TEST THAT SHIPPED FIRST ASSERTED THE DEFECT.
+
+    It read `assert "reeflex_litellm.ReeflexGate" in body` — pinning a class
+    name `reeflex_litellm` does not define (`__all__ = ["__version__"]`; the
+    class is `guardrail.ReeflexActionGuardrail`) — under a `litellm_settings.
+    callbacks` key, which observes rather than governs, with
+    `REEFLEX_ENVIRONMENT`, which nothing reads. Three defects in fifteen lines,
+    green, because a test comparing a fragment against its own wording measures
+    the wording.
+
+    So the assertions below are about the CONTRACT with the package being
+    configured, and the ones that need `reeflex_litellm` importable — the
+    dotted path resolving to a real class, every env var being one the seat
+    reads — live in `reeflex-litellm/tests/test_connect_fragment.py`, the suite
+    whose venv holds both distributions. This half is what reeflex-claude's own
+    suite can honestly check.
+    """
 
     monkeypatch.setenv("HOME", str(tmp_path))
     path, what = connect_mod.write_litellm_config(
-        core_url="https://core.test", environment="production",
+        core_url="https://core.test", environment="staging",
         gate_name="acme-prod", dry_run=False,
     )
     body = path.read_text(encoding="utf-8")
+    # The YAML litellm would load, comment lines dropped: the fragment EXPLAINS
+    # the `litellm_settings.callbacks` mistake in a comment, so an assertion
+    # over the raw text cannot tell the explanation from the defect.
+    yaml_only = "\n".join(
+        line for line in body.splitlines() if not line.lstrip().startswith("#"))
 
     assert "config.yaml is not touched" in what
-    assert "NOT on PyPI" in body
-    assert "git+https://github.com/Reeflex-io/reeflex" in body
-    assert "reeflex_litellm.ReeflexGate" in body
+    # A guardrail with a post_call mode, which is what can change a response.
+    assert "guardrails:" in yaml_only
+    assert "reeflex_litellm.guardrail.ReeflexActionGuardrail" in yaml_only
+    assert "mode: post_call" in yaml_only
+    # NOT the callbacks path: keep the old defect out by name.
+    assert "litellm_settings" not in yaml_only
+    assert "callbacks" not in yaml_only
+    assert "ReeflexGate" not in yaml_only.replace("ReeflexActionGuardrail", "")
+    # The env var the seat actually reads, carrying the gate's environment
+    # rather than silently defaulting to production.
+    assert 'REEFLEX_LITELLM_ENVIRONMENT: "staging"' in body
+    assert "REEFLEX_ENVIRONMENT:" not in body
+    # Tenancy is required and has no default org, so the fragment must say so
+    # or the operator's first tool call is a refusal they cannot explain.
+    assert "REEFLEX_LITELLM_TENANCY_MAP_FILE" in body
+    assert "reeflex-litellm tenancy" in body
+    # The install line a customer can run, and the source path that is a real
+    # directory in this repository (`reeflex-litellm/`, not `integrations/`).
+    assert "pip install 'reeflex-litellm[proxy]'" in body
+    assert "subdirectory=reeflex-litellm" in body
+    assert (REPO_ROOT / "reeflex-litellm" / "pyproject.toml").exists()
     assert "https://core.test" in body
     assert "acme-prod" in body
     assert "rfx_" not in body

@@ -23,11 +23,24 @@ Pushing a `v*` tag triggers `release.yml`, which fans out to:
 | Channel | Package | Auth |
 |---|---|---|
 | GitHub Release | all artifacts + `SHA256SUMS` attached to the tag | `GITHUB_TOKEN` |
-| PyPI | `reeflex-claude`, `reeflex-holds` **and** `reeflex-mcp` — each **only if its own `version` moved** (see the note below) | OIDC Trusted Publishing |
+| PyPI | `reeflex-claude`, `reeflex-holds`, `reeflex-mcp` **and** `reeflex-litellm` — each **only if its own `version` moved** (see the note below) | OIDC Trusted Publishing |
 | npm | `n8n-nodes-reeflex` — **no longer released from this repo**, it has its own (`Reeflex-io/n8n-nodes-reeflex`) with its own publish workflow | n/a here |
 | GHCR | `ghcr.io/reeflex-io/reeflex-core` **only if core changed** — tagged `<tag>` **and** `latest`. This image is the release artefact for core: `release.yml` builds no sdist or wheel for it, and `reeflex-core/` carries no `pyproject.toml` to build one from | `GITHUB_TOKEN` |
 | WP.org SVN | `reeflex-gate` (trunk + tag + assets) — **inert until the slot exists** (§2.5) | `WPORG_SVN_USERNAME` / `WPORG_SVN_PASSWORD` |
 | Job summary | a channel checklist (version + URL + ✅/⏭️/❌ per channel) | — |
+
+Two jobs in that workflow are not channels and are the ones to read when you
+want to know whether a release *works* rather than whether it *ran*:
+
+| Job | What its green means |
+|---|---|
+| `verify-dist` | the wheels this run built install into clean venvs and their real subcommands behave — asserted **before** anything is published, so a broken artefact never reaches PyPI. `github-release`, `pypi` and `ghcr` all `need` it. |
+| `verify-published` | `pip install` of the versions this tag names, **from the index**, then invoke: `reeflex-litellm tenancy` against the shipped example map *and* against a `default` catch-all map that must be refused, `reeflex-claude connect --dry-run` plus a `rfx_gate_` token that must be refused before any request. |
+
+Both run `scripts/verify_release_artifacts.py`, which takes a `--python` and
+runs by hand on a devbox against any venv. Every assertion in it is paired with
+a control, because "the command printed something" also passes on a build whose
+validator was deleted.
 
 Publishing a **GitHub Release** through the web UI also works: the UI creates
 the tag, and the tag push is what triggers `release.yml`. The same "release
@@ -64,6 +77,7 @@ the same tag.
   - `reeflex-claude/pyproject.toml` → `version`
   - `reeflex-holds/pyproject.toml` → `version`
   - `reeflex-mcp/pyproject.toml` → `version`
+  - `reeflex-litellm/pyproject.toml` → `version`
   - `reeflex-wordpress/reeflex-gate.php` → the `Version:` header
   - *(not `n8n-nodes-reeflex/package.json` — that package moved to its own repo
     and is not built or published by `release.yml` any more.)*
@@ -85,11 +99,11 @@ the same tag.
 The workflow is **tokenless by design** for PyPI and prefers tokenless for npm.
 This requires configuring the registries once.
 
-### 2.1 PyPI — Trusted Publishers (OIDC) for BOTH projects
+### 2.1 PyPI — Trusted Publishers (OIDC) for all FOUR projects
 
-For **each** of `reeflex-claude` and `reeflex-holds`, add a GitHub Actions
-Trusted Publisher (PyPI → project → *Settings* → *Publishing* → *Add a new
-publisher*):
+For **each** of `reeflex-claude`, `reeflex-holds`, `reeflex-mcp` and
+`reeflex-litellm`, add a GitHub Actions Trusted Publisher (PyPI → project →
+*Settings* → *Publishing* → *Add a new publisher*):
 
 | Field | Value |
 |---|---|
@@ -98,12 +112,27 @@ publisher*):
 | Workflow name | `release.yml` |
 | Environment | *(leave blank, unless you enable the `pypi` environment — see below)* |
 
-- `reeflex-claude` and `reeflex-holds` both already exist on PyPI (as of the
-  v0.1.15 release), so add the publisher on the existing project for each.
-- (Historical note, for the next NEW package name: before a project exists on
-  PyPI, use PyPI's **"pending publisher"** flow instead — create the trusted
-  publisher for the not-yet-existing project name; the first successful OIDC
-  publish creates the project. Reserving a new name is a GATE.)
+- `reeflex-claude`, `reeflex-holds` and `reeflex-mcp` already exist on PyPI, so
+  add the publisher on the existing project for each.
+
+> **`reeflex-litellm` IS THE NEW-NAME CASE, AND IT IS BLOCKING (2026-09-08).**
+> Measured the day it was added to the matrix:
+> `https://pypi.org/pypi/reeflex-litellm/json` → **HTTP 404**. The project does
+> not exist, and **OIDC Trusted Publishing cannot create one** — so its publish
+> step fails until a human uses PyPI's **"pending publisher"** flow (pypi.org →
+> *Your account* → *Publishing* → *Add a new pending publisher*) with the four
+> values in the table above plus the project name `reeflex-litellm`. The first
+> successful OIDC publish then creates the project and converts the pending
+> publisher into a normal one.
+>
+> Nothing in CI can do this and nothing in CI can detect it in advance, which is
+> why it is called out here rather than left to the run: without it, `v0.2.1`
+> publishes three packages, `pip install reeflex-litellm[proxy]` stays a 404,
+> and the `/app/onboard` LiteLLM tab hands out an install line that resolves
+> nothing. The publish step for it is **last** in the `pypi` job so the three
+> configured names upload regardless, and `verify-published` fails naming the
+> version it could not install — the release says which channel is real instead
+> of going green over one that is not (RFX-246).
 
 Optional hardening: create a GitHub **Environment** named `pypi`, uncomment
 `environment: pypi` in the `pypi` job, and set the *Environment* field on both
@@ -197,19 +226,32 @@ repo.
    each package version for the summary.
 2. **build** — builds every artifact **once** from the tagged commit:
    - the four zips via `scripts/build-wp-zips.py` (see §5),
-   - `python -m build` for `reeflex-claude` and `reeflex-holds` (sdist + wheel),
-   - `npm ci && npm run build && npm pack` for `n8n-nodes-reeflex`,
+   - `python -m build` for `reeflex-claude`, `reeflex-holds`, `reeflex-mcp` and
+     `reeflex-litellm` (sdist + wheel each, into per-project dirs so the publish
+     job can offer them independently),
    - `SHA256SUMS` over all of them.
-   Uploads them as workflow artifacts for the publish jobs.
-3. **github-release** — attaches all artifacts + `SHA256SUMS` to the release for
+   Uploads them as workflow artifacts for the publish jobs. The build front-end
+   is pinned in `.github/requirements-build.txt` — an `--upgrade build` on the
+   one workflow whose output a customer installs is what PR #123 closed.
+   (`n8n-nodes-reeflex` is **not** here any more: it releases from its own repo.)
+3. **verify-dist** — `twine check --strict` over every dist, then a clean venv
+   per package installed from **those wheels** and invoked, with the negative
+   controls. `github-release`, `pypi` and `ghcr` all `need` this, so nothing
+   publishes over an artefact that was not installed and run first.
+4. **github-release** — attaches all artifacts + `SHA256SUMS` to the release for
    the tag (creating the release if needed).
-4. **pypi** — publishes `reeflex-claude` and `reeflex-holds` via OIDC
-   (`skip-existing: true`).
-5. **npm** — rebuilds from the tag and `npm publish --provenance --access public
-   --tag latest`, skipping if the version already exists.
+5. **pypi** — offers `reeflex-claude`, `reeflex-holds`, `reeflex-mcp` and
+   `reeflex-litellm` via OIDC (`skip-existing: true`), each uploading only if its
+   version moved. `reeflex-litellm` is last: see the pending-publisher note in
+   §2.1.
 6. **ghcr** — builds + pushes `reeflex-core` tagged with the release tag **and**
    `latest`, **only when core changed** (§4).
-7. **summary** — writes the channel checklist to the job summary.
+7. **verify-published** — installs the versions this tag names **from PyPI** into
+   clean venvs and invokes them. It does not read the `pypi` job's result and
+   runs even when that job failed, because "so what *is* on the index?" is
+   exactly the question at that moment.
+8. **summary** — writes the channel checklist to the job summary, including a
+   row per PyPI package and the two verify results.
 
 ---
 
@@ -303,7 +345,16 @@ GitHub Release is the publication of those exact bytes.
 
 - Confirm the job summary checklist is all ✅ (or the expected ⏭️ for GHCR on an
   adapters-only release).
-- Verify each channel by read-back: `pip index versions reeflex-claude`,
+- **Read `verify-published` before you read the ✅s.** A green checklist row says
+  a job exited 0; that job says a customer's command works. If it failed on a
+  package the `pypi` job reported green, believe it — that is the RFX-246 gap
+  closing rather than a flake.
+- Verify each channel by read-back: `pip index versions reeflex-claude`
+  (and `reeflex-holds` / `reeflex-mcp` / `reeflex-litellm`),
   `npm view n8n-nodes-reeflex version`, `gh release view <tag>`, and (if pushed)
   an anonymous `docker pull ghcr.io/reeflex-io/reeflex-core:<tag>`.
+- Re-run the artefact checks by hand if you want them outside the workflow:
+  `python -m venv /tmp/v && /tmp/v/bin/pip install 'reeflex-litellm[proxy]==<v>' &&
+  python scripts/verify_release_artifacts.py --python /tmp/v/bin/python
+  --expect-litellm <v> --skip-claude`.
 - Update `MEMORY` / the report channel with the published versions + digests.

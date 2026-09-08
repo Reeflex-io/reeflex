@@ -1,0 +1,24 @@
+{
+  "_readme": "THE NEGATIVE CONTROL, and it is here to be loaded rather than described. This map is IDENTICAL to tenancy-map.example.json except for the `default` entry in `bind.key_alias`, which tenancy.py refuses as a load error -- a catch-all is precisely the defect that module exists to prevent, and a deployment that later grew a second department would inherit it silently. `reeflex-litellm tenancy` must exit 1 on this file and 0 on the other one. Without this half, a smoke that ran only the valid map would also pass on a build whose validator did nothing at all, and 'the command printed some JSON' would be reported as 'the guard works' (RFX-246: score the reason, not the verdict).",
+  "version": 1,
+  "tenants": {
+    "acme-payments": {
+      "org": "acme-payments",
+      "label": "ACME Payments",
+      "principal": "payments-oncall@acme.example",
+      "environment": "production",
+      "on_prem_hosts": ["llm.internal.acme.example"],
+      "evidence": {
+        "ingest_url": "https://app.reeflex.io/api/v1/evidence",
+        "gate_token_env": "RFX_GATE_TOKEN_PAYMENTS",
+        "signing_key_env": "RFX_EVIDENCE_KEY_PAYMENTS"
+      }
+    }
+  },
+  "bind": {
+    "key_alias": {
+      "payments-bot": "acme-payments",
+      "default": "acme-payments"
+    }
+  }
+}

@@ -50,6 +50,19 @@ jobs:
         # GHCR image). The honest summary is that PyPI serves four Reeflex
         # names, three of which are the product and one of which is a
         # placeholder that has never moved.
+        #
+        # `reeflex-litellm` IS NOT HERE YET, AND THAT IS AN ORDERING CONSTRAINT
+        # RATHER THAN A DECISION (RFX-250). `release.yml` publishes it from
+        # v0.2.1; before that tag `pypi.org/pypi/reeflex-litellm/json` is a 404
+        # (measured 2026-09-08). `gate.yml` `workflow_call`s this job, so adding
+        # the name before the wheel exists reddens the gate on every pull
+        # request — including the PR that adds it. It goes in once v0.2.1 is on
+        # the index, and the gate going green is then itself the proof.
+        #
+        # Meanwhile that artefact IS covered, but only on a tag: release.yml's
+        # `verify-dist` and `verify-published` jobs install it and invoke
+        # `reeflex-litellm tenancy` with its negative control. Not daily, and
+        # not per PR — which is exactly the gap RFX-250 closes.
         package: [reeflex-mcp, reeflex-holds, reeflex-claude]
     steps:
       - name: Set up Python 3.12
