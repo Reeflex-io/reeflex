@@ -13,22 +13,40 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from reeflex_litellm import core, response as R
 from reeflex_litellm.guardrail import ReeflexActionGuardrail
 
 import stubcore
+from conftest import PAYMENTS_CALLER, caller
+
+
+@pytest.fixture(autouse=True)
+def _mapped(tenancy_map):
+    """Every test in this module drives the hook, and the hook resolves tenancy
+    before it decides anything.  Requested explicitly (module-wide autouse)
+    rather than made ambient in conftest, so that a test asserting "no map ->
+    deny" stays possible in the same suite."""
+    yield
 
 
 def run(coro):
     return asyncio.run(coro)
 
 
-def hook(response, data=None, **kw):
+def hook(response, data=None, key=None, **kw):
+    """Drive the real hook as the proxy does, with an AUTHENTICATED caller.
+
+    `key` defaults to the payments team's virtual key.  Passing
+    `key=None` explicitly is not the same thing as omitting it -- see
+    `test_tenancy_isolation.py`, which relies on the difference."""
     g = ReeflexActionGuardrail(reeflex_hold_wait=0.0, **kw)
     return run(g.async_post_call_success_hook(
         data if data is not None else {"model": "mock-tools",
                                        "litellm_call_id": "req-1"},
-        None, response))
+        caller(**PAYMENTS_CALLER) if key is None else key,
+        response))
 
 
 DESTRUCTIVE = {"command": "rm -rf /"}
@@ -153,7 +171,8 @@ def test_an_approved_hold_releases_the_call_to_the_caller(stub):
         [stubcore.tool_call("call_1", "run_shell", {"command": "rm -rf ./build"})])
 
     g = ReeflexActionGuardrail(reeflex_hold_wait=2.0)
-    out = run(g.async_post_call_success_hook({"model": "m"}, None, r))
+    out = run(g.async_post_call_success_hook(
+        {"model": "m"}, caller(**PAYMENTS_CALLER), r))
 
     kept = out["choices"][0]["message"]["tool_calls"]
     assert kept is not None and len(kept) == 1
@@ -191,7 +210,8 @@ def test_the_session_header_is_what_the_budget_is_charged_against(stub):
                   "proxy_server_request": {
                       "headers": {"X-Reeflex-Session": "tenant-42"}}})
 
-    assert stub.requests[0]["agent"]["session_id"] == "litellm:tenant-42"
+    assert stub.requests[0]["agent"]["session_id"] == \
+        "litellm:acme-payments:tenant-42"
 
 
 def test_without_a_session_header_the_openai_user_field_is_used(stub):
@@ -199,17 +219,19 @@ def test_without_a_session_header_the_openai_user_field_is_used(stub):
     r = stubcore.chat_response(
         [stubcore.tool_call("call_1", "read_file", BENIGN)])
     hook(r, data={"model": "m", "user": "user-7"})
-    assert stub.requests[0]["agent"]["session_id"] == "litellm:user-7"
+    assert stub.requests[0]["agent"]["session_id"] == \
+        "litellm:acme-payments:user-7"
 
 
 def test_with_neither_the_budget_falls_back_to_ONE_REQUEST(stub):
     """A named limit, not an accident: with no session header and no `user`,
     R5's cumulative session budget cannot accumulate across a conversation.
-    Tenancy is the next ticket."""
+    RFX-243 scoped the NAMESPACE to the tenant; it did not close this."""
     stub.answer_allow()
     r1 = stubcore.chat_response([stubcore.tool_call("c", "read_file", BENIGN)])
     r2 = stubcore.chat_response([stubcore.tool_call("c", "read_file", BENIGN)])
     hook(r1, data={"model": "m", "litellm_call_id": "req-1"})
     hook(r2, data={"model": "m", "litellm_call_id": "req-2"})
     sessions = [q["agent"]["session_id"] for q in stub.requests]
-    assert sessions == ["litellm:req-1", "litellm:req-2"]
+    assert sessions == ["litellm:acme-payments:req-1",
+                        "litellm:acme-payments:req-2"]

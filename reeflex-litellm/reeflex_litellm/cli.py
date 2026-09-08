@@ -27,6 +27,7 @@ from . import enforce as _enforce
 from . import envelope as _envelope
 from . import normalize as _normalize
 from . import response as _response
+from . import tenancy as _tenancy
 
 
 def _read_tool_calls(raw_text: str) -> list:
@@ -73,6 +74,17 @@ def main(argv=None) -> int:
 
     sub.add_parser("version", help="print the package version")
 
+    p_kh = sub.add_parser(
+        "key-hash",
+        help="print the sha256 a tenancy map's `key_hash` dimension expects "
+             "for a LiteLLM virtual key")
+    p_kh.add_argument("key", help="the virtual key, e.g. sk-...")
+
+    p_ten = sub.add_parser(
+        "tenancy",
+        help="validate the configured tenancy map and show what it binds "
+             "(reads REEFLEX_LITELLM_TENANCY_MAP_FILE / _MAP)")
+
     args = parser.parse_args(argv)
 
     if args.command in (None,):
@@ -81,6 +93,43 @@ def main(argv=None) -> int:
 
     if args.command == "version":
         print(__version__)
+        return 0
+
+    if args.command == "key-hash":
+        # The map's `key_hash` dimension must hold exactly what litellm's
+        # `hash_token()` produces, and an operator should not have to guess the
+        # algorithm or paste a live key into a shell pipeline they found online.
+        print(_tenancy.digest(args.key))
+        return 0
+
+    if args.command == "tenancy":
+        # Validating the map OFFLINE matters because every failure mode is a
+        # total refusal at runtime: an operator wants the load error at deploy
+        # time, not as an outage.  Prints no credential -- only the env var
+        # NAMES the map references.
+        try:
+            loaded = _tenancy.load_map(force=True)
+        except _tenancy.TenancyConfigError as exc:
+            print("tenancy map INVALID: %s" % exc, file=sys.stderr)
+            print("Every tool call would be refused. Nothing is bound.",
+                  file=sys.stderr)
+            return 1
+        out = {"source": loaded.source, "tenants": {}, "bind": loaded.bind}
+        for name, t in sorted(loaded.tenants.items()):
+            out["tenants"][name] = {
+                "org": t.org, "label": t.label, "principal": t.principal,
+                "environment": t.environment,
+                "on_prem_hosts": list(t.on_prem_hosts),
+                "cloud_hosts": list(t.cloud_hosts),
+                # The env var NAMES this tenant's evidence credentials are
+                # referenced by, which is exactly what an operator needs to
+                # set.  A name is not a secret; the VALUE is never read here,
+                # and neither is whether it happens to be set -- that would be
+                # an oracle for a missing credential.
+                "evidence": {k: v for k, v in sorted(t.evidence.items())
+                             if k.endswith("_env") or k == "ingest_url"},
+            }
+        print(json.dumps(out, indent=2, sort_keys=True))
         return 0
 
     try:

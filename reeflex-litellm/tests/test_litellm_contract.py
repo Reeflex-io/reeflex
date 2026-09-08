@@ -26,8 +26,31 @@ litellm = pytest.importorskip(
 
 from reeflex_litellm import guardrail as G  # noqa: E402
 from reeflex_litellm import response as R  # noqa: E402
+from reeflex_litellm import tenancy as T  # noqa: E402
 
 import stubcore  # noqa: E402
+
+
+def real_caller(via_virtual_key=True, **kw):
+    """A REAL `UserAPIKeyAuth`, populated the way the PROXY populates it.
+
+    The rest of the suite uses a plain dict (conftest.caller) so it can run
+    without litellm. This builds the genuine pydantic model, which is the only
+    way to know `tenancy._get()` reads the real object and not just a Mapping
+    that happens to share its field names.
+
+    `via_virtual_key` MUST be assigned after construction, not passed in:
+    litellm declares it `exclude=True` and its model validator POPS it from
+    validated input, precisely so a custom auth handler or a JWT claim cannot
+    forge it. Passing it to the constructor silently yields False -- which is
+    how the first version of this helper made every key_hash lookup miss.
+    See test_the_proxy_strips_a_forged_via_virtual_key_from_caller_input.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    kw.setdefault("api_key", "x" * 64)  # a sha256-shaped hashed token
+    obj = UserAPIKeyAuth(**kw)
+    obj.via_virtual_key = via_virtual_key
+    return obj
 
 
 def test_the_class_under_test_subclasses_litellms_real_custom_guardrail():
@@ -73,7 +96,7 @@ def test_the_guardrail_is_instantiable_the_way_the_registry_does_it():
     assert g.guardrail_name == "reeflex-action-gate"
 
 
-def test_a_real_model_response_object_is_mutable_by_the_rewrite(stub):
+def test_a_real_model_response_object_is_mutable_by_the_rewrite(stub, tenancy_map):
     """The rewrite sets attributes on the response object. If litellm's pydantic
     models refused assignment, every dict-shaped test would still pass and the
     proxy would return the denied call."""
@@ -95,15 +118,19 @@ def test_a_real_model_response_object_is_mutable_by_the_rewrite(stub):
 
     g = G.ReeflexActionGuardrail(reeflex_hold_wait=0.0)
     out = asyncio.run(g.async_post_call_success_hook(
-        {"model": "mock-tools", "litellm_call_id": "req-1"}, None, resp))
+        {"model": "mock-tools", "litellm_call_id": "req-1"},
+        real_caller(team_id="team_pay"), resp))
 
     assert out.choices[0].message.tool_calls in (None, [])
     assert out.choices[0].finish_reason == "stop"
     assert "rm -rf /" not in out.model_dump_json()
+    # `reeflex_denied`, NOT `reeflex_tenant_unmapped`: this asserts the call
+    # reached core and was refused on POLICY. Without the distinction a tenancy
+    # misconfiguration would look like a working guardrail.
     assert R.refused_payloads(out)[0]["error"] == "reeflex_denied"
 
 
-def test_a_real_model_response_with_an_allowed_call_is_untouched(stub):
+def test_a_real_model_response_with_an_allowed_call_is_untouched(stub, tenancy_map):
     """The control for the row above."""
     from litellm.types.utils import (ChatCompletionMessageToolCall, Choices,
                                      Function, Message, ModelResponse)
@@ -121,7 +148,7 @@ def test_a_real_model_response_with_an_allowed_call_is_untouched(stub):
 
     g = G.ReeflexActionGuardrail(reeflex_hold_wait=0.0)
     out = asyncio.run(g.async_post_call_success_hook(
-        {"model": "mock-tools"}, None, resp))
+        {"model": "mock-tools"}, real_caller(team_id="team_pay"), resp))
 
     assert len(out.choices[0].message.tool_calls) == 1
     assert out.choices[0].message.tool_calls[0].function.name == "read_file"
@@ -132,3 +159,138 @@ def test_a_real_model_response_with_an_allowed_call_is_untouched(stub):
 def test_post_call_is_a_mode_litellm_recognises():
     from litellm.types.guardrails import GuardrailEventHooks
     assert "post_call" in [e.value for e in GuardrailEventHooks]
+
+
+# -- tenancy: the fields this adapter reads are litellm's, not ours (RFX-243) --
+
+def test_every_field_tenancy_reads_exists_on_the_real_user_api_key_auth():
+    """tenancy.read_identity() reads ten named attributes off the proxy's auth
+    result. If litellm renamed one, `_get()` would return None, the identity
+    would go unrecognised and EVERY call behind that key would be refused --
+    a total outage that no dict-based test could ever see, because the dict
+    double would still have the old name."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    fields = set(UserAPIKeyAuth.model_fields)
+    for name in ("api_key", "token", "key_alias", "team_id", "team_alias",
+                 "org_id", "organization_alias", "user_id", "end_user_id",
+                 "via_virtual_key"):
+        assert name in fields, (
+            "litellm's UserAPIKeyAuth no longer has %r -- tenancy.read_identity"
+            " would silently read None for it" % name)
+
+
+def test_the_master_key_alias_constant_matches_litellms_own():
+    """tenancy.MASTER_KEY_ALIAS is hardcoded so the module imports without
+    litellm. This is the pin that makes the copy safe: a rename upstream turns
+    every master-key request into an unrecognised identity, and this goes red
+    instead."""
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+    assert T.MASTER_KEY_ALIAS == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+def test_the_dict_double_the_rest_of_the_suite_uses_agrees_with_the_real_model():
+    """conftest.caller() is a dict stand-in for UserAPIKeyAuth. If it drifted,
+    every tenancy test would be exercising a shape the proxy never sends.
+    Asserted by resolving BOTH through the same code path and comparing the
+    identity that comes out."""
+    import conftest
+    real = real_caller(team_id="team_pay", key_alias="payments-bot",
+                       api_key="b" * 64)
+    fake = conftest.caller(team_id="team_pay", key_alias="payments-bot",
+                           api_key="b" * 64)
+    assert T.read_identity(real).as_record() == T.read_identity(fake).as_record()
+
+
+def test_the_proxy_strips_a_forged_via_virtual_key_from_caller_input():
+    """WHY tenancy.safe_key_hash() may trust this marker at all.
+
+    `via_virtual_key` is the precondition for recording a key identifier. It is
+    only trustworthy because litellm declares it `exclude=True` and POPS it in
+    a model validator, so a custom auth handler, a JWT claim or a key-metadata
+    splat cannot set it -- only the proxy's own DB virtual-key / master-key auth
+    paths do, by post-construction assignment.
+
+    If a litellm release ever accepted it as validated input, a caller could
+    forge it, and this adapter would record a key identifier it has no reason
+    to believe. That is a tenancy-binding forgery, so it is pinned here.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    forged = UserAPIKeyAuth(api_key="c" * 64, via_virtual_key=True)
+    assert forged.via_virtual_key is False, (
+        "litellm now accepts via_virtual_key as caller input -- a forged value "
+        "would make tenancy.safe_key_hash() trust an unvalidated credential")
+    assert T.read_identity(forged).key_hash is None
+    assert T.read_identity(forged).key_material_withheld is True
+
+
+def test_the_real_model_never_carries_a_raw_credential_in_api_key():
+    """A defence-in-depth reading of litellm's own validator: a raw `sk-` key
+    passed as validated input is hashed to 64 hex before the object exists, so
+    `api_key` is not raw credential material on this path. tenancy.py still
+    shape-tests it, because a custom_auth handler assigning the attribute AFTER
+    construction bypasses the validator entirely -- the check is cheap and the
+    failure mode (a live credential in an evidence ledger) outlives the request.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    obj = UserAPIKeyAuth(api_key="sk-a-real-looking-secret-value")
+    assert obj.api_key != "sk-a-real-looking-secret-value"
+    assert T._SHA256_HEX.match(obj.api_key)
+
+
+def test_a_hashed_virtual_key_from_litellms_own_hasher_matches_the_map_dimension():
+    """The map's `key_hash` dimension must hold exactly what litellm's
+    `hash_token()` produces, and `tenancy.digest()` is what the CLI tells an
+    operator to compute. If the two disagree every key_hash binding silently
+    matches nothing and falls through to the team (or to a refusal)."""
+    from litellm.proxy.utils import hash_token
+    assert T.digest("sk-operator-key-1") == hash_token(token="sk-operator-key-1")
+
+
+def test_an_unmapped_real_caller_is_refused_through_the_real_objects(stub,
+                                                                    tenancy_map):
+    """THE FAIL-CLOSED DEFAULT, through litellm's genuine types.
+
+    A key the proxy authenticated but the tenancy map does not bind gets every
+    tool call removed and replaced with `reeflex_tenant_unmapped` -- and core is
+    never called, so nothing lands in another department's evidence. The
+    `stub.requests == []` assertion is the load-bearing half: a refusal that
+    still POSTed to core would have already charged an R5 budget and written an
+    audit line under some org.
+    """
+    from litellm.types.utils import (ChatCompletionMessageToolCall, Choices,
+                                     Function, Message, ModelResponse)
+    tc = ChatCompletionMessageToolCall(
+        id="call_1", type="function",
+        function=Function(name="read_file",
+                          arguments=json.dumps({"path": "/etc/hosts"})))
+    resp = ModelResponse(
+        id="chatcmpl-1", model="mock-tools", object="chat.completion",
+        choices=[Choices(index=0, finish_reason="tool_calls",
+                         message=Message(role="assistant", content=None,
+                                         tool_calls=[tc]))])
+    stub.answer_allow()  # core WOULD allow -- the refusal is tenancy's alone
+
+    g = G.ReeflexActionGuardrail(reeflex_hold_wait=0.0)
+    out = asyncio.run(g.async_post_call_success_hook(
+        {"model": "mock-tools"}, real_caller(team_id="team_nobody_bound"), resp))
+
+    assert out.choices[0].message.tool_calls in (None, [])
+    payload = R.refused_payloads(out)[0]
+    assert payload["error"] == "reeflex_tenant_unmapped"
+    assert payload["rule"] == "reeflex.litellm/tenancy_unmapped"
+    assert stub.requests == [], (
+        "core was called for a caller with no org: the decision has already "
+        "been recorded somewhere by the time we refused")
+
+
+def test_a_missing_auth_object_is_refused_not_defaulted(stub, tenancy_map):
+    """`user_api_key_dict=None` is what an unauthenticated or oddly-configured
+    proxy hands the hook. It must refuse, not fall back to a default org."""
+    stub.answer_allow()
+    g = G.ReeflexActionGuardrail(reeflex_hold_wait=0.0)
+    resp = stubcore.chat_response(
+        [stubcore.tool_call("call_1", "read_file", {"path": "/etc/hosts"})])
+    out = asyncio.run(g.async_post_call_success_hook(
+        {"model": "mock-tools"}, None, resp))
+    assert R.refused_payloads(out)[0]["error"] == "reeflex_tenant_unmapped"
+    assert stub.requests == []
