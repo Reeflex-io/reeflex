@@ -36,15 +36,31 @@ classifiers = [
 # `classify.classify()`, `envelope.build_envelope()` and, in the contract test,
 # `enforce.call_core_and_map()` -- the 0.1.x surface.
 #
-# READ THIS BEFORE TRUSTING THE FLOOR. The published 0.1.7 wheel was uploaded
-# 2026-07-06, BEFORE RFX-144/145/146 landed on main (2026-08-22), and 0.1.7 is
-# still the newest version on the index -- so this requirement resolves to a
-# classifier that prices `echo x && rm -rf /var/lib/pgsql` as reversible/single,
-# which core then ALLOWS. Measured; see tests/test_classifier_vintage.py, which
-# fails on that wheel, and RFX-241. The floor cannot be raised to exclude it
-# until a fixed wheel is published.
+# THE FLOOR MOVED TO 0.2.0 AND THE CEILING WITH IT (RFX-224), and this is the
+# whole of why. The previous requirement was `>=0.1.7,<0.2` with a comment
+# saying, correctly, that 0.1.7 on PyPI was uploaded 2026-07-06 -- BEFORE
+# RFX-144/145/146 landed on 2026-08-22 -- so the requirement resolved to a
+# classifier that prices `echo x && rm -rf /var/lib/pgsql` as
+# reversible/single, which core then ALLOWS (measured; RFX-241;
+# tests/test_classifier_vintage.py is the tripwire that fails on that wheel).
+# It ended: "the floor cannot be raised to exclude it until a fixed wheel is
+# published."
+#
+# RFX-224 bumps `reeflex-claude` to **0.2.0**, whose tree contains RFX-144/145/
+# 146 -- so the floor CAN now be raised, and the ceiling HAD to move anyway:
+# `<0.2` made 0.2.0 unresolvable and turned the repo gate's `pytest-litellm`
+# leg red (the gate installs both packages editable into one venv, so a
+# sibling's minor bump is an unsatisfiable resolve, not a warning). Caught by
+# `python gate.py`, not by either package's own suite -- neither one can see
+# this pair.
+#
+# `>=0.2.0` excludes the stale wheel BY VERSION rather than by relying on the
+# checkout winning a resolve, which is what RFX-241 asked for. It is not
+# closed yet: this only becomes true on the index once the console publishes
+# 0.2.0 (release is console-sequenced), and `reeflex-litellm` is itself on no
+# index, so nothing installs this from PyPI today either way.
 dependencies = [
-    "reeflex-claude>=0.1.7,<0.2",
+    "reeflex-claude>=0.2.0,<0.3",
 ]
 
 # litellm is OPTIONAL on purpose.  The decision logic (normalize / envelope /

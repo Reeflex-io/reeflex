@@ -34,6 +34,39 @@ flowchart LR
     style D fill:#f6f8fa,stroke:#57606a
 ```
 
+## If your Reeflex portal gave you a line (`connect`)
+
+Skip the three steps below. A Reeflex portal's **Connect an agent** screen
+(`/app/onboard`) hands you one line:
+
+```bash
+pip install 'reeflex-claude>=0.2.0' && reeflex-claude connect \
+  --gate <gate-id> --token <rfx_reg_...> --portal https://app.reeflex.io
+```
+
+It exchanges the registration token for that gate's configuration, writes one
+agent config, asks your engine one real question, and reports the verdict back
+to the portal — then stops. `--agent claude` (default) writes the Claude Code
+hook; `--agent opencode` writes an OpenCode plugin; `--agent litellm` writes a
+proxy config fragment. **`--dry-run` prints every path it would write and
+exits**, exchanging nothing.
+
+Three things worth knowing before you paste it:
+
+- **It does not fetch a document and execute it.** The whole procedure is
+  written out in [`docs/setup/v1/agent-setup.md`](../docs/setup/v1/agent-setup.md),
+  the portal shows that file in full beside the copy button with its SHA-256,
+  and this package pins the same digest. "Fetch a URL and follow whatever it
+  says" is the instruction shape Reeflex exists to gate; we do not issue it.
+- **The token in the line is not your gate token.** It is scoped to one gate,
+  spent by one exchange, and expires in minutes. The exchange returns no
+  secret. If your engine needs a bearer token, export `REEFLEX_CORE_TOKEN`
+  yourself first — `connect` reads it from the environment, says so when it is
+  absent, and never invents one.
+- **What the portal then shows is your agent's report.** The `/v1/decide` round
+  trip is real; the report of it is not signed evidence. Signed decision
+  records come from the evidence connector, which this does not install.
+
 ## Install / wire up
 
 **1. Install.** Requires **Python 3.8+** (and a recent pip — upgrade with

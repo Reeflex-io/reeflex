@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reeflex-claude"
-version = "0.1.7"
+version = "0.2.0"
 description = "Reeflex adapter for Claude Code: a PreToolUse hook that gates every tool call on its impact before it runs (allow/hold/deny), fail-closed -- governance that protects you from your own agent."
 readme = "README.md"
 license = "Apache-2.0"

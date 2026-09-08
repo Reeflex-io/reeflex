@@ -11,6 +11,12 @@ Subcommands:
   check  -- the F12 self-test as a first-class command: proves the hook
             fails closed (deny + exit 0) on an unreachable core, and warns
             if settings.json is not wired up.
+  connect -- RFX-224: the ONE line a Reeflex portal puts on a customer's
+            clipboard. Exchanges a scoped, single-use registration token for
+            the gate's configuration, writes exactly one agent config
+            (Claude Code / OpenCode / LiteLLM), makes one real
+            `POST /v1/decide`, and reports the verdict back to the portal.
+            It does NOT fetch a document and execute it -- see connect.py.
 
 STRUCTURAL FIX (code-reports/cold-start-doc-fidelity-friction-log-dev-2-
 20260701.md, finding F12): "hook cannot start -> non-zero exit -> Claude Code
@@ -37,6 +43,8 @@ import subprocess
 import sys
 from typing import List, Optional, Tuple
 
+from .connect import AGENTS as CONNECT_AGENTS
+from .connect import DEFAULT_PORTAL_URL as CONNECT_DEFAULT_PORTAL
 from .enforce import _DEFAULT_CORE_URL as DEFAULT_CORE_URL
 from .setup_settings import (
     DEFAULT_MATCHER,
@@ -131,6 +139,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="Target environment recorded on every action (default production).",
     )
 
+    p_connect = sub.add_parser(
+        "connect",
+        help="Connect this agent to a Reeflex portal using a registration token "
+             "from its 'Connect an agent' screen (RFX-224).",
+    )
+    _add_target_flags(p_connect)
+    p_connect.add_argument(
+        "--token", required=False, default=None,
+        help="The registration token from the portal (starts with `rfx_reg_`). "
+             "Single-use, single-gate, and it expires within minutes -- which is "
+             "why it is passed on the command line at all; a gate token never is.",
+    )
+    p_connect.add_argument(
+        "--gate", default=None,
+        help="The gate id shown beside the line. Optional: the token already "
+             "determines the gate server-side, and this is checked AGAINST it so "
+             "two mixed-up lines are refused rather than silently configuring the "
+             "wrong environment.",
+    )
+    p_connect.add_argument(
+        "--portal", default=None,
+        help=f"Reeflex portal base URL (default {CONNECT_DEFAULT_PORTAL}).",
+    )
+    p_connect.add_argument(
+        "--agent", default="claude", choices=CONNECT_AGENTS,
+        help="Which agent to configure (default claude).",
+    )
+    p_connect.add_argument(
+        "--verify-ssl", default=None, choices=("true", "false"),
+        help="Verify TLS on calls to the portal (default true). false is for a "
+             "self-signed self-hosted portal, at your own risk.",
+    )
+    p_connect.add_argument(
+        "--dry-run", action="store_true",
+        help="Print every path that WOULD be written and exit. Exchanges nothing, "
+             "writes nothing, decides nothing, reports nothing -- so the token is "
+             "still unspent afterwards.",
+    )
+
     p_check = sub.add_parser(
         "check",
         help="Verify the fail-closed hook installation (deny-scenario self-test).",
@@ -150,6 +197,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_setup(args)
     if args.command == "check":
         return cmd_check(args)
+    if args.command == "connect":
+        from .connect import cmd_connect
+        return cmd_connect(args)
 
     parser.print_help()
     return 1
