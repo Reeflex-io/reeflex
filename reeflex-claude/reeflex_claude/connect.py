@@ -479,13 +479,33 @@ def smoke_decision(*, core_url: str, environment: str) -> Dict[str, Any]:
                 os.environ[key] = value
 
     if not reachable:
+        # An engine started with `REEFLEX_AUTH_TOKEN` refuses every route
+        # except `GET /healthz`, so a 401/403 here is what a correctly-running
+        # AUTHENTICATED core looks like from the outside -- the URL is right
+        # and the engine is up. The generic remedy below ("fix the URL or start
+        # the engine") is the wrong advice for that case and sends the reader
+        # somewhere that cannot help; on the hosted default (`api-dev`) it is
+        # also the FIRST thing a stranger who pasted the line will read.
+        if "core HTTP 401" in reason or "core HTTP 403" in reason:
+            remedy = (
+                f"{core_url} is up and answered -- it refused the request "
+                "because it wants a bearer token. `connect` does not issue "
+                "one and does not invent one: export REEFLEX_CORE_TOKEN (the "
+                "engine operator's own value, from your shell profile or "
+                "secret store), then mint a fresh line and paste it again -- "
+                "the token you just used is spent."
+            )
+        else:
+            remedy = (
+                "Fix the URL or start the engine, then re-run "
+                "`reeflex-claude check`."
+            )
         raise ConnectError(
             f"could not get a decision out of {core_url}: {reason}\n"
             "Nothing has been reported to the portal -- a verdict we did not "
             "receive is not a verdict. The hook config above is written and "
             "will fail CLOSED (deny) until core is reachable, which is the "
-            "safe direction. Fix the URL or start the engine, then re-run "
-            "`reeflex-claude check`."
+            f"safe direction. {remedy}"
         )
 
     # `enforce` maps core's three verdicts onto Claude Code's vocabulary
