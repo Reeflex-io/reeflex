@@ -667,3 +667,272 @@ def test_the_opencode_flow_reports_its_own_agent_kind(tmp_path, monkeypatch):
     assert code == 0
     assert hello["body"]["agent_kind"] == "opencode"
     assert (tmp_path / ".config" / "opencode" / "plugin" / "reeflex.js").is_file()
+
+
+# ---------------------------------------------------------------------------
+# The engine credential the exchange now returns (RFX-224, second precondition)
+#
+# The store's own behaviour is `tests/test_credentials_rfx224.py`; what is
+# pinned here is the four things `connect` does with it -- store it, tell the
+# operator where without printing it, put the gate id (and only the gate id)
+# into the config, and do all of that BEFORE the smoke.
+# ---------------------------------------------------------------------------
+
+CORE_CREDENTIAL = "rfx_ac_" + "C" * 43
+
+
+def _connect_ok_with_credential(core_url, *, gate_id=None):
+    """`_connect_ok` plus what a current portal actually returns.
+
+    `_connect_ok` deliberately stays credential-free: every test written
+    against it is now also the backward-compatibility case for an OLDER portal
+    that issues none, which is coverage for free rather than coverage to
+    write.
+    """
+
+    status, body = _connect_ok(core_url)
+    body = dict(body)
+    if gate_id is not None:
+        body["gate"] = dict(body["gate"], id=gate_id)
+    body["core_credential"] = {
+        "token": CORE_CREDENTIAL,
+        "expires_at": "2026-10-08T09:45:00+00:00",
+        "gate_header": "X-Reeflex-Gate",
+    }
+    body["introspect_url"] = "https://portal.test/api/v1/agent/introspect"
+    return status, body
+
+
+def test_the_credential_is_stored_at_0600_and_never_printed(tmp_path, monkeypatch, capsys):
+    """The claim the onboarding screen now makes, checked as mode bits and as
+    the absence of the value from stdout AND stderr.
+
+    THE `not in out` HALF IS THE POINT. A command that stored the credential
+    correctly and then echoed it would put it in the same shell scrollback the
+    whole design exists to keep it out of -- and no file-permission assertion
+    would have noticed.
+    """
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("REEFLEX_CREDENTIALS_FILE", str(tmp_path / "creds.json"))
+    monkeypatch.delenv("REEFLEX_CORE_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        connect_mod, "call_core_and_map",
+        lambda _envelope: ("allow", "benign read", "reeflex.policy/benign_read", True, []),
+    )
+
+    with _StubPortal({
+        "/api/v1/agent/connect": _connect_ok_with_credential("https://core.test"),
+        "/api/v1/agent/hello": (200, {"recorded": True}),
+    }) as portal:
+        code = main(["connect", "--token", VALID_TOKEN, "--portal", portal.url])
+
+    assert code == 0
+    store = tmp_path / "creds.json"
+    assert store.is_file()
+    assert oct(store.stat().st_mode)[-3:] == "600"
+    entry = json.loads(store.read_text())["credentials"][0]
+    assert entry["token"] == CORE_CREDENTIAL
+    assert entry["gate_id"] == GATE_ID
+    assert entry["core_url"] == "https://core.test"
+
+    captured = capsys.readouterr()
+    assert CORE_CREDENTIAL not in captured.out
+    assert CORE_CREDENTIAL not in captured.err
+    # It says WHERE, and it says the two facts that matter about it.
+    assert "creds.json" in captured.out
+    assert "0600" in captured.out
+    assert "2026-10-08" in captured.out
+
+
+def test_the_config_gets_the_gate_id_and_still_no_secret(tmp_path, monkeypatch):
+    """`settings.json` is world-readable and routinely committed. The gate id
+    is a public identifier the portal prints on screen; the credential is not,
+    and must not appear in this file even though `connect` now holds one."""
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("REEFLEX_CREDENTIALS_FILE", str(tmp_path / "creds.json"))
+    monkeypatch.delenv("REEFLEX_CORE_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        connect_mod, "call_core_and_map",
+        lambda _envelope: ("allow", "ok", "reeflex.policy/benign_read", True, []),
+    )
+
+    with _StubPortal({
+        "/api/v1/agent/connect": _connect_ok_with_credential("https://core.test"),
+        "/api/v1/agent/hello": (200, {"recorded": True}),
+    }) as portal:
+        assert main(["connect", "--token", VALID_TOKEN, "--portal", portal.url]) == 0
+
+    body = (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8")
+    settings = json.loads(body)
+    assert settings["env"]["REEFLEX_GATE_ID"] == GATE_ID
+    assert "REEFLEX_CORE_TOKEN" not in body
+    assert CORE_CREDENTIAL not in body
+    # No member of the credential family, by prefix, so a future one is
+    # covered without anyone remembering to extend this.
+    assert "rfx_ac_" not in body
+    assert "rfx_reg_" not in body
+    assert "rfx_gate_" not in body
+
+
+def test_the_credential_is_stored_before_the_smoke_and_the_smoke_can_see_it(
+    tmp_path, monkeypatch
+):
+    """THE ORDERING, AND IT IS LOAD-BEARING.
+
+    Step 3 is the hook's OWN code path (`enforce`), which finds the credential
+    through the store. Storing it after the smoke would make step 3 exercise a
+    configuration nobody will ever run -- which is the exact class of mistake
+    that let this feature ship with a first decision that 401s.
+
+    Asserted by having the stubbed decision READ the store at the moment it is
+    called, rather than by reading the source. It is the only order in which
+    that read can succeed.
+    """
+
+    seen = {}
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("REEFLEX_CREDENTIALS_FILE", str(tmp_path / "creds.json"))
+    monkeypatch.delenv("REEFLEX_CORE_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    def _spy(_envelope):
+        from reeflex_claude.credentials import lookup
+
+        seen["gate_env"] = os.environ.get("REEFLEX_GATE_ID")
+        seen["credential"] = lookup(core_url="https://core.test", gate_id=GATE_ID)
+        return ("allow", "ok", "reeflex.policy/benign_read", True, [])
+
+    monkeypatch.setattr(connect_mod, "call_core_and_map", _spy)
+
+    with _StubPortal({
+        "/api/v1/agent/connect": _connect_ok_with_credential("https://core.test"),
+        "/api/v1/agent/hello": (200, {"recorded": True}),
+    }) as portal:
+        assert main(["connect", "--token", VALID_TOKEN, "--portal", portal.url]) == 0
+
+    assert seen["credential"] == CORE_CREDENTIAL, "the smoke ran before the store"
+    assert seen["gate_env"] == GATE_ID, "the smoke declared no gate"
+
+
+def test_the_operators_own_token_means_nothing_is_stored(tmp_path, monkeypatch, capsys):
+    """Their credential wins in `enforce`, so storing one they will not use
+    would leave a secret on disk for nothing."""
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("REEFLEX_CREDENTIALS_FILE", str(tmp_path / "creds.json"))
+    monkeypatch.setenv("REEFLEX_CORE_TOKEN", "the-operators-own-not-a-secret")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        connect_mod, "call_core_and_map",
+        lambda _envelope: ("allow", "ok", "reeflex.policy/benign_read", True, []),
+    )
+
+    with _StubPortal({
+        "/api/v1/agent/connect": _connect_ok_with_credential("https://core.test"),
+        "/api/v1/agent/hello": (200, {"recorded": True}),
+    }) as portal:
+        assert main(["connect", "--token", VALID_TOKEN, "--portal", portal.url]) == 0
+
+    assert not (tmp_path / "creds.json").exists()
+    out = capsys.readouterr().out
+    assert "Yours wins" in out
+
+
+def test_an_older_portal_that_issues_no_credential_behaves_exactly_as_before(
+    tmp_path, monkeypatch, capsys
+):
+    """A new client against an old portal. `_connect_ok` has no
+    `core_credential`, so nothing is stored and the pre-existing advice about
+    exporting `REEFLEX_CORE_TOKEN` is what the operator reads."""
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("REEFLEX_CREDENTIALS_FILE", str(tmp_path / "creds.json"))
+    monkeypatch.delenv("REEFLEX_CORE_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        connect_mod, "call_core_and_map",
+        lambda _envelope: ("allow", "ok", "reeflex.policy/benign_read", True, []),
+    )
+
+    with _StubPortal({
+        "/api/v1/agent/connect": _connect_ok("https://core.test"),
+        "/api/v1/agent/hello": (200, {"recorded": True}),
+    }) as portal:
+        assert main(["connect", "--token", VALID_TOKEN, "--portal", portal.url]) == 0
+
+    assert not (tmp_path / "creds.json").exists()
+    out = capsys.readouterr().out
+    assert "issued no engine credential" in out
+    assert "REEFLEX_CORE_TOKEN" in out
+
+
+def test_a_credential_that_cannot_be_stored_stops_the_run_and_reports_nothing(
+    tmp_path, monkeypatch, capsys
+):
+    """A hard failure, not a warning. The alternative is finishing with an
+    agent configured to call an engine it cannot authenticate to, whose next
+    tool call fails CLOSED -- and the registration token is spent by then, so
+    the operator would have to work out for themselves that the remedy is a
+    fresh line."""
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    store = tmp_path / "creds.json"
+    store.write_text("{ not json")
+    monkeypatch.setenv("REEFLEX_CREDENTIALS_FILE", str(store))
+    monkeypatch.delenv("REEFLEX_CORE_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    with _StubPortal({
+        "/api/v1/agent/connect": _connect_ok_with_credential("https://core.test"),
+        "/api/v1/agent/hello": (200, {"recorded": True}),
+    }) as portal:
+        code = main(["connect", "--token", VALID_TOKEN, "--portal", portal.url])
+        paths = [r["path"] for r in portal.requests]
+
+    assert code == 1
+    assert paths == ["/api/v1/agent/connect"], "a hello was reported anyway"
+    err = capsys.readouterr().err
+    assert "could not be stored" in err
+    assert "fresh line" in err
+    assert store.read_text() == "{ not json"
+
+
+def test_a_403_from_the_engine_never_advises_exporting_a_token(tmp_path, monkeypatch, capsys):
+    """SUBJECT. 403 is the SCOPED refusal: the engine knows the credential and
+    will not accept it for the gate this request declared. Its cause is two
+    onboardings crossed on one machine -- never a missing token -- so the
+    remedy must not send the reader to their secret store.
+
+    The CONTROL is `test_an_authenticated_core_refusing_the_smoke_names_the_
+    credential` above, which keeps the 401 wording; if this fix had been made
+    by widening that branch, this test would pass and that one would fail.
+    """
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("REEFLEX_CREDENTIALS_FILE", str(tmp_path / "creds.json"))
+    monkeypatch.delenv("REEFLEX_CORE_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        connect_mod, "call_core_and_map", _core_fails_closed("core HTTP 403: Forbidden")
+    )
+
+    with _StubPortal({
+        "/api/v1/agent/connect": _connect_ok_with_credential("https://core.test"),
+        "/api/v1/agent/hello": (200, {"recorded": True}),
+    }) as portal:
+        code = main(["connect", "--token", VALID_TOKEN, "--portal", portal.url])
+        paths = [r["path"] for r in portal.requests]
+
+    assert code == 1
+    assert paths == ["/api/v1/agent/connect"]
+    err = capsys.readouterr().err
+    assert "refused it for the gate this request declared" in err
+    assert "scoped to ONE gate" in err
+    assert "REEFLEX_GATE_ID" in err
+    # The 401 advice must NOT appear on this path.
+    assert "REEFLEX_CORE_TOKEN" not in err
+    assert "secret store" not in err

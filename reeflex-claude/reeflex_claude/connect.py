@@ -18,13 +18,18 @@ and executed. `--dry-run` prints every path it would write and exits.
 THE FOUR STEPS, AND WHERE THE HONEST LIMITS ARE
 
 1. EXCHANGE. `POST <portal>/api/v1/agent/connect`, Bearer the registration
-   token. The response carries NO secret: which gate, which environment,
-   which core URL. The token is spent by this call.
-2. WRITE ONE CONFIG. `--agent claude` merges a PreToolUse hook entry (the
-   existing `setup_settings` code path, so the RFX-204/205 fixes -- absolute
-   hook path, wildcard matcher -- apply here unchanged). `--agent opencode`
-   writes a plugin. `--agent litellm` writes a proxy config fragment.
-   **No token is written into any of them.**
+   token. The response carries which gate, which environment, which core URL
+   -- and ONE secret: an `rfx_ac_` engine credential the portal minted for
+   that one gate. The token is spent by this call.
+2. WRITE ONE CONFIG, AND ONE CREDENTIAL FILE. `--agent claude` merges a
+   PreToolUse hook entry (the existing `setup_settings` code path, so the
+   RFX-204/205 fixes -- absolute hook path, wildcard matcher -- apply here
+   unchanged). `--agent opencode` writes a plugin. `--agent litellm` writes a
+   proxy config fragment. **No secret is written into any of them** -- they
+   get the gate id, which is not one. The engine credential goes to
+   `~/.reeflex/credentials.json` at 0600, outside the project directory so it
+   cannot be committed; `credentials.py` records why not settings.json, not
+   the shell profile, and not the pasted line.
 3. ONE REAL DECISION. A benign read is put through this package's OWN
    classifier and envelope builder and sent to core's `/v1/decide`. Not a
    ping, not a `/healthz`: the round trip exercises the code path the hook
@@ -36,12 +41,21 @@ THE FOUR STEPS, AND WHERE THE HONEST LIMITS ARE
    connector's job, a separate component, on a different plane). If step 3
    did not reach core, nothing is reported and the command exits non-zero.
 
-WHAT THIS DOES NOT DO, in the code as well as in the document: it does not
-invent a core credential. `reeflex-core`'s bearer is the operator's own
-`REEFLEX_AUTH_TOKEN`; if their core needs one, `REEFLEX_CORE_TOKEN` must be
-in the environment before this runs, and if it is absent this says so rather
-than guessing. Secrets by reference only -- the same rule the fleet that
-wrote this runs under.
+WHAT THIS STILL DOES NOT DO, in the code as well as in the document: it does
+not INVENT a credential, and it does not go looking for the engine operator's
+own one. `reeflex-core`'s original bearer is the operator's `REEFLEX_AUTH_TOKEN`
+and this command has no way to know it. What it now has is a credential the
+PORTAL minted, received over TLS in the exchange response -- which is a
+different thing from inventing one, and the distinction is the whole design:
+
+    a credential is not in the line, it is in the exchange.
+
+If `REEFLEX_CORE_TOKEN` is already exported, that wins and nothing is stored:
+an operator running their own engine keeps their own credential. And if the
+portal is an older build that returns no credential, this says so and behaves
+exactly as it did before. Secrets by reference only -- the same rule the fleet
+that wrote this runs under; this file never prints the credential, never puts
+it in argv, and never writes it anywhere a repository could pick it up.
 """
 
 from __future__ import annotations
@@ -180,19 +194,27 @@ def _post_json(
 # wrote (or would write, under --dry-run) so the caller can print them.
 # ---------------------------------------------------------------------------
 
-def _core_env(core_url: str, environment: str) -> Dict[str, str]:
-    """The env block every agent gets. NO TOKEN: see the module docstring."""
+def _core_env(core_url: str, environment: str, gate_id: str = "") -> Dict[str, str]:
+    """The env block every agent gets. STILL NO SECRET: see the module
+    docstring. `REEFLEX_GATE_ID` is a public identifier -- the portal prints it
+    on the screen and in the pasted line -- and it does two jobs in the hook:
+    it is sent as `X-Reeflex-Gate` (an engine that accepts a portal credential
+    requires it, so one gate's credential cannot be replayed as another's) and
+    it selects which stored credential to use."""
 
-    return {
+    env = {
         "REEFLEX_CORE_URL": core_url,
         "REEFLEX_MODE": "enforce",
         "REEFLEX_CLAUDE_ENVIRONMENT": environment,
         "REEFLEX_VERIFY_SSL": "true",
     }
+    if gate_id:
+        env["REEFLEX_GATE_ID"] = gate_id
+    return env
 
 
 def write_claude_config(
-    *, core_url: str, environment: str, target: str, dry_run: bool
+    *, core_url: str, environment: str, target: str, dry_run: bool, gate_id: str = ""
 ) -> Tuple[Path, str]:
     """Merge the PreToolUse hook entry into Claude Code's settings.json.
 
@@ -216,7 +238,7 @@ def write_claude_config(
             matcher=DEFAULT_MATCHER,
             timeout=DEFAULT_TIMEOUT,
         )
-        merge_env(settings, _core_env(core_url, environment))
+        merge_env(settings, _core_env(core_url, environment, gate_id))
         write_settings(path, settings)
     except SettingsError as exc:
         raise ConnectError(str(exc)) from exc
@@ -256,6 +278,10 @@ import { spawnSync } from "node:child_process";
 const HOOK = %(hook_cmd)s;
 const CORE_URL = %(core_url)s;
 const ENVIRONMENT = %(environment)s;
+// The gate this agent was connected to. NOT a secret -- the portal prints it
+// on screen. The hook sends it as `X-Reeflex-Gate` and uses it to find the
+// engine credential `connect` stored at 0600 outside the project directory.
+const GATE_ID = %(gate_id)s;
 
 export const ReeflexPlugin = async ({ directory }) => {
   const cwd = directory || process.cwd();
@@ -270,6 +296,7 @@ export const ReeflexPlugin = async ({ directory }) => {
       });
       const env = { ...process.env, REEFLEX_CORE_URL: CORE_URL,
                     REEFLEX_CLAUDE_ENVIRONMENT: ENVIRONMENT, REEFLEX_MODE: "enforce" };
+      if (GATE_ID) env.REEFLEX_GATE_ID = GATE_ID;
       const run = spawnSync(HOOK[0], HOOK.slice(1), { input: payload, env, encoding: "utf8" });
       if (run.error || run.status !== 0) {
         throw new Error("reeflex: gate did not answer (" +
@@ -312,7 +339,7 @@ def _opencode_plugin_path() -> Path:
 
 
 def write_opencode_config(
-    *, core_url: str, environment: str, dry_run: bool
+    *, core_url: str, environment: str, dry_run: bool, gate_id: str = ""
 ) -> Tuple[Path, str]:
     path = _opencode_plugin_path()
     if dry_run:
@@ -323,6 +350,7 @@ def write_opencode_config(
         "hook_cmd": json.dumps(hook),
         "core_url": json.dumps(core_url),
         "environment": json.dumps(environment),
+        "gate_id": json.dumps(gate_id),
     }
     existed = path.exists()
     if existed and "ReeflexPlugin" not in path.read_text(encoding="utf-8"):
@@ -394,20 +422,29 @@ guardrails:
 environment_variables:
   REEFLEX_CORE_URL: "%(core_url)s"
   REEFLEX_LITELLM_ENVIRONMENT: "%(environment)s"
+  # NOT a secret -- the portal prints it on screen. An engine that accepts a
+  # portal-issued credential requires it, so that one gate's credential cannot
+  # be replayed as another gate's.
+  REEFLEX_GATE_ID: "%(gate_id)s"
   # REQUIRED, and there is deliberately NO default org: each proxy key or team
   # must be mapped to a Reeflex org, or every tool call is refused. Write the
   # map, then validate it OFFLINE -- `reeflex-litellm tenancy` exits non-zero
   # if it would not load, and you want that at deploy time rather than as an
   # outage. An example ships at reeflex-litellm/examples/tenancy-map.example.json.
   REEFLEX_LITELLM_TENANCY_MAP_FILE: "/etc/reeflex/tenancy.json"
-  # This gate is %(gate_name)s. No credential is written into this file: if
-  # your core requires a bearer, export REEFLEX_CORE_TOKEN in the proxy's own
-  # environment.
+  # This gate is %(gate_name)s. NO CREDENTIAL IS WRITTEN INTO THIS FILE, and
+  # for a proxy that is not merely tidiness. `connect` did store the engine
+  # credential the portal minted -- at ~/.reeflex/credentials.json, mode 0600,
+  # owned by the user who ran `connect`. A LiteLLM proxy usually runs as a
+  # different user (a systemd unit, a container), which cannot read that file
+  # and should not be given a copy of a config that could. So for a proxy:
+  # read the value out of that file yourself and put it in the proxy's own
+  # secret store as REEFLEX_CORE_TOKEN. It is deliberately not printed here.
 """
 
 
 def write_litellm_config(
-    *, core_url: str, environment: str, gate_name: str, dry_run: bool
+    *, core_url: str, environment: str, gate_name: str, dry_run: bool, gate_id: str = ""
 ) -> Tuple[Path, str]:
     path = Path.home() / ".reeflex" / "litellm" / "reeflex.yaml"
     if dry_run:
@@ -416,7 +453,12 @@ def write_litellm_config(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         _LITELLM_FRAGMENT
-        % {"core_url": core_url, "environment": environment, "gate_name": gate_name},
+        % {
+            "core_url": core_url,
+            "environment": environment,
+            "gate_name": gate_name,
+            "gate_id": gate_id,
+        },
         encoding="utf-8",
     )
     return path, "wrote a config fragment (your config.yaml is not touched)"
@@ -437,7 +479,9 @@ def _resolve_hook_argv() -> list:
     return [sys.executable, "-m", "reeflex_claude.cli", "hook"]
 
 
-def smoke_decision(*, core_url: str, environment: str) -> Dict[str, Any]:
+def smoke_decision(
+    *, core_url: str, environment: str, gate_id: str = ""
+) -> Dict[str, Any]:
     """Put one benign read through classify -> envelope -> POST /v1/decide.
 
     Returns the raw pieces the hello needs. Raises `ConnectError` when core
@@ -449,6 +493,15 @@ def smoke_decision(*, core_url: str, environment: str) -> Dict[str, Any]:
     (it is written for a hook process whose env comes from settings.json). The
     previous values are restored: `connect` must not leave a mutated
     environment behind for whatever else this Python process goes on to do.
+
+    NO SECRET IS PUT INTO THIS PROCESS'S ENVIRONMENT, and that is a deliberate
+    choice over the shorter alternative. `enforce` finds the engine credential
+    through the STORE (keyed by core_url + `REEFLEX_GATE_ID`), so this sets
+    only the non-secret gate id. Exporting the credential as
+    `REEFLEX_CORE_TOKEN` here would have been two fewer lines and would have
+    put a secret into an environment inherited by every subprocess for the
+    rest of the run -- including, on this very code path, nothing at all, but
+    the next person to add a subprocess would not have known.
     """
 
     cls = classify(_SMOKE_TOOL, dict(_SMOKE_INPUT))
@@ -460,9 +513,14 @@ def smoke_decision(*, core_url: str, environment: str) -> Dict[str, Any]:
         "cwd": os.getcwd(),
     }
 
-    saved = {k: os.environ.get(k) for k in ("REEFLEX_CORE_URL", "REEFLEX_CLAUDE_ENVIRONMENT")}
+    saved = {
+        k: os.environ.get(k)
+        for k in ("REEFLEX_CORE_URL", "REEFLEX_CLAUDE_ENVIRONMENT", "REEFLEX_GATE_ID")
+    }
     os.environ["REEFLEX_CORE_URL"] = core_url
     os.environ["REEFLEX_CLAUDE_ENVIRONMENT"] = environment
+    if gate_id:
+        os.environ["REEFLEX_GATE_ID"] = gate_id
     try:
         envelope = build_envelope(payload, cls)
         decision, reason, rule, reachable, _obligations = call_core_and_map(envelope)
@@ -486,14 +544,31 @@ def smoke_decision(*, core_url: str, environment: str) -> Dict[str, Any]:
         # the engine") is the wrong advice for that case and sends the reader
         # somewhere that cannot help; on the hosted default (`api-dev`) it is
         # also the FIRST thing a stranger who pasted the line will read.
-        if "core HTTP 401" in reason or "core HTTP 403" in reason:
+        if "core HTTP 403" in reason:
+            # 403 is the SCOPED refusal and has a different cause from 401: the
+            # engine knows the credential and will not accept it for the gate
+            # this request declared. That is either two onboardings crossed on
+            # one machine or a credential moved between projects -- never a
+            # missing token, so it must never suggest exporting one.
+            remedy = (
+                f"{core_url} is up and recognised the credential, but refused "
+                "it for the gate this request declared. The credential is "
+                "scoped to ONE gate. If this machine has onboarded more than "
+                "one, check REEFLEX_GATE_ID in the config written above; "
+                "otherwise mint a fresh line for the gate you want and paste "
+                "that -- the token you just used is spent."
+            )
+        elif "core HTTP 401" in reason:
             remedy = (
                 f"{core_url} is up and answered -- it refused the request "
-                "because it wants a bearer token. `connect` does not issue "
-                "one and does not invent one: export REEFLEX_CORE_TOKEN (the "
-                "engine operator's own value, from your shell profile or "
-                "secret store), then mint a fresh line and paste it again -- "
-                "the token you just used is spent."
+                "because it did not accept a credential for it. Two causes, in "
+                "the order they are likely: that engine has not been told to "
+                "accept credentials from this portal (its operator sets "
+                "REEFLEX_GATE_INTROSPECTION_URL), or it wants its OWN bearer, "
+                "in which case export REEFLEX_CORE_TOKEN from your shell "
+                "profile or secret store. `connect` does not invent either. "
+                "Then mint a fresh line and paste it again -- the token you "
+                "just used is spent."
             )
         else:
             remedy = (
@@ -568,6 +643,66 @@ def cmd_connect(args) -> int:
         return 1
 
 
+def _store_core_credential(
+    config: Dict[str, Any],
+    *,
+    core_url: str,
+    gate_id: str,
+    gate_name: str,
+    environment: str,
+    portal: str,
+) -> Tuple[Optional[Path], Optional[str]]:
+    """Put the exchange's engine credential where the hook will find it.
+
+    Returns `(path, expires_at)`, or `(None, None)` when there is nothing to
+    store -- which is either an older portal that issues none, or an operator
+    whose own `REEFLEX_CORE_TOKEN` already wins.
+
+    A CREDENTIAL WE CANNOT STORE IS A HARD FAILURE, not a warning. The
+    alternative is finishing with an agent configured to call an engine it
+    cannot authenticate to, whose next tool call fails CLOSED -- and the
+    registration token is spent by now, so the operator would have to work out
+    for themselves that the remedy is a fresh line. Better to say it here,
+    while the reason is on the screen.
+    """
+
+    raw = config.get("core_credential")
+    if not isinstance(raw, dict):
+        return None, None
+    value = raw.get("token")
+    if not isinstance(value, str) or not value:
+        return None, None
+
+    expires_at = raw.get("expires_at")
+    expires_at = expires_at if isinstance(expires_at, str) else None
+
+    # The operator's own credential takes precedence in `enforce`, so storing
+    # one they will not use would leave a secret on disk for nothing.
+    if os.environ.get("REEFLEX_CORE_TOKEN", "").strip():
+        return None, None
+
+    from .credentials import CredentialStoreError, store
+
+    try:
+        path = store(
+            core_url=core_url,
+            gate_id=gate_id,
+            token=value,
+            expires_at=expires_at,
+            portal_url=portal,
+            gate_name=gate_name or None,
+            environment=environment or None,
+        )
+    except CredentialStoreError as exc:
+        raise ConnectError(
+            f"the portal issued an engine credential and it could not be "
+            f"stored: {exc}\\nNothing has been reported to the portal. The "
+            "registration token is spent, so fix the path above and paste a "
+            "fresh line."
+        ) from exc
+    return path, expires_at
+
+
 def _run(args, *, agent: str, token: str, portal: str, verify_ssl: bool) -> int:
     # --- 1. exchange -------------------------------------------------------
     if args.dry_run:
@@ -609,19 +744,35 @@ def _run(args, *, agent: str, token: str, portal: str, verify_ssl: bool) -> int:
         print(f"[reeflex-claude]   the token is now spent; it cannot be exchanged again.")
         print(f"[reeflex-claude]   engine for this gate: {core_url}")
 
-    # --- 2. write one config ----------------------------------------------
+    # --- 2. write one config, and the credential the hook will need --------
+    #
+    # THE CREDENTIAL IS STORED BEFORE THE SMOKE, not after, and the order is
+    # load-bearing: step 3 is the hook's own code path (`enforce`), which finds
+    # the credential through the store. Storing it afterwards would make step 3
+    # measure a configuration nobody will ever run -- the exact class of
+    # mistake that let this feature ship with a first decision that 401s.
+    stored_at = None
+    credential_expires_at = None
+    if not args.dry_run:
+        stored_at, credential_expires_at = _store_core_credential(
+            config, core_url=core_url, gate_id=gate_id, gate_name=gate_name,
+            environment=environment, portal=portal,
+        )
+
     if agent == "claude":
         path, what = write_claude_config(
             core_url=core_url or "<from the portal>",
             environment=environment,
             target=args.target,
             dry_run=args.dry_run,
+            gate_id=gate_id,
         )
     elif agent == "opencode":
         path, what = write_opencode_config(
             core_url=core_url or "<from the portal>",
             environment=environment,
             dry_run=args.dry_run,
+            gate_id=gate_id,
         )
     else:
         path, what = write_litellm_config(
@@ -629,14 +780,37 @@ def _run(args, *, agent: str, token: str, portal: str, verify_ssl: bool) -> int:
             environment=environment,
             gate_name=gate_name or "this gate",
             dry_run=args.dry_run,
+            gate_id=gate_id,
         )
     print(f"[reeflex-claude] {what}: {path}")
-    if not os.environ.get("REEFLEX_CORE_TOKEN", "").strip():
+    # Three cases, and each gets its own sentence because the operator's next
+    # move is different in each.
+    if os.environ.get("REEFLEX_CORE_TOKEN", "").strip():
         print(
-            "[reeflex-claude] no REEFLEX_CORE_TOKEN in the environment. Nothing "
-            "was written for it -- if your engine requires a bearer token, "
-            "export it yourself (shell profile, CI secret store) before the "
-            "agent starts. A core with auth switched off needs none."
+            "[reeflex-claude] REEFLEX_CORE_TOKEN is set in your environment, so "
+            "that is what the hook will present. Yours wins; nothing was "
+            "stored for this gate."
+        )
+    elif stored_at is not None:
+        print(f"[reeflex-claude] stored this gate's engine credential: {stored_at} (mode 0600)")
+        print(
+            "[reeflex-claude]   it is not printed anywhere, it is not in the "
+            "line you pasted, and it is outside this project directory so it "
+            "cannot be committed."
+        )
+        if credential_expires_at:
+            print(f"[reeflex-claude]   good for gate {gate_id} only, until {credential_expires_at}")
+        print(
+            "[reeflex-claude]   revoke it by revoking this gate in the portal, "
+            "which also stops the agent it configured."
+        )
+    elif not args.dry_run:
+        print(
+            "[reeflex-claude] this portal issued no engine credential (an older "
+            "build). Nothing was stored -- if your engine requires a bearer "
+            "token, export REEFLEX_CORE_TOKEN yourself (shell profile, CI "
+            "secret store) before the agent starts. A core with auth switched "
+            "off needs none."
         )
 
     if args.dry_run:
@@ -648,7 +822,7 @@ def _run(args, *, agent: str, token: str, portal: str, verify_ssl: bool) -> int:
 
     # --- 3. one real decision ---------------------------------------------
     print(f"[reeflex-claude] asking {core_url}/v1/decide one real question ...")
-    result = smoke_decision(core_url=core_url, environment=environment)
+    result = smoke_decision(core_url=core_url, environment=environment, gate_id=gate_id)
     print(
         f"[reeflex-claude]   verdict: {result['verdict']}"
         + (f"  rule: {result['rule']}" if result["rule"] else "")
