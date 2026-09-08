@@ -294,3 +294,137 @@ def test_a_missing_auth_object_is_refused_not_defaulted(stub, tenancy_map):
         {"model": "mock-tools"}, None, resp))
     assert R.refused_payloads(out)[0]["error"] == "reeflex_tenant_unmapped"
     assert stub.requests == []
+
+
+# ---------------------------------------------------------------------------
+# The STREAMING contract (RFX-242).
+#
+# Every assertion below is read off the INSTALLED litellm, not off its docs.
+# The hook is only ever called if litellm's own capability detection finds it,
+# and that detection is a leaf-class `__dict__` check with two exits -- so
+# "the method exists" is not the same claim as "the proxy will call it".
+# ---------------------------------------------------------------------------
+
+def test_the_streaming_hook_signature_is_the_one_the_proxy_awaits():
+    """`ProxyLogging.async_post_call_streaming_iterator_hook` calls it with
+    KEYWORD arguments `user_api_key_dict=`, `response=`, `request_data=`, and
+    iterates the result. So the parameter NAMES are part of the contract, and
+    it must be an async GENERATOR -- a coroutine returning a list would be
+    awaited nowhere and `async for` would raise."""
+    fn = G.ReeflexActionGuardrail.async_post_call_streaming_iterator_hook
+    sig = inspect.signature(fn)
+    assert {"user_api_key_dict", "response", "request_data"} <= set(sig.parameters)
+    assert inspect.isasyncgenfunction(fn), (
+        "the proxy does `async for chunk in <this>`; a plain coroutine breaks "
+        "the stream rather than governing it")
+
+
+def test_litellms_own_capability_detection_finds_this_guardrail():
+    """The proxy SKIPS the whole iterator chain unless some callback overrides
+    the hook, and it decides that with `"async_post_call_streaming_iterator_hook"
+    in type(cb).__dict__` (proxy/utils.py, `_callback_capabilities`).
+
+    Asserted through litellm's own function with our guardrail registered,
+    rather than by re-implementing the check here: a re-implementation would
+    keep passing after litellm changed the rule."""
+    from litellm.proxy.utils import ProxyLogging
+
+    g = G.ReeflexActionGuardrail(reeflex_hold_wait=0.0)
+    previous = litellm.callbacks
+    try:
+        litellm.callbacks = [g]
+        caps = ProxyLogging._callback_capabilities()
+        assert caps.has_iterator_override is True
+        assert [c for c, kind in caps.iterator_overrides
+                if c is g and kind == "override"], (
+            "litellm found no iterator override for this guardrail, so the "
+            "streaming path would run ungoverned: %r" % (caps.iterator_overrides,))
+    finally:
+        litellm.callbacks = previous
+        ProxyLogging._callback_capabilities_cache.clear()
+
+
+def test_defining_the_streaming_hook_suppresses_the_after_delivery_pass():
+    """The defect this removes, expressed as litellm's own condition.
+
+    Before this hook existed, a streamed response was reassembled after
+    delivery and run through `async_post_call_success_hook` by
+    `ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails` -- whose
+    docstring says "This is audit-only -- content has already been delivered to
+    the client". So a streamed `rm -rf /` produced a `deny` in core's audit log
+    AND reached the caller.
+
+    That pass skips any callback for which
+    `"async_post_call_streaming_iterator_hook" in type(cb).__dict__`. This test
+    pins the source text of that condition, so the day litellm changes it, the
+    build says so instead of quietly deciding every streamed action twice."""
+    import inspect as _inspect
+    from litellm.proxy import common_request_processing as crp
+
+    src = _inspect.getsource(
+        crp.ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails)
+    assert '"async_post_call_streaming_iterator_hook" in type(cb).__dict__' in src
+    assert "audit-only" in src
+    assert ("async_post_call_streaming_iterator_hook"
+            in G.ReeflexActionGuardrail.__dict__)
+
+
+def test_a_real_model_response_stream_is_governed_and_rewritten(stub, tenancy_map):
+    """The rewrite, on litellm's REAL chunk objects.
+
+    The rest of the streaming suite drives plain dicts. This one builds
+    `ModelResponseStream` / `StreamingChoices` / `Delta` and asserts the copy,
+    the strip and the synthesized refusal frame all survive contact with
+    pydantic -- which is where a rewrite that works on dicts and silently
+    no-ops on models would be caught."""
+    from litellm.types.utils import (ChatCompletionDeltaToolCall, Delta,
+                                     Function, ModelResponseStream,
+                                     StreamingChoices)
+
+    def chunk(delta, finish=None):
+        return ModelResponseStream(
+            id="chatcmpl-1", model="mock-tools",
+            choices=[StreamingChoices(index=0, delta=delta,
+                                      finish_reason=finish)])
+
+    def tc(index, args, call_id=None, name=None):
+        return ChatCompletionDeltaToolCall(
+            index=index, id=call_id, type="function",
+            function=Function(name=name, arguments=args))
+
+    args = json.dumps({"command": "rm -rf /"})
+    chunks = [
+        chunk(Delta(role="assistant", content=None)),
+        chunk(Delta(tool_calls=[tc(0, "", "call_1", "run_shell")])),
+        chunk(Delta(tool_calls=[tc(0, args[:9])])),
+        chunk(Delta(tool_calls=[tc(0, args[9:])])),
+        chunk(Delta(), "tool_calls"),
+    ]
+    stub.answer_deny()
+
+    async def _aiter():
+        for c in chunks:
+            yield c
+
+    async def go():
+        g = G.ReeflexActionGuardrail(reeflex_hold_wait=0.0)
+        return [c async for c in
+                g.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=real_caller(team_id="team_pay"),
+                    response=_aiter(),
+                    request_data={"model": "mock-tools", "stream": True})]
+
+    out = asyncio.run(go())
+
+    wire = "".join(c.model_dump_json() for c in out)
+    assert "rm -rf /" not in wire, wire
+    assert all(not (ch.delta.tool_calls or []) for c in out for ch in c.choices), (
+        "a tool-call fragment survived on a real ModelResponseStream")
+    content = "".join(ch.delta.content or "" for c in out for ch in c.choices)
+    refused = json.loads(content)["reeflex"]["refused"]
+    assert refused[0]["stage"] == "refused_at_gateway"
+    assert [ch.finish_reason for c in out for ch in c.choices
+            if ch.finish_reason] == ["stop"]
+    assert all(c.id == "chatcmpl-1" for c in out), (
+        "a synthesized frame carries a different completion id than the "
+        "stream it was inserted into")

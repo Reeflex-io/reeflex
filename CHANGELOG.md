@@ -7,6 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ### Added
 
+- **`reeflex-litellm` now governs `stream: true`, which was the seat's one ungoverned path (RFX-242).**
+
+  `mode: post_call` fires only for a **buffered** response. Measured on litellm 1.100.0 through a real proxy, on the raw SSE bytes: the same `rm -rf /` tool call the buffered path refuses **reached the caller intact** as `chat.completion.chunk` deltas. LibreChat streams by default, so this was the path a Private AI deployment would actually use.
+
+  `ReeflexActionGuardrail` now also implements `async_post_call_streaming_iterator_hook`. Frames carrying no tool call — the role frame, prose deltas — pass through immediately and untouched; from the first `tool_calls` delta the tail is buffered, because `function.arguments` arrives split across frames and the dangerous half of a command is usually in the last one. The assembled calls are then decided by **the same `enforce.rule_one_call()`, in the same order, as the buffered path** — so a request does not get a different answer for having been streamed — and the tail is released verbatim, rewritten with the same structured refusal payload (`stage: refused_at_gateway`), or withheld while a hold waits for a human. Same `mode: post_call` config line for both paths; there is no second key to forget.
+
+  **A second defect, not previously filed, is closed by the same change.** Before this hook existed LiteLLM reassembled the finished stream and ran the *buffered* hook on it via `ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails` — which its own docstring calls *"audit-only — content has already been delivered to the client"*. So a streamed `rm -rf /` produced a **`deny` row in core's audit log AND reached the caller**: the record contradicted the wire. LiteLLM skips that pass for any guardrail defining the streaming hook, so the decision is now taken once, before delivery. Both halves measured: 1 decision row per streamed request, refusal in the bytes.
+
+  **Proven with a new instrument that fails on the pre-fix build.** `proxy/stream_walk.py` drives a real proxy and asserts on raw `text/event-stream` bytes — denied call absent from every byte and from every *fragment*, allowed call byte-identical to a proxy with no seat, prose untouched, a hold withheld until a **second thread** approves it in core and then released, core unreachable failing closed while prose still flows. Run against the pre-fix package (same script, `PYTHONPATH` at `origin/main`) **five rows go red**, including the needle sitting in the bytes. `tests/test_streaming.py` (21 tests) goes **10 red** with the hook deleted from the class.
+
+  **What it costs, and it is two numbers.** Concurrency 1, one worker, 3 repeats, zero errors: added **time to first token −0.4 … +0.3 ms** (prose is not withheld), added **time to first tool-call frame +71.3 … +73.0 ms** — one `/v1/decide`, the same cost the buffered path pays. On a pure-prose stream the seat adds **+0.6 … +1.7 ms**, against **+40.4 … +40.9 ms** for the pre-fix build, which was reassembling every stream after delivery. `bench/latency.py --stream` reports both, and `--prose` is the control.
+
+  The README's "refuse `stream: true` at the gateway" workaround is removed, having been measured out rather than argued out.
+
 - **The release publishes `reeflex-litellm` 0.1.0, and two new jobs make a release's green mean a customer's command works (RFX-224, RFX-241, RFX-246, RFX-248).**
 
   `release.yml` built and offered three PyPI packages. `reeflex-litellm` was in the tree, on no index, with `pip install reeflex-litellm[proxy]` printed in its own README — so the one line the package told people to run resolved nothing. It is now the **fourth** package in the matrix: built, `twine check --strict`ed, offered over the same OIDC Trusted Publishing, and **invoked**.

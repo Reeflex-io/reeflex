@@ -112,18 +112,47 @@ model in it, which means it cannot reason about intent, tone or novel phrasing �
 it prices the action on three declared axes. Again: a limit, stated so a
 deployment can plan around it.
 
-### Streaming responses are NOT governed by this hook
+### Streaming (`stream: true`) is governed too, and it is a different hook
 
-`mode: post_call` fires for a buffered response. A request with `stream: true`
-is delivered through a different hook (`async_post_call_streaming_iterator_hook`)
-which this class does not implement.
+`mode: post_call` fires for a **buffered** response. A streamed one is delivered
+through `async_post_call_streaming_iterator_hook`, and this class implements
+both. One `mode: post_call` line in the config governs both paths; there is no
+second key to forget.
 
-**Measured, not assumed** (2026-09-08, litellm 1.100.0, this proxy config): the
-same `rm -rf /` tool call that is refused on the buffered path **reaches the
-caller intact** as `chat.completion.chunk` deltas when `stream: true` is set.
+**What the seat does to a stream.** Frames that carry no tool call — the role
+frame, prose deltas — are passed through **immediately and untouched**. From the
+first frame carrying a `tool_calls` delta the tail of the stream is **buffered**:
+`function.arguments` arrives split across frames, and the dangerous half of a
+command is usually in the last one, so nothing is released until each call is
+whole and decided. Then the tail goes out — verbatim if allowed, with the
+refused call's fragments removed and the same structured refusal payload as the
+buffered path if not, `finish_reason` flipping to `stop` when every call was
+refused.
 
-Until that hook is implemented, a deployment that must not have an ungoverned
-path should **refuse `stream: true` at the gateway**.
+**Measured on the wire** (2026-09-08, litellm 1.100.0, real proxy, raw SSE bytes
+— `proxy/stream_walk.py`):
+
+| case | before this hook existed | now |
+|---|---|---|
+| denied `rm -rf /` | **in the bytes**, `finish_reason: tool_calls`, assembles into a runnable call | **absent from every byte**, one refusal frame, `finish_reason: stop` |
+| allowed call | untouched | untouched — byte-identical to a proxy with no seat, once the model's own per-response `id`/`created`/`tool_call_id` are normalized |
+| prose | untouched | untouched |
+| hold | not applicable — nothing was withheld | withheld while a human decides, **released** when core accepts the approval |
+| core unreachable | the call went out | refused, `reeflex_unavailable`; prose still flows |
+
+**It also removes a defect nobody had filed.** Before this hook existed, LiteLLM
+reassembled the finished stream and ran the *buffered* hook on it through
+`_run_deferred_stream_guardrails` — which its own docstring calls *"audit-only —
+content has already been delivered to the client"*. So a streamed `rm -rf /`
+produced a **`deny` row in core's audit log and reached the caller anyway**: the
+record contradicted the wire. LiteLLM skips that pass for any guardrail defining
+the streaming hook, so the decision is now taken **once, before delivery**.
+Measured both ways: 1 decision row per streamed request, and the refusal in the
+bytes.
+
+**The limit is unchanged.** This is still a tool call *proposed*, refused before
+the client is handed it — not an action blocked at execution. See the section
+above.
 
 ### One session per request unless you say otherwise
 
@@ -509,17 +538,50 @@ anything next to them:
   sequential design subtracts a baseline measured in one mode from a hook-on
   cell measured in the other. Fixed by a per-thread keep-alive connection with
   `TCP_NODELAY`, and by interleaving the two sides.
-* The streaming limit above was first measured as "the destructive call did NOT
-  reach the caller" — which was the mock model not implementing SSE, not the
-  gateway governing anything. It does not implement SSE any more; the limit is
-  real.
+* The streaming hole was first measured as "the destructive call did NOT reach
+  the caller" — which was the mock model not implementing SSE, not the gateway
+  governing anything. It implements SSE now, which is how the hole was confirmed
+  and then closed.
 
 Reproduce with `bench/latency.py` (`--help` and the module docstring document
 every constant it holds fixed and why).
 
+### What streaming costs, which is two numbers and not one
+
+Same rig, same day, `--stream`, one uvicorn worker, 3 repeats per cell, zero
+errors. Streaming has **two** latencies and quoting either one alone is
+misleading:
+
+| concurrency 1 | added p50 |
+|---|---|
+| **time to first token** (first SSE frame) | **−0.4 … +0.3 ms** |
+| **time to first tool-call frame** | **+71.3 … +73.0 ms** |
+| whole response | +71.4 … +73.1 ms |
+| *same rig, buffered, for comparison* | *+67.7 … +68.6 ms* |
+
+The first row is what a human watching text appear experiences: the seat does
+not touch prose, so it is unchanged. The second is what an agent experiences:
+the tool call cannot leave until `/v1/decide` answers, so it costs **one
+decision** — the same one the buffered path costs, plus ~3 ms.
+
+On a **prose** response the seat never calls core at all, and the whole added
+cost is **+0.6 … +1.7 ms p50**. The pre-fix build measured **+40.4 … +40.9 ms**
+on that same prompt, because LiteLLM was reassembling every stream after
+delivery to run the buffered hook on it. Governing streaming made ungoverned
+prose *faster*.
+
+At concurrency 10 on one worker the proxy is saturated — baseline p95 swings
+between 85 and 156 ms across repeats — and the added figures (+130 … +207 ms
+TTFT, +315 … +345 ms to the tool frame) are dominated by queueing in the proxy,
+not by the seat. The operational note from the buffered table applies unchanged
+and is the one that matters: **scale the proxy's workers.**
+
+**The mock emits its whole stream at once**, so these are upper bounds. A real
+provider spends hundreds of milliseconds emitting tokens, and the decision
+overlaps that.
+
 ## Not in this version
 
-* **Streaming.** See the limit above. Refuse `stream: true` meanwhile.
 * **Pre-call blocking.** The seat cannot stop a request from reaching a model;
   it rules on what comes back.
 * **`enforcement_stage` and `gateway_routing` on the evidence wire.** They are
@@ -549,6 +611,25 @@ that the base class in play is litellm's real `CustomGuardrail` before testing
 anything — so a green run cannot mean "the fallback shim passed". Everything
 else runs with no proxy, no model and no Docker, against a scriptable stub core
 (`tests/stubcore.py`, which documents what it is and is not evidence of).
+
+**Neither suite reads a socket.** For the streaming path that matters, because
+the defect it closes was a defect of what left the process. `proxy/stream_walk.py`
+drives a real proxy and asserts on the raw `text/event-stream` bytes:
+
+```bash
+python3 proxy/mock_model.py --port 18612 &
+litellm --config proxy/config.yaml --port 18620 &          # with the seat
+litellm --config proxy/config-nohook.yaml --port 18630 &   # the control
+python3 proxy/stream_walk.py \
+    --hook-url http://127.0.0.1:18620 \
+    --nohook-url http://127.0.0.1:18630 \
+    --core-url http://127.0.0.1:18711 \
+    --api-key-file /path/to/the/proxy/master.key
+```
+
+It exits non-zero on any failure and prints the measurement rather than a
+verdict word on every row, so running it against a gateway *without* the seat
+prints the destructive command sitting in the bytes.
 
 ## License
 

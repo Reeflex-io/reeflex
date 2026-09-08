@@ -77,13 +77,29 @@ No prompt reading, no PII masking, no content scoring, no LLM anywhere in the
 decision path.  This seat is blind to prose by construction; text guardrails
 keep their own seat and this one does not duplicate them.
 
-STREAMING IS NOT COVERED BY THIS HOOK.  `mode: post_call` fires for a buffered
-response.  A streaming request (`stream: true`) is delivered through
-`async_post_call_streaming_iterator_hook`, which this class does not implement,
-so a streamed tool call is NOT ruled on.  That is measured, not assumed -- the
-measurement and the ticket are in the README.  Until it is closed, a deployment
-that must not have an ungoverned path should refuse `stream: true` at the
-gateway.
+STREAMING (`stream: true`) IS COVERED TOO, BY A SECOND HOOK (RFX-242)
+====================================================================
+`async_post_call_success_hook` only ever sees a BUFFERED response.  A streaming
+request is delivered through `async_post_call_streaming_iterator_hook`, which
+this class now also implements: tool-call deltas are buffered until each call is
+complete, the calls are decided in the same order and by the same code as on the
+buffered path, and only then are the chunks released, replaced by the structured
+refusal, or withheld while a hold waits for a human.  Text deltas that carry no
+tool call stream through untouched.  See streaming.py, and the README's
+streaming section for what it costs in time-to-first-token.
+
+Implementing it also REMOVES a second, quieter defect.  Measured on litellm
+1.100.0 before this change: a streamed response was assembled after delivery and
+run through `async_post_call_success_hook` by
+`ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails` -- which that
+function's own docstring calls "audit-only -- content has already been delivered
+to the client".  So a streamed `rm -rf /` produced a `deny` row in core's audit
+log AND reached the caller intact: the record contradicted the wire.  LiteLLM
+skips that deferred pass for any guardrail that defines
+`async_post_call_streaming_iterator_hook` in its class `__dict__`
+(`common_request_processing.py`, the `type(cb).__dict__` check), so the decision
+is now taken once, before delivery, instead of twice with only the late one
+mattering.
 """
 
 from __future__ import annotations
@@ -101,6 +117,7 @@ from . import evidence as _evidence
 from . import normalize as _normalize
 from . import response as _response
 from . import routing as _routing
+from . import streaming as _streaming
 from . import tenancy as _tenancy
 
 _logger = logging.getLogger("reeflex_litellm")
@@ -168,6 +185,271 @@ class ReeflexActionGuardrail(_Base):
                                                 user_api_key_dict)
         except Exception as exc:  # fail closed on our own bugs, loudly
             return self._refuse_everything(response, exc)
+
+    async def async_post_call_streaming_iterator_hook(
+            self, user_api_key_dict, response, request_data: dict):
+        """Rule on the tool calls in a STREAMED response (RFX-242).
+
+        THE CONTRACT, READ OFF litellm 1.100.0 RATHER THAN OFF THE DOCS:
+
+          * `ProxyLogging.async_post_call_streaming_iterator_hook`
+            (`proxy/utils.py`) calls this with KEYWORD arguments
+            `user_api_key_dict=`, `response=`, `request_data=`, where `response`
+            is the upstream async iterator of chunks.  The parameter names are
+            therefore part of the contract and are asserted in the suite.
+          * It must be an ASYNC GENERATOR.  Its output is what the caller
+            receives; `async_streaming_data_generator` serializes each yielded
+            chunk to SSE.
+          * The chain is only entered at all when
+            `"async_post_call_streaming_iterator_hook" in type(cb).__dict__`
+            -- a leaf-class check.  Defining it on THIS class is what registers
+            it; inheriting it from a base would not.
+          * `should_run_guardrail(..., GuardrailEventHooks.post_call)` is
+            checked by the proxy before we are called, so `mode: post_call` in
+            the config governs this hook as well as the buffered one.  No second
+            config key, and no way to end up with one path governed and the
+            other not.
+
+        WHAT IS YIELDED, AND WHEN.  Chunks with no tool-call fragment are
+        yielded IMMEDIATELY and untouched -- prose does not wait for a
+        governance decision.  From the first chunk carrying a `tool_calls`
+        delta the stream is buffered to its end (including the empty
+        `finish_reason` frame, which would otherwise arrive before the calls it
+        finishes), the assembled calls are decided, and only then is the tail
+        released.  streaming.py documents the assembly and the rewrite.
+
+        FAIL CLOSED, INCLUDING ON OUR OWN BUGS.  Anything raised by the
+        decision or the rewrite refuses every assembled call rather than
+        releasing buffered fragments.  A chunk the ACCUMULATOR could not absorb
+        is worse than that -- the call it belonged to may not be in the
+        assembled list at all, so "refuse the assembled calls" would leave its
+        fragments unaccounted for and release them.  That case drops the
+        buffered tail entirely and emits a refusal in its place.
+
+        `GeneratorExit` / `CancelledError` (the client hanging up) and an
+        exception from the UPSTREAM iterator (the provider failing mid-stream)
+        are propagated untouched.  Neither is a governance failure, and in both
+        cases the buffered fragments are simply never yielded, which is the
+        outcome we want anyway.
+        """
+        data = request_data or {}
+        accumulator = _streaming.ToolCallAccumulator()
+        buffered = []
+        armed = False
+        unabsorbed = None
+        # Whether prose has already reached the caller.  Carried into the
+        # rewrite because the buffered path puts its refusal notice on a NEW
+        # line after any content the assistant already produced, and a stream
+        # that streamed that content out before the first tool call has to
+        # reproduce the same assembled message.
+        released_content = False
+
+        async for chunk in response:
+            if not armed and not _streaming.chunk_has_tool_call(chunk):
+                released_content = released_content or bool(
+                    _streaming.chunk_content(chunk))
+                yield chunk
+                continue
+            armed = True
+            buffered.append(chunk)
+            try:
+                accumulator.feed(chunk)
+            except Exception as exc:  # pragma: no cover - defensive
+                # Recorded, not swallowed.  Swallowing it would leave a tool
+                # call the accumulator never saw, whose index is therefore in
+                # no `denied` set -- and `_emit_stream` releases anything it was
+                # not told to strip.  That is the fail-open this line exists to
+                # prevent, so the whole tail is dropped below instead.
+                unabsorbed = unabsorbed or exc
+
+        if not armed:
+            return
+
+        if unabsorbed is not None:
+            for out in self._refuse_stream_opaque(buffered, unabsorbed):
+                yield out
+            return
+
+        try:
+            chunks, ledger_lines, tenant = await self._rule_on_stream(
+                data, user_api_key_dict, buffered, accumulator,
+                released_content)
+        except Exception as exc:  # fail closed on our own bugs, loudly
+            chunks, ledger_lines, tenant = (
+                self._refuse_stream_everything(buffered, accumulator, exc,
+                                               released_content),
+                [], None)
+
+        for out in chunks:
+            yield out
+
+        # AFTER the caller has the chunks, for the reason `_rule_on_response`
+        # gives: an evidence outage must not delay or change a decision that is
+        # already enforced.
+        if ledger_lines:
+            await self._record_evidence(ledger_lines, tenant,
+                                        asyncio.get_running_loop())
+
+    async def _rule_on_stream(self, data: dict, user_api_key_dict,
+                              buffered: list, accumulator,
+                              released_content: bool = False) -> tuple:
+        """Decide every assembled call and rewrite the buffered tail.
+
+        Returns `(chunks_to_yield, ledger_lines, tenant)`.  The decision loop is
+        deliberately the same shape as `_rule_on_response`'s -- same
+        `rule_one_call`, same order, same executor -- because the property that
+        matters is that a request does not get a different answer for having
+        been streamed.
+        """
+        calls = accumulator.assembled()
+        if not calls:
+            # Fragments arrived that assembled into nothing rulable.  Release
+            # the tail: there is no action in it.
+            return list(buffered), [], None
+
+        resolution = _tenancy.resolve(user_api_key_dict)
+        if not resolution.resolved:
+            _log("tenancy: REFUSED every streamed tool call -- unmapped "
+                 "gateway caller [%s]" % resolution.identity.describe())
+            refusals = [
+                _enforce.refuse_unmapped_tenant(
+                    _normalize.normalize_tool_call(raw), resolution.reason
+                ).refusal
+                for _, raw in calls
+            ]
+            return (self._emit_stream(buffered, {idx for idx, _ in calls},
+                                      refusals, released_content),
+                    [], None)
+
+        tenant = resolution.tenant
+        last = buffered[-1] if buffered else None
+        session_id = self.session_id(data)
+        model = self.model_name(data, last)
+        gateway_routing = _routing.build(
+            data=data, response=last, tenant=tenant,
+            identity=resolution.identity, model=model)
+
+        loop = asyncio.get_running_loop()
+        denied, refusals, ledger_lines = set(), [], []
+        for idx, raw in calls:
+            call = _normalize.normalize_tool_call(raw)
+            outcome = await loop.run_in_executor(
+                _core._get_executor(),
+                lambda c=call: _enforce.rule_one_call(
+                    c, session_id=session_id, model=model,
+                    principal=self.reeflex_principal or None,
+                    environment=self.reeflex_environment or None,
+                    hold_wait=_as_float(self.reeflex_hold_wait),
+                    tenant=tenant, gateway_routing=gateway_routing),
+            )
+            if not outcome.allowed:
+                denied.add(idx)
+                refusals.append(outcome.refusal)
+            if outcome.ledger is not None:
+                ledger_lines.append(outcome.ledger)
+
+        return (self._emit_stream(buffered, denied, refusals,
+                                  released_content),
+                ledger_lines, tenant)
+
+    def _emit_stream(self, buffered: list, denied: set, refusals: list,
+                     released_content: bool = False) -> list:
+        """The tail of the stream, as the caller should receive it.
+
+        With nothing denied the buffered chunks are returned AS THEY ARE -- the
+        same objects, in the same order, so an allowed stream is
+        indistinguishable from one that never met this seat.  That identity is
+        asserted against a hook-off proxy in the suite, not assumed here.
+        """
+        if not denied:
+            return list(buffered)
+
+        all_denied = denied >= {i for c in buffered
+                                for i in _streaming.chunk_tool_indices(c)}
+        out, saw_content = [], bool(released_content)
+        finish_at = None
+        for chunk in buffered:
+            rewritten, carries = _streaming.strip_tool_indices(chunk, denied)
+            if not carries:
+                continue
+            if all_denied and _streaming.chunk_finish_reason(rewritten):
+                # Every call on this response was refused, so "call these
+                # tools" is no longer what the response is doing.  Same rule,
+                # and the same reason, as response.apply_refusals().
+                rewritten = _streaming.set_finish_reason(rewritten, "stop")
+            if _streaming.chunk_finish_reason(rewritten) and finish_at is None:
+                finish_at = len(out)
+            else:
+                saw_content = saw_content or bool(
+                    _streaming.chunk_content(rewritten))
+            out.append(rewritten)
+
+        template = buffered[-1]
+        notice = _streaming.build_refusal_chunk(
+            template, _streaming.refusal_notice(refusals, saw_content))
+        out.insert(len(out) if finish_at is None else finish_at, notice)
+        return out
+
+    def _refuse_stream_opaque(self, buffered: list, exc: Exception) -> list:
+        """Drop the buffered tail and say why, when we cannot enumerate it.
+
+        Reached only when a chunk could not be absorbed at all, so the adapter
+        does not know how many tool calls it is holding or which fragments
+        belong to which.  There is no safe partial answer: releasing anything
+        would release a fragment nothing ruled on, and naming per-call refusals
+        would name calls that may not be the ones in the buffer.  So the tail
+        goes nowhere and one frame carrying a fail-closed refusal goes out in
+        its place -- with `finish_reason: "stop"`, so the client is not left
+        waiting to be told the response ended.
+        """
+        _log("streaming: DROPPED the buffered tail -- a chunk could not be "
+             "read, so no tool call in it was ruled on: %s: %s"
+             % (type(exc).__name__, exc))
+        payload = json.dumps({"reeflex": {"version": 1, "refused": [{
+            "error": _enforce.ERROR_UNAVAILABLE,
+            "rule": _core.FAIL_CLOSED_RULE,
+            "stage": "refused_at_gateway",
+            "reason": ("Reeflex: a chunk of this streamed response could not "
+                       "be read, so no tool call on it was ruled on and the "
+                       "whole tail is withheld [rule=%s]: %s"
+                       % (_core.FAIL_CLOSED_RULE, type(exc).__name__)),
+        }]}}, sort_keys=True)
+        try:
+            notice = _streaming.build_refusal_chunk(buffered[-1], payload)
+            return [notice, _streaming.set_finish_reason(
+                _streaming.build_refusal_chunk(buffered[-1], ""), "stop")]
+        except Exception:  # pragma: no cover - defensive
+            return []
+
+    def _refuse_stream_everything(self, buffered: list, accumulator,
+                                  exc: Exception,
+                                  released_content: bool = False) -> list:
+        """Refuse every assembled call after an unexpected error.
+
+        The mirror of `_refuse_everything` for the streaming path.  If even
+        this fails there is nothing safe left to yield, so the buffered tail is
+        DROPPED rather than released: on this path "return the response
+        anyway" would mean handing over the very fragments that were never
+        ruled on.
+        """
+        reason = ("Reeflex: the gateway's governance hook failed, so no tool "
+                  "call on this streamed response was cleared and all are "
+                  "refused [rule=%s]: %s: %s"
+                  % (_core.FAIL_CLOSED_RULE, type(exc).__name__, exc))
+        _log("streaming: REFUSED every tool call -- %s: %s"
+             % (type(exc).__name__, exc))
+        try:
+            calls = accumulator.assembled()
+            refusals = [
+                _enforce.refusal(_normalize.normalize_tool_call(raw),
+                                 _enforce.ERROR_UNAVAILABLE,
+                                 _core.FAIL_CLOSED_RULE, reason)
+                for _, raw in calls
+            ]
+            return self._emit_stream(buffered, {idx for idx, _ in calls},
+                                     refusals, released_content)
+        except Exception:  # pragma: no cover - defensive
+            return []
 
     # -- the work ----------------------------------------------------------
 
