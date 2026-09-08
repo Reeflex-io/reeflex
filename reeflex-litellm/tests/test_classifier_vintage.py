@@ -17,6 +17,17 @@ RFX-144 round was about.
 
 These two tests make that failure loud instead of silent.  They are assertions
 about the INSTRUMENT, not about this package.
+
+WHAT CHANGED UNDER THIS FILE, AND WHY IT STAYS ANYWAY (RFX-224 / RFX-241)
+=========================================================================
+The requirement is now `reeflex-claude>=0.2.0,<0.3`, and 0.2.0 is the first
+PUBLISHED wheel carrying RFX-144/145/146 -- so the resolve described above can
+no longer happen: the stale wheel is excluded BY VERSION rather than by which
+copy happens to win.  That makes these tests belt-and-braces instead of the
+only guard, which is a better position and not a reason to delete them: the
+floor is a declaration, and a venv assembled by hand, an editable install of an
+old checkout, or a future floor edit can still put a pre-fix classifier in
+front of the seat.  This file is what makes that loud.
 """
 
 from __future__ import annotations

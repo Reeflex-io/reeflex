@@ -6,11 +6,32 @@
 #
 # Fan-out (from a single tagged commit):
 #   - GitHub Release  <- all built artifacts + SHA256SUMS attached
-#   - PyPI            <- reeflex-claude + reeflex-holds + reeflex-mcp ATTEMPTED
-#                        (OIDC Trusted Publishing). Only a package whose
-#                        `version` MOVED since the last tag actually uploads —
-#                        see "what a green PyPI job means" below.
+#   - PyPI            <- reeflex-claude + reeflex-holds + reeflex-mcp +
+#                        reeflex-litellm ATTEMPTED (OIDC Trusted Publishing).
+#                        Only a package whose `version` MOVED since the last
+#                        tag actually uploads — see "what a green PyPI job
+#                        means" below.
 #   - GHCR            <- ghcr.io/reeflex-io/reeflex-core  (ONLY if core changed)
+#
+# AND TWO JOBS THAT INVOKE THE ARTEFACTS RATHER THAN TRUSTING THE UPLOAD
+# (RFX-246). `verify-dist` installs the wheels THIS run built into clean venvs
+# and runs a real subcommand with its negative control; `verify-published`
+# does the same against `pip install` FROM PyPI, after the publish. Both call
+# one script, `scripts/verify_release_artifacts.py`, which also runs by hand on
+# a devbox — a check that exists only inside a workflow is a check nobody
+# re-runs when they doubt the answer. What they assert, and why `--help` was
+# not enough, is in that script's header.
+#
+# A NEW PyPI NAME NEEDS A HUMAN ONCE, BEFORE ITS FIRST TAG. OIDC Trusted
+# Publishing can only upload to a project that either exists with a publisher
+# configured, or has a PENDING publisher created on pypi.org first. When
+# `reeflex-litellm` was added to this matrix (v0.2.1) the name did not resolve
+# on PyPI at all — `pypi.org/pypi/reeflex-litellm/json` was a 404 — so the
+# publish step for it fails with a 403 until someone with the account adds a
+# pending publisher (project `reeflex-litellm`, owner `Reeflex-io`, repo
+# `reeflex`, workflow `release.yml`). It is LAST in the pypi job's steps for
+# exactly that reason: a missing publisher for the new name must not stop the
+# three that are already configured. docs/RELEASING.md §2.1 is the checklist.
 #
 # WHAT A GREEN PyPI JOB MEANS, AND WHAT IT DOES NOT (RFX-246).  `skip-existing:
 # true` makes a re-run idempotent, and it also makes the job GREEN over a
@@ -34,6 +55,11 @@
 # So: to ship a package, MOVE ITS `version` IN ITS pyproject.toml. A tag alone
 # republishes nothing.
 #
+# AND THE JOB TO READ INSTEAD is `verify-published`: it ignores the publish
+# job's result, installs the versions this tag names FROM the index into clean
+# venvs, and invokes them. Its green is the one in this workflow that is about
+# a customer's command rather than about a step exiting 0.
+#
 # n8n-nodes-reeflex now lives in its own dedicated repo (Reeflex-io/n8n-nodes-reeflex)
 # with its own OIDC publish workflow — it is NOT built or published from here anymore.
 #
@@ -45,8 +71,10 @@
 # workflow_dispatch, and (transitively) publishing a release.
 #
 # Registry-side setup a human must do ONCE — see docs/RELEASING.md:
-#   - PyPI Trusted Publisher for reeflex-claude, reeflex-holds AND reeflex-mcp
-#     (repo Reeflex-io/reeflex, workflow release.yml).
+#   - PyPI Trusted Publisher for reeflex-claude, reeflex-holds, reeflex-mcp AND
+#     reeflex-litellm (repo Reeflex-io/reeflex, workflow release.yml). The last
+#     one is a PENDING publisher until its first upload, because the project
+#     does not exist on PyPI yet.
 
 name: Release
 
@@ -90,6 +118,7 @@ jobs:
       claude_version: ${{ steps.ver.outputs.claude_version }}
       holds_version: ${{ steps.ver.outputs.holds_version }}
       mcp_version: ${{ steps.ver.outputs.mcp_version }}
+      litellm_version: ${{ steps.ver.outputs.litellm_version }}
       gate_version: ${{ steps.ver.outputs.gate_version }}
     steps:
       - name: Resolve the release tag
@@ -152,12 +181,14 @@ jobs:
           CLAUDE="$(extract_pyproj reeflex-claude/pyproject.toml)"
           HOLDS="$(extract_pyproj reeflex-holds/pyproject.toml)"
           MCP="$(extract_pyproj reeflex-mcp/pyproject.toml)"
+          LITELLM="$(extract_pyproj reeflex-litellm/pyproject.toml)"
           GATE="$(grep -m1 -E '^\s*\*\s*Version:' reeflex-wordpress/reeflex-gate.php | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')"
-          echo "claude_version=$CLAUDE" >> "$GITHUB_OUTPUT"
-          echo "holds_version=$HOLDS"  >> "$GITHUB_OUTPUT"
-          echo "mcp_version=$MCP"      >> "$GITHUB_OUTPUT"
-          echo "gate_version=$GATE"    >> "$GITHUB_OUTPUT"
-          echo "reeflex-claude=$CLAUDE  reeflex-holds=$HOLDS  reeflex-mcp=$MCP  reeflex-gate=$GATE"
+          echo "claude_version=$CLAUDE"   >> "$GITHUB_OUTPUT"
+          echo "holds_version=$HOLDS"     >> "$GITHUB_OUTPUT"
+          echo "mcp_version=$MCP"         >> "$GITHUB_OUTPUT"
+          echo "litellm_version=$LITELLM" >> "$GITHUB_OUTPUT"
+          echo "gate_version=$GATE"       >> "$GITHUB_OUTPUT"
+          echo "reeflex-claude=$CLAUDE  reeflex-holds=$HOLDS  reeflex-mcp=$MCP  reeflex-litellm=$LITELLM  reeflex-gate=$GATE"
 
   # ---------------------------------------------------------------------------
   # build: produce every artifact ONCE, then hand them to the publish jobs.
@@ -181,7 +212,7 @@ jobs:
       # newest thing on the index", on the one workflow whose output is the
       # artefact a customer installs. The bound and its justification are in
       # the file; `scripts/check_dependency_floors.py` walks it.
-      - name: Install the Python build backend (pinned)
+      - name: Install the pinned release toolchain (build + twine)
         run: python -m pip install -r .github/requirements-build.txt
 
       - name: Show what resolved (the wheels below are built BY this)
@@ -190,17 +221,19 @@ jobs:
       - name: Build the WordPress + verify zips (stdlib zipfile — no `zip` binary needed)
         run: python scripts/build-wp-zips.py --out dist-artifacts
 
-      - name: Build the Python sdists + wheels (reeflex-claude, reeflex-holds, reeflex-mcp)
+      - name: Build the Python sdists + wheels (claude, holds, mcp, litellm)
         run: |
           set -euo pipefail
           # Per-project dirs so the PyPI job can publish each independently.
-          python -m build --outdir pypi-dist/reeflex-claude reeflex-claude
-          python -m build --outdir pypi-dist/reeflex-holds  reeflex-holds
-          python -m build --outdir pypi-dist/reeflex-mcp    reeflex-mcp
+          python -m build --outdir pypi-dist/reeflex-claude  reeflex-claude
+          python -m build --outdir pypi-dist/reeflex-holds   reeflex-holds
+          python -m build --outdir pypi-dist/reeflex-mcp     reeflex-mcp
+          python -m build --outdir pypi-dist/reeflex-litellm reeflex-litellm
           # Also fold them into the combined release-assets set.
-          cp pypi-dist/reeflex-claude/* dist-artifacts/
-          cp pypi-dist/reeflex-holds/*  dist-artifacts/
-          cp pypi-dist/reeflex-mcp/*    dist-artifacts/
+          cp pypi-dist/reeflex-claude/*  dist-artifacts/
+          cp pypi-dist/reeflex-holds/*   dist-artifacts/
+          cp pypi-dist/reeflex-mcp/*     dist-artifacts/
+          cp pypi-dist/reeflex-litellm/* dist-artifacts/
 
       - name: Generate SHA256SUMS over every artifact
         run: |
@@ -244,6 +277,104 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload PyPI dist — reeflex-litellm
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-reeflex-litellm
+          path: pypi-dist/reeflex-litellm/
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # verify-dist: install the wheels THIS RUN BUILT into clean venvs and invoke
+  # them, BEFORE anything is published. This is the job that would have caught
+  # the class RFX-246 is about: an artefact that is green on the way out and
+  # unusable on the way in.
+  #
+  # It is not a duplicate of gate.py's `entrypoints` component or of
+  # smoke-pypi.yml. Both of those assert `<entry point> --help` exits 0, which
+  # catches import-time death and nothing else — "a gate that fails to REFUSE
+  # exits 0 on --help". This one runs `reeflex-litellm tenancy` against the
+  # example map the package ships AND against a map with a `default` catch-all
+  # that must be refused, and `reeflex-claude connect --dry-run` (the /app/onboard
+  # line) with a `rfx_gate_` token as the credential control. Assertions and
+  # controls live in scripts/verify_release_artifacts.py.
+  # ---------------------------------------------------------------------------
+  verify-dist:
+    name: Verify the BUILT dists (twine --strict + fresh install + invoke)
+    runs-on: ubuntu-latest
+    needs: [prepare, build]
+    steps:
+      - name: Checkout at the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download every PyPI dist this run built
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pypi-*
+          merge-multiple: true
+          path: dist-all
+
+      - name: Install the pinned release toolchain (build + twine)
+        run: python -m pip install -r .github/requirements-build.txt
+
+      # METADATA, not behaviour: a description PyPI would reject, a missing
+      # long-description content type, an unparseable classifier. `--strict`
+      # turns a warning into an error — a wheel that uploads with a broken
+      # README renders as raw text on the project page a customer reads.
+      - name: twine check --strict over every dist
+        run: |
+          set -euo pipefail
+          ls -l dist-all
+          python -m twine check --strict dist-all/*
+
+      # `--find-links dist-all` and NOT `--no-index`: reeflex-claude must
+      # resolve to the wheel this run built (the litellm floor is
+      # `>=0.2.0,<0.3` and PyPI's newest is 0.1.7 until this very release
+      # publishes 0.2.0), while `litellm` and its dependency tree come from the
+      # index exactly as they would for a customer. `[proxy]` is the extra the
+      # package README tells people to install, so it is the one this asserts.
+      # The `==` is not decoration: it pins the resolve to the version THIS TAG
+      # NAMES, so the job cannot quietly measure something else pip preferred
+      # off the index. (It would not today — 0.2.0 beats PyPI's 0.1.7 — but
+      # "the highest version available won" is not the claim being made.)
+      - name: reeflex-litellm — fresh venv, install the built wheel with [proxy]
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/venv-litellm"
+          "$RUNNER_TEMP/venv-litellm/bin/pip" install --no-cache-dir \
+            --find-links dist-all \
+            "reeflex-litellm[proxy]==${{ needs.prepare.outputs.litellm_version }}"
+          "$RUNNER_TEMP/venv-litellm/bin/pip" freeze | sort
+
+      - name: reeflex-claude — fresh venv, install the built wheel
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/venv-claude"
+          "$RUNNER_TEMP/venv-claude/bin/pip" install --no-cache-dir \
+            --find-links dist-all \
+            "reeflex-claude==${{ needs.prepare.outputs.claude_version }}"
+          "$RUNNER_TEMP/venv-claude/bin/pip" freeze | sort
+
+      - name: INVOKE both, with the negative controls
+        run: |
+          set -euo pipefail
+          python scripts/verify_release_artifacts.py \
+            --python "$RUNNER_TEMP/venv-litellm/bin/python" \
+            --expect-litellm "${{ needs.prepare.outputs.litellm_version }}" \
+            --skip-claude
+          python scripts/verify_release_artifacts.py \
+            --python "$RUNNER_TEMP/venv-claude/bin/python" \
+            --expect-claude "${{ needs.prepare.outputs.claude_version }}" \
+            --skip-litellm
+
   # ---------------------------------------------------------------------------
   # github-release: attach every built artifact to the release for this tag.
   # Creates the release if it does not exist yet (bare tag push); otherwise
@@ -252,7 +383,12 @@ jobs:
   github-release:
     name: GitHub Release
     runs-on: ubuntu-latest
-    needs: [prepare, build]
+    # `verify-dist` too: NOTHING publishes to any channel until the artefacts
+    # this run built have been installed into a clean venv and invoked. A
+    # half-published release is worse than a blocked one — a wheel cannot be
+    # un-uploaded, and until 2026-09-08 the only thing between a broken build
+    # and PyPI was `python -m build` exiting 0.
+    needs: [prepare, build, verify-dist]
     permissions:
       contents: write
     steps:
@@ -282,9 +418,9 @@ jobs:
   # that reason: RFX-246, measured in the header of this file.
   # ---------------------------------------------------------------------------
   pypi:
-    name: PyPI — offer 3 packages, upload those whose version moved
+    name: PyPI — offer 4 packages, upload those whose version moved
     runs-on: ubuntu-latest
-    needs: [prepare, build]
+    needs: [prepare, build, verify-dist]
     permissions:
       id-token: write # OIDC — the ONLY auth used; no PyPI token in the repo.
       contents: read
@@ -309,6 +445,12 @@ jobs:
         with:
           name: pypi-reeflex-mcp
           path: dist-mcp
+
+      - name: Download reeflex-litellm dist
+        uses: actions/download-artifact@v4
+        with:
+          name: pypi-reeflex-litellm
+          path: dist-litellm
 
       - name: Publish reeflex-claude to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
@@ -336,6 +478,22 @@ jobs:
           # BOOTSTRAP FALLBACK (see note above):
           # password: ${{ secrets.PYPI_API_TOKEN }}
 
+      # LAST ON PURPOSE. `reeflex-litellm` is the newest name here and the only
+      # one that did not exist on PyPI when it was added (v0.2.1): OIDC cannot
+      # upload to a project with no Trusted Publisher, and for a project that
+      # does not exist yet that means a PENDING publisher a human creates on
+      # pypi.org first (docs/RELEASING.md §2.1). Until that is done this step
+      # fails — and because it is last, the three packages whose publishers ARE
+      # configured have already uploaded when it does, so a registry-side gap
+      # costs one re-run of one step rather than the whole release.
+      - name: Publish reeflex-litellm to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-litellm
+          skip-existing: true
+          # BOOTSTRAP FALLBACK (see note above):
+          # password: ${{ secrets.PYPI_API_TOKEN }}
+
   # ---------------------------------------------------------------------------
   # ghcr: build + push ghcr.io/reeflex-io/reeflex-core, tagged with the release
   # tag AND latest. Runs ONLY when core (or the Dockerfile) changed, or when
@@ -344,7 +502,7 @@ jobs:
   ghcr:
     name: GHCR core image
     runs-on: ubuntu-latest
-    needs: [prepare, build]
+    needs: [prepare, build, verify-dist]
     if: needs.prepare.outputs.core_changed == 'true'
     permissions:
       packages: write
@@ -385,13 +543,102 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
   # ---------------------------------------------------------------------------
+  # verify-published: the ONLY job in this workflow whose green means a
+  # customer's command works. It does not read the `pypi` job's result — it
+  # goes to the index, installs the versions this tag NAMES, and invokes them.
+  #
+  # WHAT ITS PASS DOES AND DOES NOT MEAN, so this does not become the next
+  # RFX-246. It means "the version this tag names is installable from PyPI and
+  # its real subcommands behave, including refusing what they must refuse". It
+  # does NOT mean this run uploaded anything: on a tag where a package's
+  # version did not move, the same PASS is about the previous upload. That is
+  # the correct claim to make — what a release owes a customer is that the
+  # named version works, not that a job did an upload — and it is the claim
+  # `skip-existing: true` made unreadable off the publish job alone.
+  #
+  # `if: !cancelled()` rather than a plain `needs`: when one publish step fails
+  # (a new name without a Trusted Publisher, say) the question "so what IS on
+  # the index?" is exactly when this must run, not be skipped.
+  # ---------------------------------------------------------------------------
+  verify-published:
+    name: Verify from PyPI (install the published versions + invoke)
+    runs-on: ubuntu-latest
+    needs: [prepare, pypi]
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Checkout at the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # A fresh upload is not visible on the simple index instantly, and for a
+      # project's FIRST upload it can take longer. Retried rather than slept
+      # once: a fixed sleep is either wasted time or a flaky job, and this
+      # loop's failure message is the diagnosis.
+      - name: pip install the published reeflex-litellm[proxy] (retry for index propagation)
+        run: |
+          set -uo pipefail
+          V="${{ needs.prepare.outputs.litellm_version }}"
+          python -m venv "$RUNNER_TEMP/pypi-litellm"
+          for attempt in $(seq 1 10); do
+            echo "--- attempt $attempt: pip install 'reeflex-litellm[proxy]==$V' from PyPI"
+            if "$RUNNER_TEMP/pypi-litellm/bin/pip" install --no-cache-dir \
+                 "reeflex-litellm[proxy]==$V"; then
+              "$RUNNER_TEMP/pypi-litellm/bin/pip" freeze | sort
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::reeflex-litellm==$V is not installable from PyPI after 10 attempts."
+          echo "::error::If the pypi job's reeflex-litellm step failed, the project needs a"
+          echo "::error::PENDING Trusted Publisher on pypi.org — docs/RELEASING.md section 2.1."
+          exit 1
+
+      - name: pip install the published reeflex-claude (retry for index propagation)
+        run: |
+          set -uo pipefail
+          V="${{ needs.prepare.outputs.claude_version }}"
+          python -m venv "$RUNNER_TEMP/pypi-claude"
+          for attempt in $(seq 1 10); do
+            echo "--- attempt $attempt: pip install 'reeflex-claude==$V' from PyPI"
+            if "$RUNNER_TEMP/pypi-claude/bin/pip" install --no-cache-dir \
+                 "reeflex-claude==$V"; then
+              "$RUNNER_TEMP/pypi-claude/bin/pip" freeze | sort
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::reeflex-claude==$V is not installable from PyPI after 10 attempts."
+          exit 1
+
+      # The same script, the same assertions, the same controls as verify-dist
+      # — only the provenance of the bytes differs. That symmetry is the point:
+      # if these two jobs ever disagree, the difference is the upload.
+      - name: INVOKE what PyPI serves, with the negative controls
+        run: |
+          set -euo pipefail
+          python scripts/verify_release_artifacts.py \
+            --python "$RUNNER_TEMP/pypi-litellm/bin/python" \
+            --expect-litellm "${{ needs.prepare.outputs.litellm_version }}" \
+            --skip-claude
+          python scripts/verify_release_artifacts.py \
+            --python "$RUNNER_TEMP/pypi-claude/bin/python" \
+            --expect-claude "${{ needs.prepare.outputs.claude_version }}" \
+            --skip-litellm
+
+  # ---------------------------------------------------------------------------
   # summary: write the channel checklist to the job summary. Runs always so it
   # reflects skipped/failed jobs too.
   # ---------------------------------------------------------------------------
   summary:
     name: Channel checklist
     runs-on: ubuntu-latest
-    needs: [prepare, build, github-release, pypi, ghcr]
+    needs: [prepare, build, verify-dist, github-release, pypi, ghcr, verify-published]
     if: always()
     steps:
       - name: Write channel checklist
@@ -400,12 +647,15 @@ jobs:
           CLAUDE_V: ${{ needs.prepare.outputs.claude_version }}
           HOLDS_V: ${{ needs.prepare.outputs.holds_version }}
           MCP_V: ${{ needs.prepare.outputs.mcp_version }}
+          LITELLM_V: ${{ needs.prepare.outputs.litellm_version }}
           GATE_V: ${{ needs.prepare.outputs.gate_version }}
           CORE_CHANGED: ${{ needs.prepare.outputs.core_changed }}
           CORE_REASON: ${{ needs.prepare.outputs.core_reason }}
           R_RELEASE: ${{ needs.github-release.result }}
           R_PYPI: ${{ needs.pypi.result }}
           R_GHCR: ${{ needs.ghcr.result }}
+          R_VERIFY_DIST: ${{ needs.verify-dist.result }}
+          R_VERIFY_PUB: ${{ needs.verify-published.result }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -430,24 +680,42 @@ jobs:
             echo "| PyPI | reeflex-claude | ${CLAUDE_V} | $(mark "$R_PYPI") | https://pypi.org/project/reeflex-claude/${CLAUDE_V}/ |"
             echo "| PyPI | reeflex-holds | ${HOLDS_V} | $(mark "$R_PYPI") | https://pypi.org/project/reeflex-holds/${HOLDS_V}/ |"
             echo "| PyPI | reeflex-mcp | ${MCP_V} | $(mark "$R_PYPI") | https://pypi.org/project/reeflex-mcp/${MCP_V}/ |"
+            echo "| PyPI | reeflex-litellm | ${LITELLM_V} | $(mark "$R_PYPI") | https://pypi.org/project/reeflex-litellm/${LITELLM_V}/ |"
             echo "| GHCR | reeflex-core | ${TAG} + latest | ${GHCR_STATUS} | https://github.com/${REPO}/pkgs/container/reeflex-core |"
             echo ""
             echo "GHCR decision: ${CORE_REASON}"
             echo ""
             echo "WordPress adapter (reeflex-gate) version in the attached zips: ${GATE_V}."
             echo ""
-            echo "### How to read the three PyPI rows (RFX-246)"
+            echo "### The two rows that mean a command works"
             echo ""
-            echo "The column is the **job's** result, and all three rows carry the same value because"
-            echo "there is one \`pypi\` job for all three dists. A ✅ means *each of those versions is on"
-            echo "PyPI now*. It does **not** mean this run uploaded three packages: \`skip-existing: true\`"
+            echo "| Check | What its ✅ means | Result |"
+            echo "|---|---|---|"
+            echo "| \`verify-dist\` | the wheels THIS run built install into a clean venv and their real subcommands behave, **before** anything was published | $(mark "$R_VERIFY_DIST") |"
+            echo "| \`verify-published\` | \`pip install 'reeflex-litellm[proxy]==${LITELLM_V}'\` and \`pip install 'reeflex-claude==${CLAUDE_V}'\` **from PyPI** work, and \`reeflex-litellm tenancy\` / \`reeflex-claude connect --dry-run\` do their job — including refusing a \`default\` catch-all map and a \`rfx_gate_\` token | $(mark "$R_VERIFY_PUB") |"
+            echo ""
+            echo "Both run \`scripts/verify_release_artifacts.py\`, which you can run by hand against any"
+            echo "venv. Every assertion in it is paired with a control, because \"the command printed"
+            echo "something\" also passes on a build whose validator was deleted."
+            echo ""
+            echo "### How to read the four PyPI rows (RFX-246)"
+            echo ""
+            echo "The column is the **job's** result, and all four rows carry the same value because"
+            echo "there is one \`pypi\` job for all four dists. A ✅ means *each of those versions is on"
+            echo "PyPI now*. It does **not** mean this run uploaded four packages: \`skip-existing: true\`"
             echo "skips a version PyPI already has, and reports success. On \`Release v0.2.0\` exactly one"
-            echo "of the three uploaded (\`reeflex-holds\` 0.2.0); the other two were skipped as already"
-            echo "existing, by design, because their versions did not move."
+            echo "of the three then in the matrix uploaded (\`reeflex-holds\` 0.2.0); the other two were"
+            echo "skipped as already existing, by design, because their versions did not move."
             echo ""
             echo "**So to ship a package, move its \`version\` in its \`pyproject.toml\`. A tag alone"
-            echo "republishes nothing.** To see which of the three actually uploaded on this run, read the"
+            echo "republishes nothing.** To see which of the four actually uploaded on this run, read the"
             echo "\`pypi\` job log for \`Uploading\` versus \`Skipping … already exist\`."
+            echo ""
+            echo "> **A first upload under a NEW name needs a human on pypi.org first.** OIDC Trusted"
+            echo "> Publishing cannot create a project: \`reeflex-litellm\` needs a PENDING publisher"
+            echo "> (owner \`Reeflex-io\`, repo \`reeflex\`, workflow \`release.yml\`) or its publish step"
+            echo "> 403s. It is the LAST step in the \`pypi\` job so that gap cannot block the other three."
+            echo "> See docs/RELEASING.md section 2.1."
             echo ""
             echo "> \`reeflex-core\` is NOT in the PyPI rows: this workflow builds no sdist or wheel for it."
             echo "> Its release artefact is the GHCR image above. The name \`reeflex-core\` does resolve on"

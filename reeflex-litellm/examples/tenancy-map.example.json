@@ -1,0 +1,43 @@
+{
+  "_readme": "A WORKING tenancy map for `reeflex-litellm`. Two departments behind one gateway, which is the whole reason tenancy.py exists. Point REEFLEX_LITELLM_TENANCY_MAP_FILE at a copy of this and run `reeflex-litellm tenancy` to see what it binds; there is no default org, so a key that appears in no `bind` table is refused before core is called. Credentials are BY REFERENCE: every value under `evidence` that ends in `_env` is the NAME of an environment variable, never its value -- a map carrying a token or a signing key is a load error, because this is a file operators copy between hosts and paste into tickets. release.yml's fresh-install smoke invokes `reeflex-litellm tenancy` against THIS file, so a release whose CLI cannot load the example we ship is a red release rather than a customer's first surprise.",
+  "version": 1,
+  "tenants": {
+    "acme-payments": {
+      "org": "acme-payments",
+      "label": "ACME Payments",
+      "principal": "payments-oncall@acme.example",
+      "environment": "production",
+      "on_prem_hosts": ["llm.internal.acme.example"],
+      "evidence": {
+        "ingest_url": "https://app.reeflex.io/api/v1/evidence",
+        "gate_token_env": "RFX_GATE_TOKEN_PAYMENTS",
+        "signing_key_env": "RFX_EVIDENCE_KEY_PAYMENTS"
+      }
+    },
+    "acme-marketing": {
+      "org": "acme-marketing",
+      "label": "ACME Marketing",
+      "principal": "growth-oncall@acme.example",
+      "environment": "staging",
+      "cloud_hosts": ["api.openai.com"],
+      "evidence": {
+        "ingest_url": "https://app.reeflex.io/api/v1/evidence",
+        "gate_token_env": "RFX_GATE_TOKEN_MARKETING",
+        "signing_key_env": "RFX_EVIDENCE_KEY_MARKETING"
+      }
+    }
+  },
+  "bind": {
+    "key_alias": {
+      "payments-bot": "acme-payments",
+      "marketing-bot": "acme-marketing"
+    },
+    "team_id": {
+      "team_9f2c": "acme-payments",
+      "team_41ab": "acme-marketing"
+    },
+    "key_hash": {
+      "cd9e459ea708a948d5c2f5a6ca8838cf419e1b1b3ca8d0f5b3e8ff8f3c1d9c0e": "acme-payments"
+    }
+  }
+}

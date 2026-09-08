@@ -81,6 +81,17 @@ ROOT_MARKERS = [
 # The packages this repo publishes to PyPI, with their console entry points.
 # reeflex-core ships as a GHCR image, not a PyPI package — it is gated by its
 # test suites below, not by a wheel build.
+#
+# `reeflex-litellm` is MISSING FROM THIS LIST ON PURPOSE, and only until the
+# first release that publishes it (RFX-250). `release.yml` builds and offers it
+# from v0.2.1; until that tag the name is a 404 on PyPI, and both consumers of
+# this list would fail on it — `run_entrypoints` installs the built wheel WITH
+# dependency resolution from the index, and `run_pypi_smoke` installs from the
+# index outright. Adding it before the wheel exists makes this gate red on
+# every PR, including the one that adds it. Its release-time coverage is
+# release.yml's `verify-dist` / `verify-published`, which install and INVOKE it
+# (`reeflex-litellm tenancy` plus a map that must be refused) — on a tag, not
+# per PR, which is the gap RFX-250 names.
 PUBLISHED = [
     # (pypi/dist name, entry point, has argparse usage banner)
     ("reeflex-mcp", "reeflex-mcp", True),
