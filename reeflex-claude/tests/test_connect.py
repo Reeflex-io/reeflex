@@ -487,6 +487,82 @@ def test_an_unreachable_core_reports_nothing_to_the_portal(tmp_path, monkeypatch
     assert "fail CLOSED" in err
 
 
+def _core_fails_closed(reason):
+    """The shape `enforce._fail_closed` returns: not reachable, and the reason
+    string is the only place the HTTP status survives."""
+
+    return lambda _envelope: (
+        "deny",
+        f"Reeflex: core unreachable or error -- failing closed: {reason} "
+        "[rule=reeflex.core/fail_closed]",
+        "reeflex.core/fail_closed",
+        False,
+        [],
+    )
+
+
+def test_an_authenticated_core_refusing_the_smoke_names_the_credential(
+    tmp_path, monkeypatch, capsys
+):
+    """A core started with `REEFLEX_AUTH_TOKEN` refuses everything but
+    `/healthz`, so a 401 means the URL is right and the engine is up. Telling
+    the reader to fix the URL or start the engine would send them somewhere
+    that cannot help -- on the hosted default this is the first thing a
+    stranger who pasted the line reads."""
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("REEFLEX_CORE_TOKEN", raising=False)
+    monkeypatch.setattr(
+        connect_mod, "call_core_and_map",
+        _core_fails_closed("core HTTP 401: Unauthorized"),
+    )
+
+    with _StubPortal({
+        "/api/v1/agent/connect": _connect_ok("https://core.test"),
+        "/api/v1/agent/hello": (200, {"recorded": True}),
+    }) as portal:
+        code = main(["connect", "--token", VALID_TOKEN, "--portal", portal.url])
+        paths = [r["path"] for r in portal.requests]
+
+    assert code == 1
+    # A verdict that was never received is still not reported.
+    assert paths == ["/api/v1/agent/connect"]
+    err = capsys.readouterr().err
+    assert "REEFLEX_CORE_TOKEN" in err
+    assert "is up and answered" in err
+    # The remedy that does not apply must be GONE, not merely accompanied.
+    assert "start the engine" not in err
+    # And the spent token is stated, because the retry needs a fresh line.
+    assert "spent" in err
+
+
+def test_a_failure_that_is_not_auth_keeps_the_generic_remedy(
+    tmp_path, monkeypatch, capsys
+):
+    """The control for the test above: the credential advice must be reserved
+    for 401/403. A 500 is not an auth problem and must not send the reader
+    hunting for a bearer token."""
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        connect_mod, "call_core_and_map",
+        _core_fails_closed("core HTTP 500: Internal Server Error"),
+    )
+
+    with _StubPortal({
+        "/api/v1/agent/connect": _connect_ok("https://core.test"),
+        "/api/v1/agent/hello": (200, {"recorded": True}),
+    }) as portal:
+        code = main(["connect", "--token", VALID_TOKEN, "--portal", portal.url])
+
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "start the engine" in err
+    assert "REEFLEX_CORE_TOKEN" not in err
+
+
 def test_the_hello_carries_cores_verdict_vocabulary_not_claude_codes(monkeypatch):
     """`enforce.call_core_and_map` renames core's `require_approval` to Claude
     Code's `ask`; the portal stores core's word and refuses `ask` outright.
