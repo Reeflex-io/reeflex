@@ -2,8 +2,8 @@
 title: Architecture diagrams
 description: >-
   How Reeflex fits together: the decision round-trip, how a verdict is reached
-  rule by rule, the hold lifecycle, self-hosted deployment, and the three seams
-  an adapter can sit at.
+  rule by rule, what happens to the record afterwards, the hold lifecycle,
+  self-hosted deployment, and the three seams an adapter can sit at.
 ---
 
 # Architecture diagrams
@@ -11,7 +11,8 @@ description: >-
 The single-path system overview (agent -> adapter -> core -> decision) is on
 the [Concepts](../concepts/index.md) page. This page goes one level deeper: the
 `/v1/decide` round-trip, **how the engine actually reaches a verdict — every
-rule, by its real rule id**, the hold lifecycle, where things run, and the
+rule, by its real rule id**, **what happens to the record afterwards and which
+of its anchors you can actually check**, the hold lifecycle, where things run, and the
 honest trade-off between the three places an adapter can sit. For the prose
 architecture (seams, guarantees, traceability), see the
 [architecture reference](../architecture.md).
@@ -182,6 +183,157 @@ with R5's budgets, R6's asset list and R7's signal lists in the sibling
 `budgets.rego`, `protected.rego` and `authority.rego` — all four are files you
 are meant to edit. See the [policy guide](../policy-guide.md) to change a
 threshold or add a rule of your own.*
+
+## The evidence path: what happens to the record after the verdict
+
+The diagram above ends where most descriptions of a gate end — at the verdict.
+This one starts there. A decision is only worth as much as the record it leaves,
+and that record travels three different distances, under three different
+owners, with three different things it is allowed to claim.
+
+```mermaid
+flowchart LR
+    DEC["POST /v1/decide
+    one verdict, one decision_id"]
+
+    subgraph OPEN["Open tier — Apache 2.0, public repo"]
+        direction TB
+        AUD[("audit JSONL
+        append-only, read back
+        NOT signed")]
+        GW["gateway seat
+        sees a proposal"]
+        GWL[("the seat's own ledger
+        enforcement_stage:
+        refused_at_gateway")]
+        SIE["syslog to your SIEM
+        DISABLED by default
+        nothing downstream reads it"]
+    end
+
+    subgraph COMM["Commercial tier — closed, in no public repo"]
+        direction TB
+        CONN["evidence connector
+        tails the audit log"]
+        WIRE["POST /api/v1/evidence
+        ONE HMAC-SHA256 per DELIVERY"]
+        STORE[("evidence store
+        INSERT + SELECT only
+        stamps received_ts")]
+        REP["Attest report
+        four renderers, one object"]
+    end
+
+    DEC -- "best effort" --> AUD
+    DEC --> GW
+    GW --> GWL
+    GW -- "agent_id only" --> WIRE
+    AUD --> CONN
+    CONN -- "closed allowlist" --> WIRE
+    WIRE -- "checked once" --> STORE
+    STORE --> REP
+    DEC -- "off by default" --> SIE
+
+    GWL -. "no wire field — stops here" .-> WIRE
+
+    classDef open fill:#14532d,stroke:#22c55e,color:#fff;
+    classDef comm fill:#4c1d95,stroke:#a78bfa,color:#fff;
+    classDef gate fill:#1e3a8a,stroke:#60a5fa,color:#fff;
+    class AUD,SIE,GW,GWL open;
+    class CONN,WIRE,STORE,REP comm;
+    class DEC gate;
+```
+
+*One decision, three traces. **`decision_id` is what joins them** — core writes
+it on the audit record, includes it in every SIEM event, and it is a required
+field of the evidence wire, so a row in an Attest report, a line in your syslog
+and a line in the JSONL can be tied to the same transit.*
+
+*<b>Where the open-core boundary actually falls.</b> The engine, every adapter,
+the audit log and the SIEM emitter are Apache 2.0 and in the public repo. The
+connector, the ingest API, the evidence store and the report are the commercial
+tier and are in no public repository — see the
+[open-core boundary](../open-core.md). Note what that means in practice: **the
+full decision record is yours from the open tier alone.** The paid tier does not
+add safety or a better record; it adds the packaging an auditor asks for.*
+
+*<b>The evidence delivery is downstream of the audit log, not parallel to it.</b>
+The connector does not observe decisions — it tails the same append-only JSONL
+core already wrote, from a persisted byte-offset cursor, so a restart resumes
+without re-reading or skipping. The consequence is worth stating plainly: **if
+the audit write did not happen, nothing downstream of it happened either.** And
+that write is best-effort by design — every audit call in the decision path goes
+through a wrapper that swallows its own failure, because the alternative is a
+full disk refusing decisions. So "every verdict has a record" is an assumption
+about your disk, not a property of the gate.*
+
+*<b>Four fields core records never reach a report.</b> The mapper is a closed
+allowlist built from the frozen wire schema, and it **drops** `action.ability`,
+`reason`, `session_id` and `cumulative_injected` rather than inventing a home
+for them. `action.ability` is the one that tends to surprise: it is the
+fine-grained name of what was attempted, it is in your audit log, and it is not
+in the report. Unknown top-level keys are rejected by the server with a 422, so
+this cannot be worked around by a well-meaning adapter — it needs a change to a
+frozen contract with deployed gates.*
+
+*<b>The SIEM stream never blocks the gate.</b> It is disabled by default, and
+when enabled it is fire-and-forget: a full queue or an unreachable collector is
+swallowed rather than raised into `/v1/decide`. It is a monitoring path, not an
+evidence path — nothing downstream of Attest reads it. The event schema, the CEF
+mapping and the three environment variables are in the
+[SIEM integration reference](../siem.md), which is versioned against the engine
+it documents.*
+
+*<b>What the gateway seat may claim, and what it may not.</b> This is the one
+field on this page an evidence pipeline can read as stronger than it is. A
+gateway sees a tool call **proposed**; it removes the instruction from the
+response, and it does not see the tool execute. So the seat writes
+`enforcement_stage: refused_at_gateway`, alongside `observed: proposal` and
+`prevents_execution: false`. `prevented_at_execution` exists in the same shared
+vocabulary — the execution-side seats are what earn it — and this seat can never
+emit it: handing that value to the ledger writer raises, by a runtime guard
+rather than a comment. **A pipeline that counts both stages as "N actions
+prevented" is counting some that were only ever un-suggested.***
+
+*<b>And the honest twist: that field never reaches a report at all.</b> There are
+two destinations with opposite rules. `enforcement_stage` lives in full in the
+seat's own local ledger — so a log shipper or a SIEM pointed at that file can
+over-read it. It **cannot** go on the evidence wire, because the wire's schema is
+closed and has no field for it. Inside the frozen contract the only thing that
+records which seat decided is `agent_id`, which this adapter sets to
+`agent:litellm-gateway/<org>/<model>`. That is a weaker signal on purpose: it
+says where the decision was made, not what the decision achieved.*
+
+*<b>Which clock, and whose signature.</b> Two of the boxes above carry words
+that are easy to round up, so this page says which reading is the honest one for
+what it draws. **"Stamps `received_ts`"** means the store's own clock, which no
+gate credential can set — so a surface built on this path may say Reeflex knows
+when a record *arrived*, and may not say it knows when the decision was *taken*;
+the time the decision was taken is `occurred_ts`, which is whatever the gate
+declared. **"One HMAC per delivery"** is the whole of the signing: it
+authenticates who sent a batch, it is stored on every row of that batch, and
+because its signed input is not persisted **nobody can re-verify it after
+ingest, Reeflex included** — so "each record is signed" is never true of this
+path. **"Append-only"** is the one that is simply true, and it is enforced below
+the application, by a runtime role that holds `INSERT` and `SELECT` and neither
+`UPDATE` nor `DELETE`. Per-record signing that a third party could check without
+trusting anyone is the Ed25519 upgrade, on the roadmap and not shipped;
+`sig_alg` is versioned so records stay readable under the scheme they were
+written with.*
+
+*`envelope_hash` is the anchor most often misread, and it is worth one sentence
+because the diagram carries it end to end. Core computes it over four blocks of
+the envelope — action, axes, magnitude, target — so it fingerprints **the
+action, not the record**: two decisions differing only in who acted or when
+carry the same value. The app never receives the envelope, so its pre-image is
+stored nowhere and **no party, Reeflex included, can recompute it**. It is
+carried, and checked for shape. That is the whole of it.*
+
+*This page stops at the store, because that is where the open tier's
+architecture stops. What the generated report itself contains — the disclaimer
+every format carries, the per-control blocks, the gap worklist, the
+verifiability section and the auditor's own certification block — is documented
+with the commercial tier rather than here.*
 
 ## Hold lifecycle
 
