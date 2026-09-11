@@ -149,6 +149,13 @@ jobs:
       - name: Install Chromium
         run: python -m playwright install --with-deps chromium
 
+      # The gate runs scripts/tests in an environment with no image library, so
+      # the four pixel-sampling tests skip there. This job is the one place
+      # Pillow is installed, so it is where they have to actually execute — a
+      # test that only ever skips is not a test.
+      - name: Run the probe's own tests (with Pillow present, so nothing skips)
+        run: python -m unittest discover -s scripts/tests -p 'test_probe_diagrams.py' -v
+
       # No CI=true here: the `social` plugin renders OG cards, which this job
       # does not measure and which would need the imaging apt packages. The
       # diagrams, the stylesheet and the palette toggle are identical either way.

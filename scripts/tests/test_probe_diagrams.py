@@ -17,6 +17,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import probe_diagrams as pd  # noqa: E402
 
+# Pillow is a dependency of the PROBE, not of the repo: it is pinned in
+# .github/requirements-docs-probe.txt and installed only in the `probe` job of
+# the Docs workflow. The gate runs this directory in an environment that has no
+# image library, so the four pixel-sampling tests skip there rather than
+# erroring — and the `probe` job runs this same file WITH Pillow present, so
+# they are not tests that nothing ever executes.
+try:
+    from PIL import Image
+    HAVE_PIL = True
+except ImportError:                                        # pragma: no cover
+    Image = None
+    HAVE_PIL = False
+
 
 def finding(check="label-size", src="docs/a.md", palette="default",
             diagram="D", value=5.0, label="x"):
@@ -182,15 +195,11 @@ class TestSourceReading(unittest.TestCase):
                            pd.INK_IDENTITY_MIN_GAP)
 
 
+@unittest.skipUnless(HAVE_PIL, "Pillow is a probe-only dependency; the "
+                     "`probe` job in docs.yml runs these with it installed")
 class TestPixelSampling(unittest.TestCase):
-    def _img(self, size, paint):
-        from PIL import Image
-        img = Image.new("RGB", size, (0, 0, 0))
-        paint(img)
-        return img
 
     def test_the_ink_is_the_colour_furthest_from_the_modal_background(self):
-        from PIL import Image
         img = Image.new("RGB", (30, 30), (0x7f, 0x1d, 0x1d))   # deny fill
         for x in range(10, 20):
             for y in range(10, 20):
@@ -203,7 +212,6 @@ class TestPixelSampling(unittest.TestCase):
     def test_a_single_stray_pixel_does_not_become_the_ink(self):
         """Otherwise one antialiasing outlier reports a passing contrast over a
         label that is genuinely dark-on-dark."""
-        from PIL import Image
         img = Image.new("RGB", (40, 40), (0x7f, 0x1d, 0x1d))
         img.putpixel((0, 0), (255, 255, 255))
         got = pd.sample_ink(img, (0, 0, 40, 40), dsf=1)
@@ -213,7 +221,6 @@ class TestPixelSampling(unittest.TestCase):
     def test_the_box_is_scaled_by_the_device_scale_factor(self):
         """The DOM hands back CSS pixels; the screenshot is device pixels. Not
         scaling reads the top-left corner of the label and calls it the label."""
-        from PIL import Image
         img = Image.new("RGB", (60, 60), (0, 0, 0))
         for x in range(30, 60):
             for y in range(30, 60):
@@ -224,7 +231,6 @@ class TestPixelSampling(unittest.TestCase):
         self.assertEqual(got["px"], 900)
 
     def test_a_zero_area_box_returns_nothing_rather_than_a_verdict(self):
-        from PIL import Image
         self.assertIsNone(pd.sample_ink(Image.new("RGB", (10, 10)),
                                         (5, 5, 5, 5), dsf=1))
 

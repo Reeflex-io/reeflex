@@ -11,13 +11,15 @@
     "    A fixed defect cannot sit here as a permanent exemption. The file may",
     "    only shrink, and deleting an entry is part of fixing the defect.",
     "",
-    "Only `label-size` and `contrast` can be baselined. `render`, `palette`,",
-    "`webfont` and `ink-identity` are instrument or mechanism failures: there is",
-    "no known amount of them and no entry here can excuse one.",
+    "Only `label-size`, `contrast` and `label-text` can be baselined. `render`,",
+    "`palette`, `webfont` and `ink-identity` are instrument or mechanism",
+    "failures: there is no known amount of them and no entry here can excuse one.",
     "",
     "`worst` is the smallest number in the group (the smallest effective label",
     "size, or the lowest painted contrast). Comparison allows 5%, which is the",
-    "measured width of the webfont-vs-fallback geometry difference.",
+    "measured width of the webfont-vs-fallback geometry difference. `label-text`",
+    "has no number - a label either contains the literal characters or it does",
+    "not - so its entries carry a null `worst` and only the count ratchets.",
     "",
     "Recorded 2026-09-11 (dev-3 round 066, RFX-266) against main at 7c6e132,",
     "viewport 1440 CSS px, content column 740 px, deviceScaleFactor 3, Inter",
@@ -26,6 +28,66 @@
   ],
   "known": [
     {
+      "check": "label-text",
+      "src": "docs/architecture.md",
+      "palette": "default",
+      "diagram": "Decision flow",
+      "labels": 9,
+      "worst": null,
+      "ticket": "RFX-279",
+      "note": "`\\n` is not a line break in a quoted mermaid label, so the reader sees the two characters AND the label never wraps. This is the root cause of the width below, not a separate cosmetic issue. `worst` is null because a label either contains the characters or it does not; only the count ratchets."
+    },
+    {
+      "check": "label-text",
+      "src": "docs/architecture.md",
+      "palette": "slate",
+      "diagram": "Decision flow",
+      "labels": 9,
+      "worst": null,
+      "ticket": "RFX-279",
+      "note": "As default: this is text, not colour."
+    },
+    {
+      "check": "label-text",
+      "src": "docs/architecture.md",
+      "palette": "default",
+      "diagram": "Variant A — Full on-prem (available now, free)",
+      "labels": 4,
+      "worst": null,
+      "ticket": "RFX-279",
+      "note": "This diagram fits the column (539.75 px, scale 1.0), so only the literal characters are wrong here — which is why the text check is separate from the size check."
+    },
+    {
+      "check": "label-text",
+      "src": "docs/architecture.md",
+      "palette": "slate",
+      "diagram": "Variant A — Full on-prem (available now, free)",
+      "labels": 4,
+      "worst": null,
+      "ticket": "RFX-279",
+      "note": "As default."
+    },
+    {
+      "check": "label-text",
+      "src": "docs/architecture.md",
+      "palette": "default",
+      "diagram": "Variant B — Hosted / subscription",
+      "labels": 5,
+      "worst": null,
+      "ticket": "RFX-279",
+      "note": "Five labels; the same root cause as the 8.22 px size entry below."
+    },
+    {
+      "check": "label-text",
+      "src": "docs/architecture.md",
+      "palette": "slate",
+      "diagram": "Variant B — Hosted / subscription",
+      "labels": 5,
+      "worst": null,
+      "ticket": "RFX-279",
+      "note": "As default."
+    },
+    {
       "check": "label-size",
       "src": "docs/architecture.md",
       "palette": "default",
@@ -33,7 +95,7 @@
       "labels": 16,
       "worst": 4.86,
       "ticket": "RFX-276",
-      "note": "2433.5 px natural in a 740 px column = 0.304 shrink, so every 16 px label lands at 4.86 px. The least legible diagram on the site, and the first four harnesses never saw it because all four probed only docs/architecture/diagrams.md."
+      "note": "2433.5 px natural in a 740 px column = 0.304 shrink, so every 16 px label lands at 4.86 px. The least legible diagram on the site, and the first four harnesses never saw it because all four probed only docs/architecture/diagrams.md. Likely DOWNSTREAM of RFX-279: the labels are wide because they never wrap."
     },
     {
       "check": "label-size",
@@ -53,7 +115,7 @@
       "labels": 11,
       "worst": 8.22,
       "ticket": "RFX-277",
-      "note": "1440 px natural in a 740 px column = 0.514 shrink."
+      "note": "1440 px natural in a 740 px column = 0.514 shrink. Likely DOWNSTREAM of RFX-279."
     },
     {
       "check": "label-size",
@@ -63,7 +125,7 @@
       "labels": 11,
       "worst": 8.22,
       "ticket": "RFX-277",
-      "note": "1440 px natural in a 740 px column = 0.514 shrink."
+      "note": "1440 px natural in a 740 px column = 0.514 shrink. Likely DOWNSTREAM of RFX-279."
     },
     {
       "check": "label-size",

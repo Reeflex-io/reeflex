@@ -78,6 +78,10 @@ WHAT IT CHECKS
   render         every `.mermaid` host produced an SVG
   palette        the palette under measurement is the one that rendered
   webfont        at least one @font-face actually loaded (gated by --require-webfont)
+  label-text     no painted label contains a literal `\n` — in a quoted mermaid
+                 label that is not a line break, so the reader sees the two
+                 characters AND the label never wraps, which is what makes the
+                 diagram too wide to read
   contrast       painted contrast of every diagram label >= the shared threshold
   ink-identity   a node's painted ink is nearer its classDef's declared `color:`
                  than the palette ink — the pixel proof that the RFX-268
@@ -198,15 +202,26 @@ PALETTE_TMPL = (
 # Layout is flat from ~1s within a font regime (TRAP 5), but a slow local file
 # server or a cold JS bundle can still be mid-render, so wait for the heights to
 # stop moving rather than for a fixed delay.
+#
+# THE LOADED-FACE COUNT IS PART OF THE STABILITY KEY, and that is TRAP 5's
+# sharper edge: the regime is not binary. `document.fonts.ready` resolves when
+# the loads pending AT THAT MOMENT finish, and Material requests more faces
+# later as glyphs demand them, so a page can render with 5 of Inter's 9 faces
+# and land on geometry BETWEEN the two regimes. Measured: one run read
+# docs/architecture.md at 5 faces and put 'Decision flow' at 4.72px where a
+# 9-face run reads 4.86px — a 3% error that is invisible unless the count is
+# watched. So this waits for the count to stop moving too, and the count is
+# reported per page for anything that slips through.
 SETTLE = """
 () => new Promise(res => {
   let last = '', stable = 0, ticks = 0;
   const tick = () => {
-    const now = [...document.querySelectorAll('.mermaid')]
+    const faces = [...document.fonts].filter(f => f.status === 'loaded').length;
+    const now = faces + '|' + [...document.querySelectorAll('.mermaid')]
       .map(h => Math.round(h.getBoundingClientRect().height)).join(',');
     stable = (now === last && now !== '') ? stable + 1 : 0;
     last = now;
-    if (stable >= 3 || ++ticks > 40) return res(now);
+    if (stable >= 3 || ++ticks > 60) return res(now);
     setTimeout(tick, 250);
   };
   document.fonts.ready.then(() => setTimeout(tick, 1000));
@@ -567,6 +582,27 @@ def evaluate(results, docs_dir, min_eff_label_px, require_webfont):
                     continue
 
                 for lab in d["labels"]:
+                    # --- label-text ----------------------------------------
+                    # A `\n` inside a quoted mermaid label is not a line break
+                    # in mermaid 11.x with htmlLabels on: it reaches the reader
+                    # as the two characters backslash-n. Found on this probe's
+                    # first run, 25 times in docs/architecture.md. It is worth a
+                    # check of its own rather than being left to the size check,
+                    # because it is BOTH the visible garbage AND the cause of
+                    # the width: a label that never breaks makes the diagram as
+                    # wide as its longest line, which is what then scales the
+                    # whole thing down. Reading it from the rendered text rather
+                    # than the source is the point — this is what got painted.
+                    if "\\n" in lab["text"]:
+                        add("label-text", "FAIL", src, palette, name,
+                            lab["text"], None,
+                            "%s — %r label %r contains a literal backslash-n. "
+                            "In a quoted mermaid label `\\n` is not a line "
+                            "break; use `<br/>`. The reader sees the two "
+                            "characters, and the label does not wrap, so the "
+                            "diagram is as wide as its longest unbroken line."
+                            % (where, name, lab["text"]))
+
                     # --- label-size ----------------------------------------
                     eff = lab["eff_font_px"]
                     if eff is not None and eff < min_eff_label_px:
@@ -658,7 +694,7 @@ def evaluate(results, docs_dir, min_eff_label_px, require_webfont):
 # Only the two checks with a number worth comparing can be baselined. `render`,
 # `palette`, `webfont` and `ink-identity` are instrument or mechanism failures:
 # there is no "known amount" of them and no entry in the file can excuse one.
-BASELINEABLE = {"label-size", "contrast"}
+BASELINEABLE = {"label-size", "contrast", "label-text"}
 BASELINE_SLACK = 0.05   # the measured width of the font-regime difference
 
 
@@ -702,11 +738,15 @@ def apply_baseline(findings, baseline, path):
                        entry["check"], entry.get("ticket", "no ticket"))})
             continue
 
-        # "worst" is the smallest number, for both checks: the smallest
-        # effective label and the lowest contrast are the worst cases.
-        worst = min(f["value"] for f in group)
-        allowed = entry["worst"] * (1 - BASELINE_SLACK)
-        if worst < allowed:
+        # "worst" is the smallest number: the smallest effective label, the
+        # lowest contrast. `label-text` has no number — a label either contains
+        # the literal characters or it does not — so for that one only the count
+        # ratchets, and `worst` is null in the file.
+        values = [f["value"] for f in group if f["value"] is not None]
+        worst = min(values) if values else None
+        allowed = (entry["worst"] * (1 - BASELINE_SLACK)
+                   if entry.get("worst") is not None else None)
+        if worst is not None and allowed is not None and worst < allowed:
             out.append({
                 "check": entry["check"], "severity": "FAIL",
                 "src": entry["src"], "palette": entry["palette"],
@@ -738,10 +778,10 @@ def apply_baseline(findings, baseline, path):
             "src": entry["src"], "palette": entry["palette"],
             "diagram": entry["diagram"], "label": None, "value": worst,
             "message":
-                "%s [%s] — %r: %d label(s), worst %.2f (baseline %.2f). "
-                "Tracked by %s: %s"
-                % (entry["src"], entry["palette"], entry["diagram"],
-                   len(group), worst, entry["worst"],
+                "%s [%s] — %r: %d label(s)%s. Tracked by %s: %s"
+                % (entry["src"], entry["palette"], entry["diagram"], len(group),
+                   "" if worst is None
+                   else ", worst %.2f (baseline %.2f)" % (worst, entry["worst"]),
                    entry.get("ticket", "(no ticket)"), entry.get("note", ""))})
     return out
 
