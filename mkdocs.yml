@@ -182,6 +182,7 @@ nav:
       - SIEM export: siem.md
       - Compliance & open core:
           - compliance/index.md
+          - Evidence for auditors: compliance/evidence-for-auditors.md
           - Open core: open-core.md
   - Reference:
       - reference/index.md

@@ -15,6 +15,7 @@ Documentation for the open-source `reeflex-core` engine and its reference adapte
 
 ## Policy & operations
 - [Open core](https://docs.reeflex.io/open-core/): what is open (Apache 2.0) versus the commercial tier
+- [Evidence for auditors](https://docs.reeflex.io/compliance/evidence-for-auditors/): Reeflex attests, the auditor certifies — framework-level coverage (Evidences / Partial / Not evidenced), which frameworks the engine assesses today versus which are only mapped, what append-only / signed / timestamped each actually mean here, and the shape of the report an auditor receives
 - [Operations](https://docs.reeflex.io/operations/) and [SIEM export](https://docs.reeflex.io/siem/)
 - [FAQ](https://docs.reeflex.io/faq/)
 - [Roadmap](https://docs.reeflex.io/roadmap/)

@@ -23,11 +23,16 @@ only start applying on 2 December 2027, per the Digital Omnibus (Regulation
 not a response to an audit happening today. Reeflex's evidence model (below)
 covers both, in that order.
 
+- [Evidence for auditors](evidence-for-auditors.md) — the doctrine (Reeflex
+  attests; the auditor certifies), framework-level coverage with the
+  not-evidenced rows left in, the three adjectives usually attached to audit
+  records taken apart one at a time, and exactly what lands in an auditor's
+  hands. Start here if you are evaluating whether the evidence is worth
+  anything to your audit.
 - [Open core](../open-core.md) — the licensing boundary, component by
   component, and what it does and does not mean for contributors and
   adapter authors.
-- Regulatory framework mapping (NIS2 21(2) · DORA · EU AI Act Art.12/14 ·
-  GDPR) is part of the commercial tier and is not documented here; see
-  [Open core](../open-core.md) for the boundary and what the open tier
-  already gives an auditor today — a deterministic, replayable decision
-  record, not just a post-hoc log.
+- The **per-article mapping** behind that coverage — which field of the
+  decision record backs which specific obligation, the scope note on each
+  control, and the reasoning for each coverage label — is part of the
+  commercial tier and is not documented here.
