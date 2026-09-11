@@ -66,7 +66,7 @@ records have, and it is why the evidence is worth producing at all.
     Two different things are described on this page and they must not be
     confused.
 
-    **The mapping** is a draft specification covering **seven frameworks**. It
+    **The mapping** is a draft specification covering **nine frameworks**. It
     is a working document. It is not a product you can generate a report from.
 
     **The engine** — the thing that reads your evidence and produces an
@@ -101,6 +101,8 @@ records have, and it is why the evidence is worth producing at all.
 | **HIPAA Security Rule** — 45 CFR §164.312 / §164.308 | Mapped — not in the engine | **Partial** | Physical safeguards (§164.310) · workforce security · contingency planning · the application's own ePHI-access telemetry |
 | **NIST SP 800-53 Rev. 5** (with a CSF 2.0 note) | Mapped — not in the engine | **Partial** | Contingency planning (CP) · physical (PE) · personnel (PS) · broad SC / RA · **AU-10 non-repudiation**, which the records do not support today — see [the three adjectives](#the-three-adjectives-taken-apart) |
 | **CIS Controls v8** | Mapped — not in the engine | **Partial** | Asset and software inventory (1, 2) · vulnerability management (7) · malware defences (10) · data recovery (11) · network infrastructure (12) · awareness training (14) |
+| **ISO/IEC 27001 Annex A (2022)** — the controls where an agent-action record is the kind of input an auditor accepts | Mapped — not in the engine | **Partial** | Clauses 4–10, which is what a certificate is actually issued against · which Annex A controls belong in your Statement of Applicability, which is yours and your certification body's to fix · most of the 93-control set |
+| **PCI DSS v4.0** | Mapped — not in the engine | **Partial** | PCI scope determination, which is for your QSA or ISA and which nothing here makes · everything outside agent-action governance |
 | **Backups · physical and personnel security · the SDLC · patch management · network security · security-awareness training** | — | **Not evidenced** | In every framework above. Reeflex governs what an agent does to your systems at run time. It is one control point, and it sits beside your others rather than replacing any of them. |
 
 **The right-hand column is the point of the table.** Reeflex is an
@@ -108,6 +110,13 @@ action-governance control. It evidences the slice of each framework that is
 about *what an automated actor was allowed to do, who approved it, and what
 stopped it* — and it is silent about the rest of the framework, by design. A
 map with no empty cells in it would be a map nobody should trust.
+
+**On ISO/IEC 27001 in particular:** a certificate is issued against clauses
+4–10 — the management system itself — and Reeflex evidences none of them.
+Annex A is a reference set of 93 controls whose applicability is fixed by your
+own Statement of Applicability, not by us. What the mapping answers is one
+narrower question per control: where an agent-action decision record is the
+kind of input an auditor would accept, what does the record actually carry.
 
 The per-article mapping behind each row — which specific field of the decision
 record backs which specific obligation, the scope note attached to each
