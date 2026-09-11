@@ -53,8 +53,8 @@ the decision path).
 
     ---
 
-    The Action Envelope, the five rules, allow / hold / deny, the fail-closed
-    invariant, sessions and anti-fragmentation, and HIL / HOTL / AIL.
+    The Action Envelope, the base policy pack (R0–R7), allow / hold / deny, the
+    fail-closed invariant, sessions and anti-fragmentation, and HIL / HOTL / AIL.
 
     [:octicons-arrow-right-24: Core concepts](concepts/index.md)
 

@@ -27,18 +27,29 @@ Nothing in this guide requires touching `reeflex-core`'s Python. The engine
 ## 1. How it works (short version)
 
 Every request to `POST /v1/decide` carries an Action Envelope (3 risk axes +
-verb + target + magnitude + cumulative state). The base policy evaluates six
-rules (R1–R6) against those fields and returns exactly one `decision` object:
-`allow`, `deny`, or `require_approval`. Precedence is explicit and total —
+verb + target + magnitude + cumulative state). The base policy evaluates eight
+rules — **R0–R7, nine rule ids** (R5 reports under two) — against those fields
+and returns exactly one `decision` object: `allow`, `deny`, or
+`require_approval`. Precedence is explicit and total —
 **deny > require_approval > allow** — so for any input exactly one Rego block
 matches and no two rules can disagree.
+[How a verdict is reached](architecture/diagrams.md#how-a-verdict-is-reached)
+draws the whole ladder, every rule by its id, in one picture; read it before
+you edit anything below.
 
-> **Environment matters.** R2, R3 and R6 are gated on `production`. In `dev`,
-> `staging`, or any other environment, an irreversible / broad / systemic
-> action is **not** held or denied by R2/R3/R6 — only R1 (read allow), R5
+> **Environment matters.** R2, R3, R6 **and R7** are gated on `production`. In
+> `dev`, `staging`, or any other environment, an irreversible / broad /
+> systemic action is **not** held or denied by them — only R1 (read allow), R5
 > (cumulative budgets), and R4 (default allow) apply. Set
 > `target.environment` accordingly; the stricter behavior is intentional for
 > production only.
+>
+> **R0 is not in that list, and it is not a rule you can trip on purpose.** It
+> fires when the verdict R2, R3 or R6 would have produced rests on a value
+> *core* filled in rather than one your adapter declared — an axis you omitted,
+> an environment outside the enum. It converts that refusal into a resolvable
+> hold under `reeflex.policy/unclassified_action`. It can only ever soften a
+> refusal; it never turns an allow into anything.
 >
 > **R6 also needs a declaration.** It holds an irreversible production action
 > on a *declared production asset* at any cardinality (SPEC §4.3) — which is
@@ -55,7 +66,7 @@ matches and no two rules can disagree.
 > you use (e.g. `prod-eu`, `critical`) by editing `reeflex.rego` — with zero
 > core changes.
 
-This guide does not re-derive the axis model or the five shipped rules — see:
+This guide does not re-derive the axis model or the shipped rules — see:
 
 - [`docs/why-reeflex.md`](why-reeflex.md) — why the model looks like this, HITL/HOTL/AIL.
 - [`reeflex-spec/IMPACT-MODEL.md`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-spec/IMPACT-MODEL.md) — how impact is computed, layer by layer, and what the base policy deliberately does not catch (its closing section already names the mass-read guard used as this document's LEVEL 2 example).
@@ -278,13 +289,32 @@ with zero Python changes.
 This is the crux of the guide: adding a genuinely new rule without breaking
 precedence, proven with `opa test` rather than asserted.
 
-> **The example rule below is numbered R7, not R6.** It used to be R6, and it
-> was renumbered when the base pack gained a real R6 (the declared-production-
-> asset rule, SPEC §4.3). Leaving it as R6 would have had you add a second
-> rule under a number the shipped pack already uses — a name collision with a
-> genuine precedence bug behind it, which is exactly the class of mistake this
-> section is about avoiding. The rule *id* string
-> (`reeflex.policy/mass_read_guard`) never depended on the number.
+!!! warning "This walkthrough is out of date against the shipped pack — read before you copy it (RFX-255)"
+
+    The *method* below is still the right one: add a predicate, add one
+    `decision` block, guard every block that could also fire, prove it with
+    `opa test`. The *code* is written against an older `reeflex.rego` and no
+    longer applies cleanly.
+
+    - **It calls its example rule R7, and the shipped pack now has a real R7**
+      (`reeflex.policy/authority_change_prod`, in `authority.rego`). This is
+      the same collision the note here used to warn about for R6 — one rule
+      number later.
+    - **It patches blocks that no longer exist.** `r5_require_approval_budget`
+      and `delete_session_budget` were replaced by `budget_require_approval`
+      and the configurable dimensions in `budgets.rego`.
+    - **It predates R0 and R6**, so its precedence fix guards neither.
+      Measured: applying every step below to the shipped pack gives a green
+      `opa check` and then fails at request time with
+      `eval_conflict_error: complete rules must not produce multiple outputs`
+      — core answering 500 on an envelope it currently gets right (a 5,000-row
+      `read` on a declared production asset whose environment core coerced).
+
+    Until this section is rewritten, take the shape from it and take the
+    **guard list** from
+    [how a verdict is reached](architecture/diagrams.md#how-a-verdict-is-reached):
+    a new `require_approval` block must exclude *every* predicate above it in
+    that ladder, R0 included.
 
 ### The honest problem this rule solves
 
