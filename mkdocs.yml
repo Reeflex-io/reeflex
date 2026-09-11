@@ -154,6 +154,21 @@ extra:
 # FAQ + Roadmap live in the footer + Home, not in the sidebar tree (they are
 # orientation pages, not part of the reading spine). not_in_nav keeps them out
 # of the tree while --strict stays happy that they are intentionally excluded.
+# Cross-page ANCHORS are checked, not just cross-page files.
+#
+# MEASURED, and it is the reason this block exists: `mkdocs build --strict`
+# does NOT fail on a link to an anchor that does not exist. It logs it at
+# INFO and exits 0 — so the whole Docs workflow goes green over a deep link
+# that lands a reader at the top of a page instead of at the section they
+# asked for. Control run, on a copy of this tree with exactly one anchor
+# broken: default config -> `INFO ... does not contain an anchor`, exit 0;
+# with `anchors: warn` -> `WARNING`, `Aborted with 1 warnings in strict
+# mode!`, exit 1. Repaired, the whole site is exit 0 again. `docs.yml` runs
+# on pull requests, so from here a dead anchor is caught before it merges.
+validation:
+  links:
+    anchors: warn
+
 not_in_nav: |
   /faq.md
   /roadmap.md

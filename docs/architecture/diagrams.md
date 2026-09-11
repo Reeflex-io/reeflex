@@ -49,45 +49,68 @@ used to leave closed; the next diagram opens it.*
 
 ```mermaid
 flowchart TD
-    EV["Action Envelope at POST /v1/decide
-    verb - target - magnitude
-    axes: reversibility, blast_radius, externality"]
+    EV["Action Envelope
+    POST /v1/decide
+    verb · target · magnitude
+    axes: reversibility,
+    blast_radius, externality"]
     CAN{"every closed-enum
     value recognised?"}
-    COE["FAIL CLOSED - SPEC 4.0
-    coerce to the most-guarded member,
-    record it in provenance.undeclared"]
+    COE["FAIL CLOSED · SPEC 4.0
+    coerce to the
+    most-guarded member,
+    record it in
+    provenance.undeclared"]
     OK["nothing guessed
-    provenance.undeclared is empty"]
+    provenance.undeclared
+    is empty"]
     LED[("per-session ledger
-    cumulative state")]
+    cumulative state,
+    injected before
+    any rule runs")]
 
     EV --> CAN
-    CAN -- "no: absent, misspelled, or outside the enum" --> COE
+    CAN -- "no: absent,
+    misspelled, or
+    outside the enum" --> COE
     CAN -- "yes" --> OK
-    COE --> R0
-    OK --> R0
+    COE --> LED
+    OK --> LED
+    LED --> R0
 
-    R0{"R0 - does this refusal rest
-    on a value core GUESSED?
-    reads R2 / R3 / R6 only"}
-    R3{"R3 - irreversible + systemic
+    R0{"R0
+    does this refusal rest
+    on a value core
+    GUESSED?
+    reads R2 / R3 / R6"}
+    R3{"R3
+    irreversible
+    + systemic
     PRODUCTION ONLY"}
-    R2{"R2 - irreversible + broad
+    R2{"R2
+    irreversible
+    + broad
     PRODUCTION ONLY"}
-    R5{"R5 - any cumulative
+    R5{"R5
+    any cumulative
     budget exceeded?
     any environment"}
-    R6{"R6 - irreversible on a DECLARED
-    production asset, any cardinality
+    R6{"R6
+    irreversible on a
+    DECLARED prod asset
+    any cardinality
     PRODUCTION ONLY"}
-    R7{"R7 - changes authority, credentials,
-    or what code runs
+    R7{"R7
+    changes authority,
+    credentials, or
+    what code runs
     PRODUCTION ONLY"}
-    R1{"R1 - read + internal?
+    R1{"R1
+    read + internal?
     any environment"}
 
-    LED -.-> R5
+    LED -. "the one rule
+    that reads it" .-> R5
 
     R0 -- no --> R3
     R3 -- no --> R2
@@ -99,7 +122,8 @@ flowchart TD
 
     H0["HOLD
     reeflex.policy/unclassified_action"]
-    D3["DENY - TERMINAL, no approval can clear it
+    D3["DENY · TERMINAL
+    no approval clears it
     reeflex.policy/irreversible_systemic_prod"]
     H2["HOLD
     reeflex.policy/irreversible_broad_prod"]
@@ -112,7 +136,7 @@ flowchart TD
     reeflex.policy/authority_change_prod"]
     A1["ALLOW
     reeflex.policy/read_only_internal"]
-    A4["ALLOW - the default
+    A4["ALLOW · the default
     reeflex.policy/default_allow"]
 
     R0 -- yes --> H0
@@ -122,6 +146,15 @@ flowchart TD
     R6 -- yes --> H6
     R7 -- yes --> H7
     R1 -- yes --> A1
+
+    %% Invisible links, same idiom as the three-seams diagram below. Without
+    %% them dagre centres each test over BOTH of its children, so the ladder
+    %% staircases sideways one half-node per rung and the whole graph ends up
+    %% ~1900px wide — which the 740px reading column then shrinks to 6px type.
+    %% Chaining the verdicts pins them into their own column: two columns, no
+    %% drift. The ranks are already consecutive, so this constrains nothing
+    %% the layout did not already imply.
+    H0 ~~~ D3 ~~~ H2 ~~~ H5 ~~~ H6 ~~~ H7 ~~~ A1
 
     classDef deny fill:#7f1d1d,stroke:#ef4444,color:#fff;
     classDef hold fill:#78350f,stroke:#f59e0b,color:#fff;
@@ -192,49 +225,80 @@ and that record travels three different distances, under three different
 owners, with three different things it is allowed to claim.
 
 ```mermaid
-flowchart LR
+flowchart TB
     DEC["POST /v1/decide
-    one verdict, one decision_id"]
+    one verdict,
+    one decision_id"]
 
-    subgraph OPEN["Open tier — Apache 2.0, public repo"]
+    subgraph OPEN["Open tier — Apache 2.0"]
         direction TB
         AUD[("audit JSONL
-        append-only, read back
+        append-only,
+        read back
         NOT signed")]
         GW["gateway seat
         sees a proposal"]
-        GWL[("the seat's own ledger
+        GWL[("the seat's
+        own ledger
         enforcement_stage:
         refused_at_gateway")]
-        SIE["syslog to your SIEM
+        SIE["syslog to
+        your SIEM
         DISABLED by default
-        nothing downstream reads it"]
+        nothing downstream
+        reads it"]
     end
 
-    subgraph COMM["Commercial tier — closed, in no public repo"]
+    subgraph COMM["Commercial tier — closed"]
         direction TB
         CONN["evidence connector
         tails the audit log"]
         WIRE["POST /api/v1/evidence
-        ONE HMAC-SHA256 per DELIVERY"]
+        ONE HMAC-SHA256
+        per DELIVERY"]
         STORE[("evidence store
         INSERT + SELECT only
         stamps received_ts")]
         REP["Attest report
-        four renderers, one object"]
+        four renderers,
+        one object"]
     end
 
-    DEC -- "best effort" --> AUD
+    DEC -- "best
+    effort" --> AUD
     DEC --> GW
     GW --> GWL
-    GW -- "agent_id only" --> WIRE
+    GW -- "agent_id
+    only" --> WIRE
     AUD --> CONN
-    CONN -- "closed allowlist" --> WIRE
-    WIRE -- "checked once" --> STORE
+    CONN -- "closed
+    allowlist" --> WIRE
+    WIRE -- "checked
+    once" --> STORE
     STORE --> REP
-    DEC -- "off by default" --> SIE
+    DEC -- "off by
+    default" --> SIE
 
-    GWL -. "no wire field — stops here" .-> WIRE
+    GWL -. "no wire field
+    stops here" .-> WIRE
+
+    %% Invisible links, same idiom as the three-seams diagram below. Two
+    %% measured problems they fix, both in the rendered image and neither
+    %% visible in the source:
+    %% --
+    %% 1. The tiers interleave ranks (the connector sits at the same depth as
+    %%    the seat's ledger), and dagre answers that by placing the clusters
+    %%    SIDE BY SIDE — 2211px wide, 5px labels. Pushing the connector below
+    %%    the seat's ledger separates the rank bands so the tiers STACK: open
+    %%    above closed, the order the prose reads them in. (A
+    %%    subgraph-to-subgraph `OPEN ~~~ COMM` was tried first and measured a
+    %%    NO-OP — the constraint has to land on nodes.)
+    %% 2. With all three of core's traces on one rank, `GW --> GWL` routed
+    %%    BEHIND the SIEM node, so the picture read "gateway seat -> syslog to
+    %%    your SIEM" — an edge this graph does not declare. Giving the open
+    %%    tier its own spine removes the crossing.
+    AUD ~~~ GW
+    GWL ~~~ CONN
 
     classDef open fill:#14532d,stroke:#22c55e,color:#fff;
     classDef comm fill:#4c1d95,stroke:#a78bfa,color:#fff;
@@ -330,10 +394,20 @@ stored nowhere and **no party, Reeflex included, can recompute it**. It is
 carried, and checked for shape. That is the whole of it.*
 
 *This page stops at the store, because that is where the open tier's
-architecture stops. What the generated report itself contains — the disclaimer
-every format carries, the per-control blocks, the gap worklist, the
-verifiability section and the auditor's own certification block — is documented
-with the commercial tier rather than here.*
+architecture stops — and the question it leaves open is not architectural but
+evidential: once the record has travelled all of that, what is it actually
+worth to an auditor?
+**[Evidence for auditors](../compliance/evidence-for-auditors.md)** answers
+that, and answers it against the same three anchors this diagram labels: it
+takes [append-only, signed and
+timestamped](../compliance/evidence-for-auditors.md#the-three-adjectives-taken-apart)
+one word at a time — one survives, one is half true, one is true of something
+other than what you would assume — and it lists [the six sections a report
+comes out
+in](../compliance/evidence-for-auditors.md#what-an-auditor-actually-receives),
+together with which frameworks the controls are mapped to rather than certified
+against. The per-article and per-field detail stays with the commercial tier
+rather than here.*
 
 ## Hold lifecycle
 
