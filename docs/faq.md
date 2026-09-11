@@ -78,7 +78,7 @@ production target is denied or held for a human before it executes — and becau
 it also tracks the session's cumulative total, an agent can't slip the same
 destructive action through by splitting it into many small deletes
 (fragmentation). Point your adapter's `target.environment` at `production`, keep
-the base policy's bulk-delete and irreversible-action rules (R1–R5), and start in
+the base policy's bulk-delete and irreversible-action rules (R0–R7), and start in
 observe to calibrate, then switch to enforce. Walkthrough:
 [Getting started](getting-started/index.md) and the [policy guide](policy-guide.md).
 

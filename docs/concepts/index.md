@@ -1,8 +1,8 @@
 ---
 title: Concepts
 description: >-
-  The Action Envelope, the five rules, allow / hold / deny, the fail-closed
-  invariant, sessions and anti-fragmentation, and HIL / HOTL / AIL.
+  The Action Envelope, the base policy pack, allow / hold / deny, the
+  fail-closed invariant, sessions and anti-fragmentation, and HIL / HOTL / AIL.
 ---
 
 # Concepts
@@ -59,16 +59,22 @@ record either way. The `/v1/decide` sequence and the hold lifecycle are in
   `blast_radius`, `externality`) + magnitude + a stable `session_id`. The
   portable contract between any adapter and the engine.
   ([SPEC §2](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-spec/SPEC.md))
-- **The five rules (R1–R5)** — deterministic allow / hold / deny with total
-  precedence (`deny > require_approval > allow`). **R2 and R3 are gated on
-  `production`**: in `dev` or `staging`, only R1, R4, and R5 apply.
-  ([policy guide](https://github.com/Reeflex-io/reeflex/blob/main/docs/policy-guide.md))
+- **The base policy pack (R0–R7, nine rule ids)** — deterministic allow / hold
+  / deny with total precedence (`deny > require_approval > allow`). **R2, R3,
+  R6 and R7 are gated on `production`**: in `dev` or `staging`, only R1, R4 and
+  R5 apply. R0 holds — rather than denies — an action core could not classify,
+  and R3 is the only refusal no approval can clear. See
+  [how a verdict is reached](../architecture/diagrams.md#how-a-verdict-is-reached)
+  for the whole ladder in one picture, or the
+  [policy guide](../policy-guide.md) to change it.
 - **Decisions** — `allow`, `require_approval` (hold), `deny`. The engine
   **fails closed**: if OPA is unreachable or a policy is ambiguous, the answer
   is `deny`, never `allow`.
-- **Sessions & the cumulative ledger** — R5 tracks cumulative deletes per
-  `session_id`, so splitting one big dangerous action into many small ones
-  (fragmentation) buys nothing.
+- **Sessions & the cumulative ledger** — R5 accumulates four configurable
+  budgets per `session_id` (deletions, money, outbound sends, objects touched),
+  so splitting one big dangerous action into many small ones (fragmentation)
+  buys nothing. The limits are policy data you edit, not constants in the
+  engine.
 - **HIL / HOTL / AIL** — a hold is resolved by an approver you designate: a
   human (HITL) or an agent you trust (AIL). The canonical definition lives in
   [why-reeflex.md#ail](https://github.com/Reeflex-io/reeflex/blob/main/docs/why-reeflex.md#ail)

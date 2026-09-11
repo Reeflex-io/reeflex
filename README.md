@@ -147,10 +147,15 @@ volume per pod — each keep their own ledger and each grant a full budget, so
 read [the deployment requirement](INSTALL.md#the-session-ledger-must-be-shared-and-must-survive-a-restart)
 before scaling out. `GET /healthz` reports which mode a core is in.
 
-The whole base policy is **five rules you can read in one minute** — each a
-decades-old safety principle applied to agent actions, with its limits
+The whole base policy is **eight rules you can read in one minute** — R0–R7,
+nine rule ids, each a decades-old safety principle applied to agent actions,
+with its limits
 [documented honestly](reeflex-spec/IMPACT-MODEL.md#what-the-base-policy-does-not-catch).
-Universal axes, readable rules, [yours to extend](docs/policy-guide.md).
+They are not a score and not a model: you can read the rule that decided, by
+name, in the decision itself. See
+[how a verdict is reached](https://docs.reeflex.io/architecture/diagrams/#how-a-verdict-is-reached)
+for the whole ladder in one picture. Universal axes, readable rules,
+[yours to extend](docs/policy-guide.md).
 
 The engine knows nothing about WordPress, Postgres, or S3. It decides on
 **actions** — normalized, structured, and risk-profiled. Adapters are the
@@ -278,7 +283,7 @@ Already running MCP servers (filesystem, GitHub, Postgres, your own)? Put
 **Shipping today:**
 
 - `reeflex-core` decision engine (`POST /v1/decide`) — Python + OPA/Rego, **255** unit tests (1 platform-specific skip), **9/9** policy tests
-- Base policy pack (R1–R5): read-only allow, irreversible-broad-prod approval, irreversible-systemic-prod deny, default allow, session delete-budget
+- Base policy pack (R0–R7, nine rule ids): unclassifiable-action **hold** (never a deny), read-only allow, irreversible-broad-prod approval, irreversible-systemic-prod deny (the only refusal no approval can clear), configurable cumulative budgets, declared-production-asset approval, authority/credential/executability-change approval, default allow. R2, R3, R6 and R7 apply in `production` only — [the whole ladder in one picture](https://docs.reeflex.io/architecture/diagrams/#how-a-verdict-is-reached)
 - Fail-closed on any OPA error or unreachable core — never a silent allow
 - Anti-fragmentation: a durable per-session cumulative ledger defeats split-batch evasion — survives restarts, and shared by every replica that shares its volume ([limits](INSTALL.md#the-session-ledger-must-be-shared-and-must-survive-a-restart))
 - Three conformance-tested reference adapters (Claude Code, WordPress, MCP gateway)
