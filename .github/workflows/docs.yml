@@ -25,10 +25,15 @@ on:
       - "mkdocs.yml"
       - ".github/workflows/docs.yml"
       - ".github/requirements-docs.txt"
+      - ".github/requirements-docs-probe.txt"
       # The `hooks:` entry in mkdocs.yml runs this on every build; without it
       # here, a change to the checker itself would rebuild nothing and the
       # first run of a new rule would be the merge to main (RFX-268).
       - "scripts/check_diagram_contrast.py"
+      # Same reasoning for the pixel probe and the worklist it reads (RFX-266):
+      # a change to either must re-run against the built site.
+      - "scripts/probe_diagrams.py"
+      - "scripts/diagram_probe_baseline.json"
   pull_request:
     branches: [main]
     paths:
@@ -36,7 +41,10 @@ on:
       - "mkdocs.yml"
       - ".github/workflows/docs.yml"
       - ".github/requirements-docs.txt"
+      - ".github/requirements-docs-probe.txt"
       - "scripts/check_diagram_contrast.py"
+      - "scripts/probe_diagrams.py"
+      - "scripts/diagram_probe_baseline.json"
   workflow_dispatch:
 
 # Deploy via the GitHub Pages artifact path (actions/deploy-pages) — no
@@ -103,6 +111,80 @@ jobs:
         if: github.event_name != 'pull_request'
         with:
           path: site
+
+  # WHAT A READER ACTUALLY SEES (RFX-266). `build` proves mkdocs is happy and
+  # the `hooks:` checker is happy; neither of them renders anything. This job
+  # opens the built site in Chromium and measures pixels: painted contrast per
+  # diagram label in BOTH palettes, effective label size after mermaid's
+  # shrink-to-fit, and that every diagram rendered at all.
+  #
+  # It exists because four rounds in a row each wrote this measurement from
+  # scratch into a report folder, and three of the defects those rounds found
+  # were in the instrument rather than in the docs. scripts/probe_diagrams.py
+  # carries each of those traps as a behaviour; this job is what runs it.
+  #
+  # IT DOES NOT GATE PUBLICATION, deliberately. `deploy` needs `build` only, so
+  # a red probe turns a PULL REQUEST red — which is where a diagram regression
+  # should be caught — without letting a third-party font CDN or a Chromium
+  # download failure hold up a docs deploy. The cheap static check in
+  # scripts/check_diagram_contrast.py does gate the build, and this job is the
+  # pixel authority that keeps that check's model honest.
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install MkDocs + the probe (both pinned, separate files)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r .github/requirements-docs.txt \
+                      -r .github/requirements-docs-probe.txt
+
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      # The gate runs scripts/tests in an environment with no image library, so
+      # the four pixel-sampling tests skip there. This job is the one place
+      # Pillow is installed, so it is where they have to actually execute — a
+      # test that only ever skips is not a test.
+      - name: Run the probe's own tests (with Pillow present, so nothing skips)
+        run: python -m unittest discover -s scripts/tests -p 'test_probe_diagrams.py' -v
+
+      # No CI=true here: the `social` plugin renders OG cards, which this job
+      # does not measure and which would need the imaging apt packages. The
+      # diagrams, the stylesheet and the palette toggle are identical either way.
+      - name: Build the site to measure
+        run: mkdocs build --strict -d site
+
+      # --require-webfont: theme.font.text is Inter, fetched from Google Fonts.
+      # With it unreachable the page renders in fallback metrics, diagrams come
+      # out up to 3.2% wider and every effective label size shrinks with them.
+      # That is measurable, so it is measured rather than silently absorbed.
+      - name: Probe the rendered diagrams
+        run: |
+          python scripts/probe_diagrams.py site \
+            --require-webfont \
+            --json diagram-probe.json \
+            --screenshots diagram-probe-shots
+
+      # The screenshots are the point: a contrast or size finding is a claim
+      # about a picture, and the picture should be one click away from the red
+      # run rather than something the next person rebuilds to see.
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagram-probe
+          path: |
+            diagram-probe.json
+            diagram-probe-shots/
+          retention-days: 14
 
   deploy:
     # A pull request BUILDS the docs and never publishes them.

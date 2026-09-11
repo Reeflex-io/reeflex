@@ -1,0 +1,23 @@
+# Pinned dependencies for the `probe` job in docs.yml — scripts/probe_diagrams.py.
+#
+# SEPARATE FROM requirements-docs.txt ON PURPOSE. Those are the dependencies of
+# the build that PUBLISHES docs.reeflex.io, and a browser automation stack has
+# no business on that path: the probe measures the site after it is built and
+# never contributes a byte to it. Keeping the two files apart means a Playwright
+# release can never change what gets published.
+#
+# BOUNDS, justified by the surface the probe actually uses:
+#   playwright — sync_playwright, chromium.launch, new_context(device_scale_factor),
+#                add_init_script, page.evaluate, page.screenshot, context.route.
+#                All 1.x API. A 2.0 would be free to rename it. Latest 1.62.0.
+#   pillow     — Image.open / crop / convert / getdata. 11.x and 12.x both fine;
+#                the floor is where `Image.Resampling` settled. Latest 12.3.0.
+#
+# The browser binary itself is NOT pinned here — `playwright install chromium`
+# resolves the build that matches the pinned playwright package, which is the
+# pin that matters. The probe records the Chromium version it measured with in
+# its JSON output.
+#
+# Raise a ceiling deliberately, in a PR, with the `Docs` probe job green on it.
+playwright>=1.55,<2
+pillow>=11,<13
