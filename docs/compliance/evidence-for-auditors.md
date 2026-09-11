@@ -393,6 +393,17 @@ reason an auditor can use the document at all.
 
 ## Where to go next
 
+- **[How a verdict is reached](../architecture/diagrams.md#how-a-verdict-is-reached)**
+  — everything above is about the *record*; this is the *decision* the record
+  is of, drawn rule by rule in the order the engine evaluates them and labelled
+  with the real rule ids, so a row in a report can be traced back to the rule
+  that produced it. It also marks which refusals an approver you designate can
+  clear, and which one core refuses to let anyone clear — that refusal is
+  rejected in code, with `rule_not_resolvable`, not merely by policy.
+- **[The evidence path](../architecture/diagrams.md#the-evidence-path-what-happens-to-the-record-after-the-verdict)**
+  — the same journey this page argues about, as a picture: the audit line, the
+  SIEM stream and the Attest delivery, with the open-core boundary drawn across
+  it and the best-effort writes labelled as best-effort rather than assumed.
 - **[Compliance & open core](index.md)** — why NIS2 is the current driver and
   how the licensing boundary is drawn.
 - **[Open-core boundary](../open-core.md)** — what is Apache 2.0 and free
