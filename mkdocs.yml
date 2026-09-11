@@ -169,6 +169,22 @@ validation:
   links:
     anchors: warn
 
+# DIAGRAM LEGIBILITY IS A BUILD FAILURE NOW — RFX-268, and the same reasoning
+# as the `anchors: warn` block above. Every coloured node on the public
+# compliance diagrams shipped for two weeks painting #263041 on its own dark
+# fill (1.21-1.46:1, against WCAG 1.4.3's 4.5) and every gate we had was green
+# over it: `--strict` passed, and two rounds of careful contrast measurement
+# read ~9:1 because they sampled the ancestor that carries the INTENDED colour
+# instead of the element that paints. The defect also arrived one classDef at a
+# time, so the hook checks all of them, in both palettes, on every build.
+# It logs WARNINGs on the mkdocs logger, which `--strict` turns into exit 1 —
+# `docs.yml` runs on pull requests, so a node a reader cannot read is caught
+# before it merges. Control run, one classDef's `color:` reverted on a copy of
+# this tree: `WARNING ... 1.33:1 in the 'default' palette`, `Aborted with 1
+# warnings in strict mode!`, exit 1.
+hooks:
+  - scripts/check_diagram_contrast.py
+
 not_in_nav: |
   /faq.md
   /roadmap.md

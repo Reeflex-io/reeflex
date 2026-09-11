@@ -25,6 +25,10 @@ on:
       - "mkdocs.yml"
       - ".github/workflows/docs.yml"
       - ".github/requirements-docs.txt"
+      # The `hooks:` entry in mkdocs.yml runs this on every build; without it
+      # here, a change to the checker itself would rebuild nothing and the
+      # first run of a new rule would be the merge to main (RFX-268).
+      - "scripts/check_diagram_contrast.py"
   pull_request:
     branches: [main]
     paths:
@@ -32,6 +36,7 @@ on:
       - "mkdocs.yml"
       - ".github/workflows/docs.yml"
       - ".github/requirements-docs.txt"
+      - "scripts/check_diagram_contrast.py"
   workflow_dispatch:
 
 # Deploy via the GitHub Pages artifact path (actions/deploy-pages) — no

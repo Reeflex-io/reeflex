@@ -406,7 +406,8 @@
   --md-mermaid-node-bg-color: #fbeee7;        /* soft ember fill */
   --md-mermaid-node-fg-color: #b0512a;        /* ember border */
   --md-mermaid-edge-color: #5d6675;           /* muted ink lines/arrows */
-  --md-mermaid-label-fg-color: #263041;       /* ink node text */
+  --rfx-mermaid-ink: #263041;                 /* ink for any label no classDef colours */
+  --md-mermaid-label-fg-color: var(--rfx-mermaid-ink);
   --md-mermaid-label-bg-color: #ffffff;
   --md-mermaid-sequence-actor-border-color: #b0512a;
   --md-mermaid-sequence-actorline-color: #b0512a;
@@ -415,12 +416,56 @@
   --md-mermaid-node-bg-color: #202a46;        /* lifted panel */
   --md-mermaid-node-fg-color: #f0946b;        /* ember border */
   --md-mermaid-edge-color: #93a0bc;
-  --md-mermaid-label-fg-color: #dfe6f5;
+  --rfx-mermaid-ink: #dfe6f5;
+  --md-mermaid-label-fg-color: var(--rfx-mermaid-ink);
   --md-mermaid-label-bg-color: #0d1322;
   --md-mermaid-sequence-actor-border-color: #f0946b;
   --md-mermaid-sequence-actorline-color: #f0946b;
 }
-.md-typeset .mermaid { text-align: center; margin: 1.6rem 0; }
+/* A classDef's `color:` must reach the element that actually PAINTS. RFX-268.
+ *
+ * MEASURED, not reasoned. Mermaid writes a classDef's colour as an inline
+ * style on the label's ANCESTORS — `<g class="label">`, the foreignObject
+ * `<div>` and `<span class="nodeLabel">` all get `color:#fff !important`. The
+ * text itself is a `<p>` inside that span, and Material's own stylesheet —
+ * injected INSIDE the same shadow root, so no selector in this file can reach
+ * it — matches that child directly:
+ *
+ *     #__mermaid_N .nodeLabel, #__mermaid_N .nodeLabel p {
+ *       color: var(--md-mermaid-label-fg-color); }
+ *
+ * An inherited declaration loses to one that matches the element itself, even
+ * an `!important` one. So the `<p>` took the palette ink and every coloured
+ * node on the public diagrams painted #263041 on its own dark fill: coerce
+ * 1.28, deny 1.33, allow 1.46, hold 1.46, comm 1.21 — against WCAG 1.4.3's
+ * 4.5. Slate read 7.25-8.75 by accident of Material's light label ink, and
+ * `default` has no prefers-color-scheme media, so a first-time reader got the
+ * 1.2:1 palette. Two earlier rounds read `span.nodeLabel` — the ancestor that
+ * carries the INTENDED colour — and recorded ~9:1 over a page painting 1.3:1.
+ *
+ * THE LEVER: custom properties inherit straight through a shadow boundary even
+ * though selectors do not. Setting --md-mermaid-label-fg-color to the keyword
+ * `currentColor` makes Material's own declaration read `color: currentColor`,
+ * which for the `color` property means "inherit" — so the `<p>` takes whatever
+ * its ancestors carry: the classDef colour when there is one, and otherwise
+ * the host's `color` below, which is the same palette ink as before.
+ *
+ * Blast radius, measured across all 358 text elements in all six diagrams on
+ * all three diagram pages, both palettes: seven classDef'd node labels change
+ * (to the #fff they always declared, 9.07-10.95:1 in BOTH palettes) and the
+ * computed `fill` of every SVG text element is unchanged — SVG text paints
+ * with `fill`, not `color`, so the `color` shifts on <text>/<tspan> are inert.
+ *
+ * `scripts/check_diagram_contrast.py` fails `mkdocs build --strict` if this
+ * declaration goes missing or a classDef drops below 4.5:1 in either palette.
+ * Verify a change here by sampling PIXELS in both palettes: a computed-style
+ * read on `span.nodeLabel` returns #fff over a broken page just as happily. */
+.md-typeset .mermaid {
+  text-align: center;
+  margin: 1.6rem 0;
+  color: var(--rfx-mermaid-ink);
+  --md-mermaid-label-fg-color: currentColor;
+}
 /* Wide architecture diagrams may exceed the 740px reading column — let them
    scroll rather than clip or force an awkward shrink. */
 .md-typeset .mermaid > svg { max-width: 100%; }
