@@ -17,9 +17,14 @@ you pass your audit, and nothing it produces is legal advice.
 
 What it does is narrower and more useful: it produces **the evidence that your
 governance control over AI-agent actions was operating** — an append-only
-record of every action an agent attempted, what the gate decided, which rule
-decided it, and who, if anyone, approved it — **plus the gaps we detect in that
-evidence, and a written statement of what we do not cover.**
+record of the agent actions your gate reported, what it decided about each,
+which rule decided it, and who, if anyone, approved it — **plus the gaps we
+detect in that evidence, and a written statement of what we do not cover.**
+
+Note the phrasing, because it is deliberate: *the actions your gate reported*.
+Reeflex records what it was sent. It cannot see an action a gate never told it
+about, and every report we produce says so in its own second section, before
+the evidence. That is the first of the seams this page is about.
 
 Your auditor takes it from there. That is their job, and it is not one we can
 do for you.
