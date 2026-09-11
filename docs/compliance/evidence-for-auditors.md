@@ -211,9 +211,15 @@ it is worth printing — the interesting case is the one where it is not.
 Each record also carries an `envelope_hash`, a fingerprint of the action
 computed inside the gate. The algorithm is public and open-source. The
 pre-image is not transmitted, so **no party — us included — can recompute that
-hash from a report.** It is checked for well-formedness and treated as a label
-for an action, not as proof about a record. Making it recomputable is a
-separate roadmap item from the Ed25519 work above, and neither has shipped.
+hash from a report.**
+
+And it fingerprints the **action**, not the record. It is computed over what
+was attempted and how large it was — so two decisions that differ only in which
+agent asked, who approved, or when, carry **the same value**. It is a label for
+an action, not an identifier for a decision, and a report that presented it as
+the latter would be teaching an auditor something false. Making it recomputable
+is a separate roadmap item from the Ed25519 work above, and neither has
+shipped.
 
 ---
 
@@ -239,7 +245,8 @@ disagree about the facts.
    **attestation basis** input by input — which values are your own account and
    which ones we hold an independent record of.
 4. **Gap summary — the auditor's worklist.** Every gap across every control,
-   most severe first.
+   most severe first — capped in the two prose formats and complete in the
+   JSON, on the terms in the next section.
 5. **Verifiability, and its limits.** What each anchor on a record does and
    does not establish, written under a heading that names the limit rather than
    promising more than the anchors deliver.
