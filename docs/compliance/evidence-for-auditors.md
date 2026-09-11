@@ -87,7 +87,7 @@ records have, and it is why the evidence is worth producing at all.
 
 | Framework · obligation | In the engine today | Coverage | Not evidenced |
 |---|---|---|---|
-| **NIS2 Article 21(2)** — cybersecurity risk-management measures | **Assessed today** | **Partial** | Business continuity and backup (c) · supply-chain security (d) · security in acquisition and development, vulnerability handling (e) · cyber hygiene and training (g) · MFA and secured communications (j) |
+| **NIS2 Article 21(2)** — cybersecurity risk-management measures | **Assessed today** | **Partial** | Business continuity and backup \(c\) · supply-chain security (d) · security in acquisition and development, vulnerability handling (e) · cyber hygiene and training (g) · MFA and secured communications (j) |
 | **DORA Article 9** — protection and prevention | Mapped — not in the engine | **Partial** | Cryptographic key management · secure data transfer · resilience and continuity |
 | **EU AI Act Article 12** — record-keeping (logging) | **Assessed today** | **Evidences** — for agent-action events | The AI system's own internal telemetry. This is a record of what actions were attempted and how each was decided, not a model trace. |
 | **EU AI Act Article 14** — human oversight | **Assessed today** | **Evidences** — the oversight allocation trail | Oversight exercised somewhere Reeflex cannot see. A decision taken outside the holds inbox is reported as resting on the audited party's word. |
