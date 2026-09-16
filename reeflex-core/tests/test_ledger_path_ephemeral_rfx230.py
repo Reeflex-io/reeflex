@@ -123,10 +123,22 @@ class TestPathStorage(unittest.TestCase):
             self.assertIs(got["ephemeral"], False, got)
 
     def test_sibling_prefix_not_matched(self):
-        """T_sibling_prefix_not_matched — a string prefix is not a path prefix:
-        /app/audit-other must not be read as the mount for /app/audit."""
+        """T_sibling_prefix_not_matched — a string prefix is not a path prefix.
+
+        The near-miss that bites has to be SHORTER than the ledger directory:
+        `/app/audit`.startswith(`/app/audit-other`) is False whichever way the
+        comparison is written, so a longer sibling cannot tell a correct
+        implementation from a `startswith` one. `/app/aud` can — it string-
+        prefixes `/app/audit` and is not a path prefix of it. Reading the mount
+        off that row would call an ephemeral overlay durable, which is the
+        RFX-230 defect reintroduced through the parser.
+
+        Both rows are present: the longer sibling because it is the shape a
+        reader expects, the shorter one because it is the shape that fails.
+        """
         text = _MOUNTINFO_NO_VOLUME + (
             "1992 1975 259:3 /v /app/audit-other rw,relatime - ext4 /dev/sda1 rw\n"
+            "1994 1975 259:3 /v /app/aud rw,relatime - ext4 /dev/sda1 rw\n"
         )
         got = ledger_mod.path_storage(_LEDGER, text)
         self.assertEqual(got["mount_point"], "/", got)
