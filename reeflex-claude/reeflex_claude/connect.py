@@ -106,7 +106,21 @@ _AGENT_KIND = {
 # and reeflex-app's `tests/onboard/test_setup_doc.py` asserts the same
 # constant against its byte-identical copy. Two suites, one number: if the
 # document moves and only one side is updated, both go red naming the digest.
-SETUP_DOC_SHA256 = "e1a56d728757b66f7f49228b62c2a6a7340374ec059c5d1b36a8aa943c2bb062"
+#
+# MOVING THIS NUMBER IS A RELEASE-ORDERING EVENT, NOT A DOCS COMMIT, and the
+# reason is that the wheel does not ship the document -- it ships this
+# constant and PRINTS it (`cmd_connect`, the "setup document:" line). So
+# between the merge
+# that moves the digest and the release that republishes this package, an
+# installed wheel prints the PREVIOUS digest while the portal renders the new
+# document. Measured on published 0.2.0: it carries `e1a56d72...` and contains
+# no copy of `agent-setup.md` at all. That divergence is fail-closed (the
+# document tells the reader to stop on a mismatch) and it is loud, which is
+# why `agent-setup.md`'s "Verifying this document" section names the adapter
+# digest as a THIRD value and says an older adapter is the ordinary cause.
+# If you move this number, say so in the CHANGELOG and tell the console the
+# republish is what closes it (RFX-284).
+SETUP_DOC_SHA256 = "55356fbbc4d7fbbde965d82ab0ad36ea0ada14c3057ee308d5ba5d27b89075be"
 
 _HTTP_TIMEOUT_SECONDS = 20
 
