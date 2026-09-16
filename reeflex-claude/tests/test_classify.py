@@ -598,5 +598,69 @@ class TestRegressions(unittest.TestCase):
         self.assertEqual(r["classification_tier"], "destructive_broad")
 
 
+class TestAccountDeletionIsIrreversible(unittest.TestCase):
+    """RFX-166 -- deleting a principal is a destruction, not an `execute`.
+
+    The whole family used to match no branch in `_infra_destructive` and fell
+    to the default Bash EXECUTE arm, which prices `recoverable`. That is the
+    axis R2/R3 read to hold a destructive action, and the WordPress reference
+    adapter has priced the same operation `irreversible` since RFX-164, so the
+    two shipped adapters answered the same question oppositely.
+
+    The shared corpus covers `userdel alice` only. These cover the rest of the
+    family and, more importantly, the carve-out -- which the corpus cannot see.
+    """
+
+    def test_userdel_is_an_irreversible_delete(self):
+        r = _c("Bash", {"command": "userdel alice"})
+        self.assertEqual(r["verb"], "delete")
+        self.assertEqual(r["reversibility"], "irreversible")
+        self.assertEqual(r["danger_signature"], "account_delete")
+
+    def test_every_command_in_the_family_agrees(self):
+        for cmd in ("userdel alice", "deluser alice",
+                    "groupdel staff", "delgroup staff"):
+            with self.subTest(cmd=cmd):
+                r = _c("Bash", {"command": cmd})
+                self.assertEqual(r["verb"], "delete")
+                self.assertEqual(r["reversibility"], "irreversible")
+
+    def test_removing_the_home_directory_too_is_still_irreversible(self):
+        r = _c("Bash", {"command": "userdel -r alice"})
+        self.assertEqual(r["reversibility"], "irreversible")
+
+    def test_blast_radius_is_not_lowered_by_this_branch(self):
+        """SPEC §4.2: a name-derived signal may RAISE and never lower.
+
+        The default EXECUTE arm this family used to reach already answered
+        `scoped`. Pinning it here is what makes a later 'tidy-up' to `single`
+        -- which would be a discount bought by recognising the command --
+        fail instead of pass.
+        """
+        self.assertEqual(_c("Bash", {"command": "userdel alice"})["blast_radius"],
+                         "scoped")
+
+    def test_a_group_membership_removal_is_not_an_account_deletion(self):
+        """`deluser <user> <group>` removes a membership, which is undone by
+        granting it again. Pricing it as a destruction would be the over-block
+        RFX-249 is about, so it is deliberately left to the default arm."""
+        for cmd in ("deluser alice sudo", "delgroup alice sudo"):
+            with self.subTest(cmd=cmd):
+                r = _c("Bash", {"command": cmd})
+                self.assertNotEqual(r["verb"], "delete")
+                self.assertEqual(r["reversibility"], "recoverable")
+
+    def test_creating_an_account_is_untouched(self):
+        r = _c("Bash", {"command": "useradd bob"})
+        self.assertNotEqual(r["verb"], "delete")
+
+    def test_merely_naming_the_command_is_not_running_it(self):
+        """A read that mentions the word must not be priced as the deletion --
+        the `grep -rn delete src/` shape `_infra_destructive` exists to avoid."""
+        r = _c("Bash", {"command": "grep userdel /var/log/syslog"})
+        self.assertEqual(r["verb"], "read")
+        self.assertNotEqual(r["reversibility"], "irreversible")
+
+
 if __name__ == "__main__":
     unittest.main()
