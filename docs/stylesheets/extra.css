@@ -411,6 +411,9 @@
   --md-mermaid-label-bg-color: #ffffff;
   --md-mermaid-sequence-actor-border-color: #b0512a;
   --md-mermaid-sequence-actorline-color: #b0512a;
+  /* Autonumber badge ink. See the slate block below for why this is set per
+     palette and why it is the INK that moves. #ffffff on this ember = 5.18:1. */
+  --md-mermaid-sequence-number-fg-color: #ffffff;
 }
 [data-md-color-scheme="slate"] {
   --md-mermaid-node-bg-color: #202a46;        /* lifted panel */
@@ -421,6 +424,42 @@
   --md-mermaid-label-bg-color: #0d1322;
   --md-mermaid-sequence-actor-border-color: #f0946b;
   --md-mermaid-sequence-actorline-color: #f0946b;
+  /* Autonumber badge ink — RFX-278. THE EMBER IS DELIBERATELY NOT TOUCHED.
+   *
+   * Mermaid ships a `.sequenceNumber` rule declaring `fill: white`, and
+   * Material overrides it inside the same shadow root with a rule on
+   * `#__mermaid_N .sequenceNumber` declaring `fill` as
+   * `var(--md-mermaid-sequence-number-fg-color)`. So this custom property is
+   * the whole lever — it inherits THROUGH the shadow boundary even though no
+   * selector in this file can reach across it (the same mechanism documented
+   * for --md-mermaid-label-fg-color under RFX-268).
+   *
+   * NB — no literal braces in this comment, and that is load-bearing:
+   * check_diagram_contrast.read_palette_vars matches a palette block with
+   * `[^...]*` between the braces, so ONE brace anywhere in here (a comment
+   * included) ends the match early, and the whole slate palette silently reads
+   * as unmeasurable. It surfaces as a `NOT checked` warning that --strict turns
+   * into a failed build, which is how this was caught rather than shipped.
+   *
+   * The badge disc is --md-mermaid-node-fg-color, the ember border, and the two
+   * palettes need OPPOSITE inks because that ember has opposite lightness in
+   * each. Measured with scripts/check_diagram_contrast.py's own contrast_ratio,
+   * which is the same function the build check and the pixel probe both use:
+   *
+   *              disc       #ffffff ink    #241009 ink
+   *   default    #b0512a      5.18:1  OK      3.52:1  fails
+   *   slate      #f0946b      2.29:1  FAILS   7.94:1  OK
+   *
+   * So `default` keeps white and slate takes #241009 — the dark-ink-on-ember
+   * already used by the hero button above, not a new colour. What moves is the
+   * INK, in the one palette where it fails. --rf-ember, --rf-ember-2,
+   * --rf-ember-link and --md-mermaid-node-fg-color are all unchanged.
+   *
+   * WHAT THIS DOES NOT DECIDE: the open owner call on #fff-on-ember (2.97:1)
+   * stands, and `default` still paints #fff on ember here at 5.18:1. Narrowing
+   * a brand colour to make a checker green is the owner's call, not an agent's;
+   * this change is scoped so that call is still theirs to make. */
+  --md-mermaid-sequence-number-fg-color: #241009;
 }
 /* A classDef's `color:` must reach the element that actually PAINTS. RFX-268.
  *
