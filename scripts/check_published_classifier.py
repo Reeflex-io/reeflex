@@ -15,19 +15,33 @@ as `read_only_internal` — reversible/single reached core, and core answered
 `allow` honestly on a dishonest classification.  An irreversible production
 destruction, executed with no human, from an installed Reeflex seat.
 
-The whole time, the only instrument in this repo that touches a published
-wheel — `gate.py`'s `pypi-smoke` — was GREEN.  It installs the package and runs
-`<entry> --help`, then asserts exit 0.  Measured 2026-09-16 on this box:
+The whole time, the instrument that runs against a published wheel on every
+gate run — `gate.py`'s `pypi-smoke` — was GREEN.  It installs the package and
+runs `<entry> --help`, then asserts exit 0.  Measured 2026-09-16 on this box:
 
     reeflex-claude==0.1.7   reeflex-claude --help -> exit 0
     reeflex-claude==0.2.0   reeflex-claude --help -> exit 0
 
-Both pass.  `pypi-smoke` proves the entry point is not dead.  It has never had
-anything to say about what the published wheel DECIDES, which is the only
-property a customer has installed it for.  RFX-241 asks for the component that
-does: "FAILS when a published wheel's behaviour differs from the checkout's on
-the conformance corpus, so the next lag is caught by CI rather than by an
-adapter author."
+Both pass.  `pypi-smoke` proves the entry point is not dead, and says nothing
+about what the wheel DECIDES.
+
+BE PRECISE ABOUT WHAT ELSE EXISTS, because "nothing covered this" would be
+wrong.  `release.yml`'s `verify-published` also installs from the index and
+invokes the artefact, with real negative controls — a `rfx_gate_` token refused
+with exit 2, and the `SETUP_DOC_SHA256` comparison — and RFX-241's own
+2026-09-08 comment records it FAILING when pointed at 0.1.7.  It is a real
+instrument and it is not this one, for two reasons.  It runs ON A TAG and
+installs the version that tag names, so a lag BETWEEN releases is invisible to
+it for as long as nobody cuts one — here, 25 days.  And the way it fails on
+0.1.7 is `argument command: invalid choice: 'connect'`: a missing subcommand,
+i.e. the wheel is the wrong VINTAGE.  That is a proxy, and it only works while
+the vintages happen to differ in their CLI surface.  A wheel whose classifier
+had regressed without its argparse moving would pass it.  Nothing scored what
+the published classifier DECIDES until this component.
+
+So RFX-241 asks for the component neither of them is: "FAILS when a published
+wheel's behaviour differs from the checkout's on the conformance corpus, so the
+next lag is caught by CI rather than by an adapter author."
 
 WHAT IT DOES
 ============
