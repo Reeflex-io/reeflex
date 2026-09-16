@@ -49,13 +49,14 @@ Reeflex returns `require_approval` — the delete is held for a human, not run:
     The token above is a public eval token: dev/eval only, not for production.
 
     **That `hold_id` cannot be approved on this endpoint, and the walk ends
-    here.** `api-dev.reeflex.io` runs with `REEFLEX_REQUIRE_VERIFIED_APPROVER`
-    on and no approver credential bound, so `POST /v1/holds/{id}/resolve`
-    answers `403 principal_not_verified` to every caller and the hold expires
-    on the 4-hour TTL. That is the endpoint's configuration, not a fault in the
-    hold — it is a **decision** endpoint you can fire at, not an oversight
-    console with approvers in it. Check before you rely on it, in one
-    unauthenticated request:
+    here.** As configured on 2026-09-16, `api-dev.reeflex.io` runs with
+    `REEFLEX_REQUIRE_VERIFIED_APPROVER` on and no approver credential bound, so
+    `POST /v1/holds/{id}/resolve` answers `403 principal_not_verified` to every
+    caller and the hold expires on the 4-hour TTL. That is the endpoint's
+    configuration, not a fault in the hold — it is a **decision** endpoint you
+    can fire at, not an oversight console with approvers in it. The endpoint
+    answers for itself, in one unauthenticated request — trust this over the
+    sentence above:
 
     ```bash
     curl -s https://api-dev.reeflex.io/healthz | grep -o '"holds":{[^}]*}'
