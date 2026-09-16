@@ -43,13 +43,23 @@ WHAT IT CHECKS, statically, with no browser and no network:
      rejects it outright, measured — `Expecting 'SEMI', ... got '(-'` — and the
      whole diagram then fails to render.)
 
+THE PIXEL HALF IS `scripts/probe_diagrams.py` (RFX-266). This file is the cheap
+check: no browser, no network, runs inside every `mkdocs build`. It cannot see a
+rendered page, so it cannot catch a mechanism that breaks without any file here
+changing. That probe renders the built site and reads the painted pixels, and it
+IMPORTS this module's `MIN_CONTRAST`, `contrast_ratio`, `parse_hex`,
+`read_palette_vars` and `iter_classdefs` rather than redefining them — one
+definition of the threshold and the colour maths, two instruments. Change a
+threshold here and the probe moves with it. Its `ink-identity` check is the
+pixel proof of mechanism 1 below.
+
 WHAT IT CANNOT SEE, and these are real gaps, not hedging:
 
   * It reads the markdown source, not the rendered pixels. It models what
     mermaid + Material do with a classDef; check 1 is what keeps that model
     honest, but a Material or mermaid upgrade could change the mechanism
     without changing any file this script reads. Re-measure with pixels when
-    either is bumped.
+    either is bumped — that is what the probe above does on every docs PR.
   * Cluster (`subgraph`) labels, edge labels and sequence-diagram text take
     their colour from other Material variables and are not modelled here.
   * It says nothing about font size — that is the RFX-265 axis, and a legible

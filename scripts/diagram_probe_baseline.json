@@ -1,0 +1,181 @@
+{
+  "_README": [
+    "Known diagram defects that scripts/probe_diagrams.py measures on main, each",
+    "with the ticket that tracks it. THIS IS A WORKLIST, NOT A WAIVER LIST.",
+    "",
+    "The probe treats this file as a ratchet, three ways:",
+    "  * a finding NOT listed here fails the run;",
+    "  * a finding listed here that got worse - lower contrast, smaller label, or",
+    "    more labels affected - fails the run;",
+    "  * an entry here that produces NO finding fails the run as `baseline-stale`.",
+    "    A fixed defect cannot sit here as a permanent exemption. The file may",
+    "    only shrink, and deleting an entry is part of fixing the defect.",
+    "",
+    "Only `label-size`, `contrast` and `label-text` can be baselined. `render`,",
+    "`palette`, `webfont` and `ink-identity` are instrument or mechanism",
+    "failures: there is no known amount of them and no entry here can excuse one.",
+    "",
+    "`worst` is the smallest number in the group (the smallest effective label",
+    "size, or the lowest painted contrast). Comparison allows 5%, which is the",
+    "measured width of the webfont-vs-fallback geometry difference. `label-text`",
+    "has no number - a label either contains the literal characters or it does",
+    "not - so its entries carry a null `worst` and only the count ratchets.",
+    "",
+    "Recorded 2026-09-11 (dev-3 round 066, RFX-266) against main at 7c6e132,",
+    "viewport 1440 CSS px, content column 740 px, deviceScaleFactor 3, Inter",
+    "loaded. Re-measure with:",
+    "  mkdocs build -d /tmp/site && python scripts/probe_diagrams.py /tmp/site"
+  ],
+  "known": [
+    {
+      "check": "label-text",
+      "src": "docs/architecture.md",
+      "palette": "default",
+      "diagram": "Decision flow",
+      "labels": 9,
+      "worst": null,
+      "ticket": "RFX-279",
+      "note": "`\\n` is not a line break in a quoted mermaid label, so the reader sees the two characters AND the label never wraps. This is the root cause of the width below, not a separate cosmetic issue. `worst` is null because a label either contains the characters or it does not; only the count ratchets."
+    },
+    {
+      "check": "label-text",
+      "src": "docs/architecture.md",
+      "palette": "slate",
+      "diagram": "Decision flow",
+      "labels": 9,
+      "worst": null,
+      "ticket": "RFX-279",
+      "note": "As default: this is text, not colour."
+    },
+    {
+      "check": "label-text",
+      "src": "docs/architecture.md",
+      "palette": "default",
+      "diagram": "Variant A — Full on-prem (available now, free)",
+      "labels": 4,
+      "worst": null,
+      "ticket": "RFX-279",
+      "note": "This diagram fits the column (539.75 px, scale 1.0), so only the literal characters are wrong here — which is why the text check is separate from the size check."
+    },
+    {
+      "check": "label-text",
+      "src": "docs/architecture.md",
+      "palette": "slate",
+      "diagram": "Variant A — Full on-prem (available now, free)",
+      "labels": 4,
+      "worst": null,
+      "ticket": "RFX-279",
+      "note": "As default."
+    },
+    {
+      "check": "label-text",
+      "src": "docs/architecture.md",
+      "palette": "default",
+      "diagram": "Variant B — Hosted / subscription",
+      "labels": 5,
+      "worst": null,
+      "ticket": "RFX-279",
+      "note": "Five labels; the same root cause as the 8.22 px size entry below."
+    },
+    {
+      "check": "label-text",
+      "src": "docs/architecture.md",
+      "palette": "slate",
+      "diagram": "Variant B — Hosted / subscription",
+      "labels": 5,
+      "worst": null,
+      "ticket": "RFX-279",
+      "note": "As default."
+    },
+    {
+      "check": "label-size",
+      "src": "docs/architecture.md",
+      "palette": "default",
+      "diagram": "Decision flow",
+      "labels": 16,
+      "worst": 4.86,
+      "ticket": "RFX-276",
+      "note": "2433.5 px natural in a 740 px column = 0.304 shrink, so every 16 px label lands at 4.86 px. The least legible diagram on the site, and the first four harnesses never saw it because all four probed only docs/architecture/diagrams.md. Likely DOWNSTREAM of RFX-279: the labels are wide because they never wrap."
+    },
+    {
+      "check": "label-size",
+      "src": "docs/architecture.md",
+      "palette": "slate",
+      "diagram": "Decision flow",
+      "labels": 16,
+      "worst": 4.86,
+      "ticket": "RFX-276",
+      "note": "Identical in both palettes: this is geometry, not colour."
+    },
+    {
+      "check": "label-size",
+      "src": "docs/architecture.md",
+      "palette": "default",
+      "diagram": "Variant B — Hosted / subscription",
+      "labels": 11,
+      "worst": 8.22,
+      "ticket": "RFX-277",
+      "note": "1440 px natural in a 740 px column = 0.514 shrink. Likely DOWNSTREAM of RFX-279."
+    },
+    {
+      "check": "label-size",
+      "src": "docs/architecture.md",
+      "palette": "slate",
+      "diagram": "Variant B — Hosted / subscription",
+      "labels": 11,
+      "worst": 8.22,
+      "ticket": "RFX-277",
+      "note": "1440 px natural in a 740 px column = 0.514 shrink. Likely DOWNSTREAM of RFX-279."
+    },
+    {
+      "check": "label-size",
+      "src": "docs/concepts/index.md",
+      "palette": "default",
+      "diagram": "Concepts",
+      "labels": 12,
+      "worst": 8.19,
+      "ticket": "RFX-277",
+      "note": "1445 px natural in a 740 px column = 0.512 shrink."
+    },
+    {
+      "check": "label-size",
+      "src": "docs/concepts/index.md",
+      "palette": "slate",
+      "diagram": "Concepts",
+      "labels": 12,
+      "worst": 8.19,
+      "ticket": "RFX-277",
+      "note": "1445 px natural in a 740 px column = 0.512 shrink."
+    },
+    {
+      "check": "label-size",
+      "src": "docs/architecture/diagrams.md",
+      "palette": "default",
+      "diagram": "The decision round-trip",
+      "labels": 10,
+      "worst": 7.86,
+      "ticket": "RFX-270",
+      "note": "The sequence autonumber badges, 12 px declared x 0.655 shrink. RFX-270 already holds this diagram's numbers; the node labels above it clear the floor at 10.48 px."
+    },
+    {
+      "check": "label-size",
+      "src": "docs/architecture/diagrams.md",
+      "palette": "slate",
+      "diagram": "The decision round-trip",
+      "labels": 10,
+      "worst": 7.86,
+      "ticket": "RFX-270",
+      "note": "As default: geometry, not colour."
+    },
+    {
+      "check": "contrast",
+      "src": "docs/architecture/diagrams.md",
+      "palette": "slate",
+      "diagram": "The decision round-trip",
+      "labels": 10,
+      "worst": 2.29,
+      "ticket": "RFX-278",
+      "note": "The autonumber badge paints #ffffff on the ember border colour --md-mermaid-node-fg-color. In `default` that is #b0512a and reads 5.18:1; in `slate` it is --rf-ember-2 #f0946b and reads 2.29:1. Same class as the open owner call on #fff-on-ember (2.97:1), so it is recorded here and NOT fixed by an agent."
+    }
+  ]
+}
