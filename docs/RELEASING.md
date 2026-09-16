@@ -84,9 +84,16 @@ the same tag.
   These are **independent** — the release tag (`v0.1.6`) is the umbrella, not each
   package's version (e.g. v0.1.6 shipped `reeflex-claude 0.1.6`,
   `reeflex-holds 0.1.0`, `n8n-nodes-reeflex 0.1.0`, `reeflex-gate 0.1.5`).
-  `reeflex-core` has **no version file to bump**: its artefact is the GHCR image,
-  which is tagged from the release tag itself and rebuilt only when `reeflex-core/`
-  or the `Dockerfile` changed.
+  `reeflex-core` has **no `pyproject.toml`** — its artefact is the GHCR image,
+  tagged from the release tag itself and rebuilt only when `reeflex-core/`
+  or the `Dockerfile` changed — but it **does** have a version string to bump:
+  `reeflex-core/app/_version.py` → `CORE_VERSION`, which `telemetry.py` puts in
+  the CEF header and in every audit line's `reeflex_version`. **Bump it whenever
+  the GHCR guard in §4 will fire**, or the image published as `:v0.2.1` reports
+  `0.2.0` to everyone reading its records, and the two images are then
+  indistinguishable by the only version a running core states about itself.
+  (This line previously read "no version file to bump" and was wrong; v0.2.1 is
+  the release that found it.)
 - `CHANGELOG.md` updated.
 - A local copy of the built artifacts lands in `reeflex/releases/<tag>/` (local =
   source of truth, GitHub = publication). The workflow builds its own copies; keep
