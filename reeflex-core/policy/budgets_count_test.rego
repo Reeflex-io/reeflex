@@ -68,6 +68,47 @@ test_unknown_blast_radius_gets_the_strictest_floor if {
 	c == policy.count_floor.systemic
 }
 
+# ---- ledger_charge: the write side reads the SAME number (RFX-293) ----
+#
+# The cumulative term of every dimension is summed from ledger entries, and
+# ledger.py used to record the caller's raw magnitude.count. These pin the rule
+# decide.py reads to the rule the dimensions charge, so the two halves of one
+# budget cannot be priced differently again.
+
+test_ledger_charge_is_the_charged_count if {
+	every b in ["single", "scoped", "broad", "systemic"] {
+		every m in [{}, {"magnitude": {"count": 1}}, {"magnitude": {"count": 5000}}] {
+			e := _env(b, m)
+			policy.ledger_charge == policy.charged_count with input as e
+		}
+	}
+}
+
+# The number the LEDGER records and the number the DIMENSION charges are one
+# number. Asserted at the dimension rather than only at charged_count, because
+# that is the equality the budget's arithmetic actually depends on.
+test_ledger_charge_equals_what_the_deletions_dimension_charges if {
+	e := _env("broad", {"magnitude": {"count": 1}})
+	policy.ledger_charge == policy.current_for("deletions") with input as e
+}
+
+# An under-declared count is recorded at the floor, not at the declared 1 --
+# stated as the ticket states it, at the axis where our own adapters live.
+test_under_declared_broad_delete_is_recorded_at_the_floor if {
+	c := policy.ledger_charge with input as _env("broad", {"magnitude": {"count": 1}})
+	c == policy.count_floor.broad
+	c > 1
+}
+
+# THE DEFAULT IS THE STRICTEST FLOOR, AND THIS IS THE ONLY THING PINNING IT.
+# `default ledger_charge := 20` must be a CONSTANT in Rego, so it cannot say
+# `count_floor.systemic` and cannot follow an edit to the table. This test is
+# what fails if someone changes the systemic floor and leaves the default
+# behind -- which would silently make the unreachable branch the CHEAP one.
+test_the_ledger_charge_default_still_matches_the_strictest_floor if {
+	policy.count_floor.systemic == 20
+}
+
 # ---- the dimensions actually charge it --------------------------------
 
 test_deletions_dimension_charges_the_floor if {

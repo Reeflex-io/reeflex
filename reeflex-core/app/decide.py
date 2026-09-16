@@ -119,7 +119,7 @@ from .ledger import (
     ledger_epoch,
     LedgerWriteError,
 )
-from .opa import evaluate, OpaEvalError
+from .opa import evaluate, evaluate_ledger_charge, OpaEvalError
 from .audit import record
 from .telemetry import get_emitter
 from .holds import canonical_hash
@@ -740,6 +740,37 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
             if not parent_decision_id and validated_hold:
                 parent_decision_id = validated_hold.get("decision_id") or ""
 
+            # RFX-293 — WHAT THIS APPROVED ACTION COSTS THE SESSION LEDGER.
+            #
+            # This path allows without asking OPA for a verdict, so it has no
+            # `ledger_charge` to hand append_entry below. It asks for the charge
+            # alone: the policy's floors stay in budgets.rego and are not
+            # mirrored in Python (RFX-216), and a human-approved predicate
+            # delete is recorded at the price the policy would have charged it
+            # rather than at the count the caller declared.
+            #
+            # DELIBERATELY BEFORE mark_consumed(): a charge core cannot compute
+            # is a fail-closed denial, and taken here it refuses WITHOUT burning
+            # the human's single-use approval — the caller can resubmit once the
+            # policy evaluates again. Taken after the consume, the same failure
+            # would spend the approval on a refused action.
+            #
+            # Costs one extra `opa eval` fork (~50ms, RFX-208) on approved
+            # resubmissions only — one per human approval, not per decision.
+            try:
+                resubmission_charge = evaluate_ledger_charge(envelope)
+            except OpaEvalError:
+                denial = dict(_FAIL_CLOSED_DECISION)
+                denial["decision_id"] = decision_id
+                _try_audit(
+                    session_id, envelope, {}, denial,
+                    decision_id=decision_id, hold_id=hold_id,
+                    envelope_hash=envelope_hash,
+                    parent_decision_id=parent_decision_id,
+                    traceparent=traceparent,
+                )
+                return 500, denial
+
             try:
                 from .holds import mark_consumed  # type: ignore[import]
                 consumed_hold = mark_consumed(hold_id)
@@ -806,7 +837,9 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
             # The caller can ask for a new approval; it cannot un-execute.
             try:
                 with session_guard(session_id):
-                    append_entry(session_id, envelope)
+                    append_entry(
+                        session_id, envelope, charged_count=resubmission_charge,
+                    )
             except LedgerWriteError as exc:
                 print(
                     f"[reeflex-core] ERROR: session ledger write failed on an "
@@ -1039,8 +1072,17 @@ def process(raw_body: dict, src_ip: str = "") -> tuple[int, dict]:
             # decision that was already a denial: the action is refused either
             # way, and the original rule is the more informative thing for the
             # auditor to see, so it is preserved rather than overwritten.
+            #
+            # RFX-293: the entry is priced by the POLICY (budgets.rego's
+            # `ledger_charge`, carried out of the Step 7 evaluation above), not
+            # by the caller's `magnitude.count`. Until this argument existed the
+            # budget's current term was floored and its cumulative term was not,
+            # so an under-declaring caller paid the floor once and 1 per call
+            # thereafter.
             try:
-                append_entry(session_id, envelope)
+                append_entry(
+                    session_id, envelope, charged_count=opa_result["ledger_charge"],
+                )
             except LedgerWriteError as exc:
                 print(
                     f"[reeflex-core] ERROR: session ledger write failed, failing "

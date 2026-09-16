@@ -45,6 +45,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
   `ledger_epoch()` and `/healthz` now also report **`path_ephemeral`**, **`path_fstype`** and **`path_mount_point`**, derived from core's own mount table. `path_ephemeral: true` is definite: the directory sits on a container writable layer (`overlay`) or a memory filesystem (`tmpfs`, `ramfs`), and that state does not outlive a container replacement — core prints a startup `WARN` naming the filesystem when it is configured to persist onto one. `false` is deliberately weaker and documented as such: core cannot see whether the storage *behind* a mount is durable, so a bind mount to a host tmpdir also reads `false`. Where the mount table cannot be read the field is **`null`**, not `false` — an instrument that cannot see must not report the reassuring answer.
 
   `durable` keeps its old meaning rather than absorbing the new one: it is the only report of `REEFLEX_LEDGER_PERSIST`, and overloading it would silently change what every existing reading of it meant.
+- **R5's cumulative budget now measures deletions rather than the caller's candour on BOTH of its terms (RFX-293, `reeflex-core`).**
+
+  RFX-143 made `budgets.rego` charge the action being decided `max(magnitude.count, count_floor[axes.blast_radius])` — a count may raise the charge above the floor its own blast radius implies, never lower it. But a budget compares `prior + current` against its limit, and `ledger.py::append_entry` recorded the **raw `magnitude.count`**, so the two terms were priced by different parties: the current action by the policy, the history by the caller. An adapter that under-declared paid the floor **once** and `1` per call thereafter.
+
+  Measured on the published `ghcr.io/reeflex-io/reeflex-core:v0.2.1` image (`org.opencontainers.image.revision=325cd16`), one session per arm, envelopes built by the real WordPress `Reeflex_Normalizer`, 45 accounts destroyed per call, `target.environment=staging` — deliberately not production, where R2 holds both arms at call 1 and hides this dimension entirely:
+
+  | arm | `magnitude.count` | first non-allow | accounts deleted before the gate asked |
+  |---|---|---|---|
+  | A `users/delete ids[3001..3045]` | 45 | call 1 | 0 |
+  | B `users/delete role=subscriber` | 1 | **call 12** | **495** |
+
+  Same ability, same object kind, same 45 accounts per call, same session shape; the arms differed only in how much the caller disclosed. After the change arm B first holds at **call 3** — floor 10 against a limit of 20, strict `>` — on the same instrument, same image plus this commit. `single` and `scoped` are untouched at call 21, which is the everyday traffic our own adapters emit.
+
+  **The floor table stays in `policy/budgets.rego` and is read in exactly one place.** The charge is published as `data.reeflex.policy.ledger_charge`, comes out of the **same** `opa eval` that produced the verdict (one subprocess, not two — `opa.py` asks for a composite query), and `decide.py` hands that number to `append_entry`. A Python copy of `count_floor` would have passed every behavioural test here and been exactly the unchecked mirror **RFX-216** is about; the control on that is `TestTheFloorIsNotMirroredInPython`, which edits the Rego table 10 → 4, changes no Python, and requires the recorded charge to follow the edit.
+
+  **Both of core's ledger writers are priced.** The approved-hold resubmission path allows without consulting OPA for a verdict — a human already approved it — but it still spends session budget, so it asks for the charge alone (`evaluate_ledger_charge`, one extra fork per approval, not per decision) **before** consuming the hold, so a charge core cannot compute refuses without burning the human's single-use approval. A charge core cannot read is never downgraded to the caller's count: that substitution is the defect, not the remedy.
+
+  **Not claimed.** In production an irreversible + broad predicate delete is already held at call 1 by R2, so this was never a hole in the production destructive path — it bites wherever no single-action rule fires and the budget is the only thing counting. `SPEC §4.1.2` is updated: its "what this does not fix" paragraph described exactly this gap.
 
 ## [0.2.1] - 2026-09-16 — reeflex-claude 0.2.0 + reeflex-litellm 0.1.0 (first publication) + reeflex-core 0.2.1
 
