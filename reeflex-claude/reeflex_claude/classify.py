@@ -20,10 +20,12 @@ same tool (Bash) can express radically different intents.
 
 Bash verb classification reads EVERY COMMAND ON THE LINE, not the first token
 (RFX-144).  A shell command line is split at `&&`, `||`, `;`, `|`, `&` and
-newline (quote-aware); `sh -c '<inner>'` is expanded in place; `sudo`, `env`,
-`timeout`, `nohup`, `xargs` and friends are peeled off.  Each resulting
-command is classified on its own and THE MOST DANGEROUS ONE IS REPORTED.  A
-command line is a `read` only when every command on it is a read.
+newline (quote-aware); `sh -c '<inner>'` is expanded in place; the bodies of
+command substitutions -- `$(...)`, backticks, `<(...)`, `>(...)` -- are read as
+the commands they are (RFX-301); `sudo`, `env`, `timeout`, `nohup`, `xargs` and
+friends are peeled off.  Each resulting command is classified on its own and
+THE MOST DANGEROUS ONE IS REPORTED.  A command line is a `read` only when every
+command on it is a read.
 
   READ:     ls, pwd, cat, head, tail, wc, grep, rg, find (without -delete/-exec rm),
             git status|log|diff|show|branch, which, type, stat, df, du, tree, echo
@@ -1759,6 +1761,20 @@ def _shell_segments(command: str, depth: int = 0) -> list:
     Split a shell command line into the individual commands it will run,
     expanding `sh -c '<inner>'` in place (up to three levels) so a wrapped
     command is classified by what it actually runs and not by the wrapper.
+
+    RFX-301: the body of a command substitution is one of those commands, and
+    it was not being read.  `echo $(rm -rf /var/lib/pgsql)` was priced
+    read/reversible/single/benign -- ALLOW -- while bash really deletes the
+    directory (measured, not reasoned: dev-2 round 056 ran all five forms
+    against synthetic victim directories; five DESTROYED, the read-only control
+    SURVIVED).  The classifier was not failing to SEE the substitution; it was
+    reading only the OUTER command word, which is `echo`.
+
+    The bodies are ADDED to the segment list, never substituted for it.  That
+    matters: `_classify_bash` reports `max(..., key=_severity)`, so appending
+    can only raise a verdict, never lower one.  The one other line-level
+    consumer, `_sql_reachable`, is the same direction -- a database client
+    inside a substitution re-arms the SQL patterns rather than disarming them.
     """
     if not command.strip():
         return []
@@ -1774,7 +1790,156 @@ def _shell_segments(command: str, depth: int = 0) -> list:
             out.extend(expanded or [segment])
         else:
             out.append(segment)
+
+        if depth < 3:
+            for body in _substitution_bodies(segment):
+                out.extend(_shell_segments(body, depth + 1))
     return out
+
+
+def _substitution_bodies(text: str) -> list:
+    """
+    Return the command texts a shell would RUN to expand this segment:
+    `$(...)`, `` `...` ``, `<(...)` and `>(...)`.
+
+    Quoting is the whole job here, so it is spelled out rather than regexed:
+
+      * single quotes suppress every expansion, so `echo '$(rm -rf /)'` yields
+        nothing -- pricing that as a delete would be a gate that refuses a
+        grep, and a gate people switch off protects nobody (RFX-145's
+        argument, applied to this fix).
+      * double quotes suppress NOTHING for `$(...)` and backticks, so
+        `echo "result: $(rm -rf /var/lib/pgsql)"` yields the delete.
+      * process substitution is not expanded inside double quotes, so `<(` and
+        `>(` are read only outside them.
+      * `$((...))` is arithmetic, not a command, and is skipped.  `${VAR}` is
+        parameter expansion and is never matched -- only `$(` is.
+      * a backslash escape outside single quotes hides the next character, so
+        `\\$(rm -rf /)` yields nothing.
+
+    An UNTERMINATED substitution returns the rest of the text as the body.
+    That is not defensive coding, it is the common case: `_split_on_operators`
+    runs first and cuts at `&&`/`;`/`|` wherever they appear, including inside
+    a substitution, so `echo $(cd /srv/prod && rm -rf data)` arrives here as
+    `echo $(cd /srv/prod` -- and the tail that carries the `rm` arrives as its
+    own segment anyway.  Taking the remainder keeps the reading conservative.
+
+    WHAT THIS DOES NOT READ, stated because a parser that handles five forms
+    and calls the family closed is the claim the canon forbids:
+      * `$(echo rm) -rf /srv/prod/data`, where the substitution IS the command
+        word -- the body `echo rm` is a read, and the word it produces is not
+        in the text.  That is the corpus case `gap-command-substitution`
+        (RFX-158) and this change does not close it.
+      * `$CMD` / `${CMD}` variable indirection (`gap-variable-indirection`).
+      * anything whose destructive text is produced at runtime rather than
+        written on the line -- `eval "$(curl ...)"` reads the `curl`, not what
+        it returns.
+    """
+    bodies: list = []
+    i, n = 0, len(text)
+    quote = None
+
+    while i < n:
+        ch = text[i]
+
+        if quote == "'":
+            if ch == "'":
+                quote = None
+            i += 1
+            continue
+
+        if ch == "\\" and i + 1 < n:
+            i += 2
+            continue
+
+        if ch == "'" and quote is None:
+            quote = "'"
+            i += 1
+            continue
+
+        if ch == '"':
+            quote = None if quote == '"' else '"'
+            i += 1
+            continue
+
+        if text.startswith("$((", i):
+            # Arithmetic expansion: no command runs.  Skip to the closing `))`
+            # if it is there, and past the `$((` if it is not.
+            close = text.find("))", i + 3)
+            i = close + 2 if close != -1 else i + 3
+            continue
+
+        if text.startswith("$(", i):
+            body, i = _balanced_paren(text, i + 2)
+            bodies.append(body)
+            continue
+
+        if ch == "`":
+            body, i = _to_backtick(text, i + 1)
+            bodies.append(body)
+            continue
+
+        if quote is None and (text.startswith("<(", i) or text.startswith(">(", i)):
+            body, i = _balanced_paren(text, i + 2)
+            bodies.append(body)
+            continue
+
+        i += 1
+
+    return [b for b in (x.strip() for x in bodies) if b]
+
+
+def _balanced_paren(text: str, start: int):
+    """
+    Read from `start` to the `)` that closes the substitution opened before it,
+    counting nested parens and ignoring any that sit inside quotes.
+
+    Returns (body, index_after_the_close).  On an unterminated substitution the
+    body is the remainder -- see `_substitution_bodies`.
+    """
+    depth = 1
+    quote = None
+    i, n = start, len(text)
+
+    while i < n:
+        ch = text[i]
+
+        if quote is not None:
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+
+        if ch in ("'", '"'):
+            quote = ch
+        elif ch == "\\" and i + 1 < n:
+            i += 2
+            continue
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start:i], i + 1
+        i += 1
+
+    return text[start:], n
+
+
+def _to_backtick(text: str, start: int):
+    """Read to the next unescaped backtick.  Returns (body, index_after_it)."""
+    i, n = start, len(text)
+    while i < n:
+        if text[i] == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if text[i] == "`":
+            return text[start:i], i + 1
+        i += 1
+    return text[start:], n
 
 
 def _peel_wrappers(tokens: list):
