@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+### Fixed
+
+- **The SHA-256-pinned setup document told a customer the token exchange returns no secret. It has returned one since 2026-09-08 (RFX-284), and the engine it points at has never been token-free (RFX-290).**
+
+  `docs/setup/v1/agent-setup.md` is rendered in full by `/app/onboard` beside the copy button, with its digest, and it closes by telling the reader to `sha256sum` it and **"if they do not [match], stop."** All three copies of it were byte-identical and the digest was correct. Step 2 said *"The response contains **no secret**"* and Step 3 said *"`reeflex-core` with auth switched off — the public dev endpoint, for instance — needs no token."* Both were true when written and neither had been true for eight days.
+
+  What the exchange returns is an `rfx_ac_` engine credential, minted in the same transaction, scoped to one gate, **30 days** by default, which `reeflex-claude` writes to `~/.reeflex/credentials.json` (dir `0700`, file `0600`). And the hosted engine the onboarding hands out — `AGENT_ONBOARDING_CORE_URL = https://api-dev.reeflex.io` — answers `401 unauthorized` on `POST /v1/decide` without a bearer (measured 2026-09-16; `/healthz` was the route that answered without one). The two sentences were the **same defect twice**: the credential exists precisely *because* that engine requires a token, so the document denied the problem and the remedy in the same section.
+
+  **The content-addressing was working the whole time, and that is the finding.** It proves the document you were shown is the document in the repo. It cannot prove the document is true, and here it put a green tick beside the one sentence a reader most wants true before pasting a line into a terminal — a reader who followed the ceremony to the letter ended up *more* confident, not less.
+
+  Corrected in both repositories, byte-identically, and re-pinned: `e1a56d72…` → `55356fbb…`. Step 2 now states the credential and its scope, Step 3 splits into "the config file — no secret in it" and "the credentials file — the secret from step 2", naming the path, the mode, the revocation lever and the limit (a file readable by that user is readable by the agent being governed), and the `api-dev` clause is replaced by the measurement.
+
+  **Moving this digest is a release-ordering event, not a docs commit, and the constant now says so where the next person will move it.** The wheel does not ship the document — it ships `connect.SETUP_DOC_SHA256` and prints it. Measured on published `reeflex-claude` 0.2.0: it carries `e1a56d72…` and contains no copy of `agent-setup.md`. So between this merge and the next publication of `reeflex-claude`, an installed wheel prints the previous digest while the portal renders the new document. That divergence is **fail-closed** — the document tells the reader to stop on a mismatch — so "Verifying this document" now names the adapter digest as a **third** value and says an older adapter is the ordinary cause and an upgrade the remedy, rather than leaving a customer to read a version skew as a compromise.
+
+  **The guard that should have caught it asserted a substring.** `reeflex-app`'s `tests/onboard/test_setup_doc.py` required `"no secret" in text` as one of "the two refusals". It was green for eight days over the false claim — and would have stayed green through the correction, because the corrected document still contains "no secret" twice, in *"the config file carries no secret"*: the opposite claim, about a different file. Replaced with assertions on what has to stay true (`rfx_ac_`, `exactly one secret`, `~/.reeflex/credentials.json`, `0600`), and `rfx_ac_` joins the credential-shaped-string guard now that the document names that family.
+
+  Control: with the document corrected and the constant left stale, `test_the_pinned_digest_describes_the_document` fails naming both digests, exit 1 — so the green that follows is worth something.
+
 ## [0.2.1] - 2026-09-16 — reeflex-claude 0.2.0 + reeflex-litellm 0.1.0 (first publication) + reeflex-core 0.2.1
 
 **Versions in this tag, and the three that deliberately did not move.** `reeflex-claude` **0.1.7 → 0.2.0** (the fixed classifier: a chained destructive command is no longer priced as a read), `reeflex-litellm` **0.1.0** — a name with no releases on PyPI until this tag — and `reeflex-core` **0.2.0 → 0.2.1**, whose artefact is the GHCR image and whose `_version.py` moves here so the image tagged `v0.2.1` does not self-report `0.2.0`. `reeflex-holds` stays **0.2.0**, `reeflex-mcp` stays **0.1.3** and the `reeflex-gate` WordPress plugin stays **0.1.8** — none of those three changed since v0.2.0, so `skip-existing` skips them and the `pypi` job is green over three uploads it did not make. Read the `pypi` job log for `Uploading` versus `Skipping … already exist`, and read `verify-published` before any tick (`docs/RELEASING.md` §1, §7).

@@ -17,6 +17,8 @@ paste does exactly these steps and stops.
 - A registration token from your portal's **Connect an agent** screen. It is
   scoped to ONE gate, it is single-use, and it expires — 15 minutes by default.
 - Nothing else. No credential of ours is written into any file you commit.
+  The exchange in step 2 does return one secret; step 3 says where it is put,
+  and it is not in your project directory.
 
 ## Step 1 — install the adapter
 
@@ -32,20 +34,35 @@ paste does exactly these steps and stops.
     POST <portal>/api/v1/agent/connect
     Authorization: Bearer rfx_reg_...
 
-The response contains **no secret**. It contains which gate the token was
-minted for, that gate's environment (`production` / `staging` / `dev`), and
-the URL of the `reeflex-core` your decisions should go to. The token is spent
-by this call: a second exchange of the same token is refused.
+The response contains which gate the token was minted for, that gate's
+environment (`production` / `staging` / `dev`), the URL of the `reeflex-core`
+your decisions should go to — and **exactly one secret**: an `rfx_ac_` engine
+credential, minted in the same transaction and scoped to that one gate. The
+token is spent by this call: a second exchange of the same token is refused.
+
+That credential is what the hook presents to `reeflex-core` on an engine that
+runs with auth switched on. It travels in the response body, over TLS, to a
+process that has already proved it holds your line — it is not in the line you
+pasted, and it is not printed. Step 3 says which file it lands in.
 
 Your gate's own token and evidence key are NOT returned here. They were shown
 once when you registered the gate and are not recoverable — not by us either.
 This flow does not need them.
 
+*Changed 2026-09-08.* Until then this step said the response contained no
+secret, and that was accurate at the time. What changed is where the engine
+credential travels, not what the pasted line carries: fifteen minutes after it
+is minted, and immediately after it is spent, that line is inert.
+
 ## Step 3 — the files it writes
 
-Exactly one config file per agent, and one credentials-free settings block.
-`connect` prints each path before writing it and refuses to clobber an
+Two kinds of file, and the split is the point: one config file per agent, which
+carries no secret and which you can commit or share, and one credentials file,
+which carries the secret from step 2 and nothing else. `connect` names every
+path on your screen before or as it writes it, and refuses to clobber an
 unrelated file.
+
+### The config file — no secret in it
 
 - `--agent claude` (default) → merges a `PreToolUse` hook entry into
   `~/.claude/settings.json` (or `./.claude/settings.json` with `--project`).
@@ -59,11 +76,38 @@ unrelated file.
   your proxy's `config.yaml`, and prints the two lines to add. It edits no
   file your proxy already reads.
 
-**No token is written into any of them.** If your `reeflex-core` requires a
-bearer token, export `REEFLEX_CORE_TOKEN` in your own shell or secret store
-before the agent starts; `connect` reads it from the environment if it is
-there, tells you when it is not, and never invents one. `reeflex-core` with
-auth switched off — the public dev endpoint, for instance — needs no token.
+**No token is written into any of these.** What they carry is the gate id,
+which is not a secret — so the settings block your team shares stays
+shareable.
+
+### The credentials file — the secret from step 2, and nothing else
+
+- `~/.reeflex/credentials.json`, directory `0700`, file `0600`, keyed by
+  (core URL, gate id) so one machine can hold several gates without one
+  overwriting another. It is outside your project directory, so it is not
+  something you commit by accident.
+- `connect` prints its path, the gate it is good for and its expiry. It does
+  not print the value.
+- Revoke it by revoking that gate in the portal, which also stops the agent it
+  configured.
+- **The limit, stated plainly:** a file readable by the user who ran `connect`
+  is readable by anything running as that user, including the agent being
+  governed. What bounds the damage is that this credential is scoped to one
+  gate, expires, and can be revoked from the portal — not that the file is out
+  of reach. A keyring is the upgrade path and is not here yet.
+
+**If you already export `REEFLEX_CORE_TOKEN`, yours wins.** With it set,
+`connect` stores nothing, says so, and the hook presents your token — a
+self-hosted engine's own credential stays your business. A portal old enough
+to issue no credential also stores nothing, and `connect` says that too and
+tells you to export `REEFLEX_CORE_TOKEN` yourself. An engine running with auth
+switched off needs neither.
+
+Do not assume the engine your portal points you at is one of those. The hosted
+dev engine at `https://api-dev.reeflex.io` **requires a bearer token**: on
+2026-09-16 `POST /v1/decide` without one answered `401 unauthorized`, and
+`/healthz` was the route that answered without credentials. Needing a token
+there is why step 2 returns one.
 
 ## Step 4 — one real decision
 
@@ -96,7 +140,8 @@ report a verdict it did not receive.
 - It does not run `reeflex-core` for you. If the URL from step 2 points at
   your own engine, start it yourself.
 - It does not change your agent's model, provider, permissions or any setting
-  other than the hook entry named in step 3.
+  other than the hook entry named in step 3. The other thing it writes is the
+  credentials file, also named in step 3.
 - It does not send your prompts, your code or your files anywhere. The hook
   sends the action envelope described in `reeflex-spec/SPEC.md` — verb,
   ability, three axes, magnitude, target environment — and nothing else.
@@ -106,4 +151,18 @@ report a verdict it did not receive.
     sha256sum agent-setup.md
 
 Compare it with the digest shown beside the line in the portal. They must
-match. If they do not, stop and ask the address in the portal footer.
+match. If they do not, stop and ask the address in the portal footer. That is
+the comparison that answers "is what I am about to run what I was shown".
+
+`connect` also prints a digest of its own — the version of this document the
+adapter you installed was built against. It is a third value and it is not
+part of the check above:
+
+- **Adapter digest = portal digest.** The adapter implements the document you
+  just read.
+- **Adapter digest ≠ portal digest.** Ordinarily this means the adapter is
+  older than the document — a new release of the document reaches the portal
+  as soon as it is deployed, and reaches the adapter only when you upgrade it.
+  The procedure that adapter runs is the document at ITS digest. Upgrade with
+  `pip install -U 'reeflex-claude'` and the two converge. If they still differ
+  after an upgrade, ask the address in the portal footer before you paste.
