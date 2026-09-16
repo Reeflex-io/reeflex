@@ -76,6 +76,20 @@ it. Two components close that class:
                 that own them, pinned to an exact version, and each waiver FAILS
                 the gate once its collision is gone — a waiver that outlives its
                 defect is a checkbox.
+
+THE SAME CLASS, ONE ARTEFACT OUT (RFX-241). `pypi-smoke` installs the published
+wheels and runs `<entry> --help`. That proves the entry point is not dead and
+has never said anything about what the wheel DECIDES. reeflex-claude 0.1.7 was
+the newest wheel on the index for 25 days after the RFX-144/145/146 fix landed;
+it priced `echo starting && rm -rf /var/lib/pgsql` as read_only_internal, and it
+answered `--help` with exit 0 on every one of those days.
+
+  pypi-behaviour  scripts/check_published_classifier.py — the wheel a CUSTOMER
+                installs, scored with THIS tree's conformance corpus and THIS
+                tree's oracle. Any divergence fails unless it is declared with
+                the ticket that closes it, and a declaration that has gone true
+                fails too. Measured on 0.1.7: 42 fail-open, 4 fail-noisy, from
+                an index install that pypi-smoke called PASS.
 """
 
 from __future__ import annotations
@@ -213,6 +227,13 @@ SKIP_REGISTRY = {
         "it is NOT allowed to skip for any other reason: a content comparison "
         "that did not run is not a green one (RFX-300). Note the SELFTEST arm "
         "(pypi-content-selftest) needs no network and is never skippable.",
+
+    "pypi-behaviour":
+        "needs the PyPI index to install the artefact under test (RFX-241). Skips "
+        "with pypi-smoke under --pypi skip, and skips on its own when the index is "
+        "unreachable — deliberately, because 'I could not install the wheel' must "
+        "never render as 'the wheel is fine'. On a box with an index this "
+        "component has no reason to skip.",
     "unittest-core":
         "the core suite silently drops its ~40 opa-dependent tests without the opa "
         "binary, so without opa the whole component is a loud SKIP rather than a "
@@ -246,6 +267,8 @@ TEST_CENSUS_RE = re.compile(r"^TEST-CENSUS: (PASS|FAIL) \((.*)\)$", re.M)
 PUBLISHED_CONTENT_RE = re.compile(r"^PUBLISHED-CONTENT: (PASS|FAIL) \((.*)\)$", re.M)
 CORPUS_LIVE_RE = re.compile(r"^CORPUS-LIVE: (PASS|FAIL) \((.*)\)$", re.M)
 CORPUS_SELFTEST_RE = re.compile(r"^SELFTEST: (PASS|FAIL) \((.*)\)$", re.M)
+
+PUBLISHED_CLASSIFIER_RE = re.compile(r"^PUBLISHED-CLASSIFIER: (PASS|FAIL|SKIP) \((.*)\)$", re.M)
 USAGE_RE_TMPL = r"^usage: %s\b"
 COMPONENT_RE = re.compile(r"^COMPONENT ([a-z0-9-]+): (PASS|FAIL|SKIPPED|DELEGATED)\b(?: \((.*)\))?$")
 
@@ -373,6 +396,25 @@ def parse_corpus_live(exit_code, text):
         return False, "%s (exit %d)" % (m.group(2), exit_code)
     return False, ("exit %d and no anchored 'CORPUS-LIVE:' verdict — the live "
                    "corpus arm did not finish, so nothing was compared" % exit_code)
+
+def parse_published_classifier(exit_code, text):
+    """RFX-241. Returns (status, detail) where status is PASS/FAIL/SKIPPED.
+
+    Three-valued, unlike its siblings, because the index can be unreachable and
+    "I could not install the artefact" must not read as "the artefact is fine".
+    That is the whole defect this component exists for, one layer up.
+    """
+    m = PUBLISHED_CLASSIFIER_RE.search(text)
+    if m and m.group(1) == "SKIP" and exit_code == 3:
+        return "SKIPPED", m.group(2)
+    if exit_code == 0 and m and m.group(1) == "PASS":
+        return "PASS", m.group(2)
+    if m and m.group(1) == "FAIL":
+        return "FAIL", m.group(2)
+    if exit_code == 0:
+        return "FAIL", ("exit 0 but no anchored 'PUBLISHED-CLASSIFIER: PASS' summary "
+                        "— cannot confirm")
+    return "FAIL", "exit %d" % exit_code
 
 
 def audit_skips(statuses, allow_skips, registry=None):
@@ -751,6 +793,56 @@ class Gate:
         else:
             self.component(key, "PASS", "; ".join(details))
 
+    # -- published behaviour, not just published liveness (RFX-241) ----------
+
+    def run_published_classifier(self):
+        # pypi-smoke asserts the published entry point is not DEAD. This asserts
+        # what it DECIDES. reeflex-claude 0.1.7 was newest on the index from
+        # 2026-07-06 to 2026-09-16, priced `echo starting && rm -rf /var/lib/pgsql`
+        # as read_only_internal, and answered `--help` with exit 0 the whole
+        # time — so pypi-smoke was green over a wheel that let 42 of this repo's
+        # 78 scored production destructions through with no human. Measured, not
+        # reasoned: scripts/check_published_classifier.py --version 0.1.7.
+        #
+        # IT DOES NOT HONOUR `--pypi delegated`, AND THAT IS THE POINT.
+        # pypi-smoke may delegate to smoke-pypi.yml because that workflow does
+        # exactly what pypi-smoke does. This check cannot be delegated there:
+        # smoke-pypi.yml has NO CHECKOUT, deliberately ("the whole point is
+        # testing what a user gets ... independent of the repo state"), and the
+        # corpus and oracle that make this a comparison live in the tree. A
+        # DELEGATED line pointing at a job that does not run the check is the
+        # RFX-107 defect this file's own header condemns — an unrun component
+        # printing a reassuring word — so under `--pypi delegated` it runs
+        # inline instead, and pays one venv and one resolve for it.
+        key = "pypi-behaviour"
+        if self.args.pypi == "skip":
+            self.component(key, "SKIPPED", "explicitly disabled via --pypi skip (tree-health run)")
+            return
+        code, out = self.run_cmd(
+            [sys.executable, os.path.join(REPO_ROOT, "scripts",
+                                          "check_published_classifier.py"), REPO_ROOT])
+        status, detail = parse_published_classifier(code, out)
+        self.show(out, full=status != "PASS", tail=8)
+        self.component(key, status, detail)
+
+    def run_published_classifier_selftest(self):
+        # The instrument before the verdict. Every branch of the comparison —
+        # fail-open, fail-noisy, a declared lag, a STALE declaration, an empty
+        # result set, a classifier that raises — proved on fixtures with no
+        # network, so a green PUBLISHED-CLASSIFIER line is worth reading.
+        key = "pypi-behaviour-selftest"
+        code, out = self.run_cmd(
+            [sys.executable, os.path.join(REPO_ROOT, "scripts",
+                                          "check_published_classifier.py"), "--selftest"])
+        ok = code == 0
+        m = re.search(r"^SELFTEST: PASS \((\d+) checks\)$", out, re.M)
+        detail = ("%s checks" % m.group(1)) if m \
+            else "no anchored 'SELFTEST: PASS (N checks)' line — cannot confirm"
+        if not m:
+            ok = False
+        self.show(out, full=not ok, tail=8)
+        self.component(key, "PASS" if ok else "FAIL", detail)
+
     # -- WordPress live-core harness -----------------------------------------
 
     # RFX-27: the WordPress adapter has FOUR live-core PHP harnesses, not one —
@@ -1115,6 +1207,9 @@ class Gate:
             ("pypi-content    PUBLISHED sources vs this tree, under the SAME version string (RFX-300)", self.run_published_content),
             ("claude-corpus-live  the Bash corpus through the real hook vs a real core, "
              "compared against the offline oracle (RFX-303)", self.run_corpus_live),
+
+            ("pypi-behaviour-selftest  the published-wheel comparison, on fixtures, before its verdict is trusted", self.run_published_classifier_selftest),
+            ("pypi-behaviour  the PUBLISHED reeflex-claude scored with this tree's corpus (RFX-241)", self.run_published_classifier),
             ("wp-conformance  WordPress live-core harness", self.run_wp),
             ("wp-spec-conformance  SPEC axis vectors, no live core (RFX-131, RFX-164)", self.run_wp_spec),
             ("dep-floors-selftest  the manifest parser, on fixtures, before its verdict is trusted", self.run_dep_floors_selftest),
@@ -1276,6 +1371,31 @@ def selftest():
           not ok and "1 live-vs-oracle divergences" in detail)
     check("claude-corpus-live's skip is registered with a written reason",
           "claude-corpus-live" in SKIP_REGISTRY)
+
+    # pypi-behaviour: three-valued, because "could not install" is not "is fine"
+    # (RFX-241). Same anchoring properties as the others, plus the SKIP arm.
+    check("pypi-behaviour accepts real PASS",
+          parse_published_classifier(0, "PUBLISHED-CLASSIFIER: PASS (reeflex-claude==0.2.0; "
+                                        "78 cases scored (floor 40); 0 fail-open)\n")[0] == "PASS")
+    check("pypi-behaviour rejects real FAIL even at exit 0",
+          parse_published_classifier(0, "PUBLISHED-CLASSIFIER: FAIL (reeflex-claude==0.1.7; "
+                                        "42 fail-open)\n")[0] == "FAIL")
+    check("pypi-behaviour rejects nonzero exit despite PASS line",
+          parse_published_classifier(1, "PUBLISHED-CLASSIFIER: PASS (all clean)\n")[0] == "FAIL")
+    check("pypi-behaviour rejects prose mention",
+          parse_published_classifier(0, "I think PUBLISHED-CLASSIFIER: PASS (fine) really\n")[0]
+          == "FAIL")
+    check("pypi-behaviour rejects exit 0 with no anchored line",
+          parse_published_classifier(0, "installed the wheel, looked ok\n")[0] == "FAIL")
+    check("pypi-behaviour carries the counts into the component detail",
+          "42 fail-open" in parse_published_classifier(
+              0, "PUBLISHED-CLASSIFIER: FAIL (reeflex-claude==0.1.7; 42 fail-open)\n")[1])
+    check("pypi-behaviour reports an unreachable index as SKIPPED, not PASS",
+          parse_published_classifier(3, "PUBLISHED-CLASSIFIER: SKIP (not installable)\n")[0]
+          == "SKIPPED")
+    check("pypi-behaviour refuses a SKIP line that did not exit 3",
+          parse_published_classifier(0, "PUBLISHED-CLASSIFIER: SKIP (not installable)\n")[0]
+          == "FAIL")
 
     # skip-ledger: an allowance without a written justification is refused (RFX-108)
     reg = {"known": "a registered reason"}
