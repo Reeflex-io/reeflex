@@ -10,7 +10,12 @@ Routes:
   GET  /v1/holds?status=&limit=&cursor=   -> JSON list (paged)             200/401
   GET  /v1/holds/{id}                -> full hold detail                   200/401/404
   POST /v1/holds/{id}/resolve        -> resolve a pending hold             200/401/403/404/409
-  GET  /healthz            -> {"status":"ok","ledger":{...},"server":{...}} 200
+  GET  /healthz            -> {"status":"ok","ledger":{...},"holds":{...},
+                               "server":{...}}                             200
+                              `holds` (RFX-309) reports whether this
+                              deployment can accept an APPROVAL at all --
+                              see principal.approval_capability() for what
+                              `resolvable` does and does not promise.
 
 All other paths/methods -> HTTP 404 or 405.
 
@@ -405,9 +410,40 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
                     _server_health = _srv.health()
             except Exception:  # noqa: BLE001
                 _server_health = {}
+            # RFX-309: report whether this core can accept an APPROVAL, not
+            # only whether it is alive and can remember.
+            #
+            # Third time the same shape: a subsystem that is switched off, or
+            # configured into a state where it cannot function, was invisible
+            # from outside because the liveness probe only ever answered
+            # "ok". `ledger.durable` closed that for the budget ledger; this
+            # closes it for the one loop the product is sold on. A deployment
+            # with REQUIRE_VERIFIED_APPROVER on and no REEFLEX_RESOLVER_TOKENS
+            # refuses every resolution, so every hold it raises expires
+            # unanswered -- and until this block, nothing anywhere said so.
+            # See principal.approval_capability() for what `resolvable` does
+            # and does not promise, and what is disclosed here.
+            _holds_health: dict = {}
+            try:
+                from .principal import approval_capability  # local: import cost
+                from .holds import _ttl_seconds as _hold_ttl  # in-package
+                _holds_health = dict(approval_capability())
+                # The other half of the RFX-309 measurement: how long a hold
+                # waits before it dies. On api-dev this is unset, so unanswered
+                # holds expire on the 4h default -- `resolvable: false` and
+                # `ttl_seconds` together are the whole of "raised, never
+                # answerable, gone in four hours".
+                _holds_health["ttl_seconds"] = int(_hold_ttl())
+            except Exception:  # noqa: BLE001
+                # Same rule as the ledger block: /healthz is a liveness probe
+                # first and the image's HEALTHCHECK depends on it. An absent
+                # "holds" key is honest; a fabricated resolvable:true is not.
+                _holds_health = {}
             _health: dict = {"status": "ok"}
             if _ledger_health:
                 _health["ledger"] = _ledger_health
+            if _holds_health:
+                _health["holds"] = _holds_health
             if _server_health:
                 _health["server"] = _server_health
             self._respond(200, _health)
@@ -1331,6 +1367,52 @@ def run() -> None:
         f"request timeout {_REQUEST_TIMEOUT_SECONDS:g}s",
         file=sys.stderr,
     )
+
+    # RFX-309: say at BOOT whether this core can accept an approval.
+    #
+    # The 403 that explains this state is well written and it names both
+    # remedies -- but it is delivered to whoever tries to approve, which on a
+    # deployment nobody has bound an approver into is nobody. On api-dev it
+    # was therefore printed to no one for eight days while every hold raised
+    # in that window expired unanswered. An operator reads the startup lines;
+    # that is the surface this belongs on too.
+    try:
+        from .principal import approval_capability  # type: ignore[import]
+        from .holds import _ttl_seconds as _hold_ttl  # type: ignore[import]
+        _cap = approval_capability()
+        if not _cap["resolvable"]:
+            print(
+                "[reeflex-core] WARN: holds: NOT RESOLVABLE (%s) -- "
+                "REEFLEX_REQUIRE_VERIFIED_APPROVER is on and no "
+                "REEFLEX_RESOLVER_TOKENS map binds any credential to an "
+                "approving principal, so every resolution will be refused 403 "
+                "and every hold this core raises will expire unanswered. Bind "
+                "at least one approver credential, or set "
+                "REEFLEX_REQUIRE_VERIFIED_APPROVER=false to accept "
+                "self-asserted approvers (recorded as decided_by_verified="
+                "false). /healthz reports this under `holds`."
+                % _cap["reason"],
+                file=sys.stderr,
+            )
+        elif not _cap["verified_approvers"]:
+            print(
+                "[reeflex-core] WARN: holds: resolvable by SELF-ASSERTED "
+                "approvers (%s) -- REEFLEX_REQUIRE_VERIFIED_APPROVER=false and "
+                "no credential is bound, so core records approvers it did not "
+                "authenticate (decided_by_verified=false) and this deployment "
+                "cannot claim four-eyes." % _cap["reason"],
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "[reeflex-core] holds: resolvable, %d verified approver "
+                "credential(s) bound, hold TTL %ds"
+                % (_cap["verified_approvers"], _hold_ttl()),
+                file=sys.stderr,
+            )
+    except Exception:  # noqa: BLE001
+        # A banner must never be what stops a core from serving.
+        pass
 
     # Start webhook emitter
     from .webhook import start as webhook_start  # type: ignore[import]

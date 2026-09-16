@@ -10,7 +10,10 @@ Working. The engine is complete and functional:
 
 - `POST /v1/decide` — full request pipeline: envelope validation → axis coercion
   → cumulative ledger → OPA/Rego evaluation → decision → audit write.
-- `GET /healthz` — liveness check, returns `{"status":"ok"}`.
+- `GET /healthz` — liveness **and capability**: `{"status":"ok"}` plus whether this
+  core can remember (`ledger.durable`), whether it can accept an **approval**
+  (`holds.resolvable` — false means every hold it raises expires unanswered) and
+  what it can serve at once (`server`).
 - Fail-closed on any OPA error, connection failure, or unexpected exception.
 - Append-only JSONL audit of every decision (cryptographic record signing is on the roadmap — see SPEC §6).
 - Per-session cumulative action ledger for fragmentation-resistance (SPEC §4.1).
@@ -77,7 +80,15 @@ Verify the server is running:
 
 ```bash
 curl http://127.0.0.1:8080/healthz
-# -> {"status":"ok"}
+# -> {"status":"ok","ledger":{…},"holds":{…},"server":{…}}
+```
+
+A core started without `REEFLEX_RESOLVER_TOKENS` refuses every hold resolution
+(the 0.2.0 default), so check that before you walk the approval loop:
+
+```bash
+curl -s http://127.0.0.1:8080/healthz | grep -o '"holds":{[^}]*}'
+# "resolvable":false,"reason":"verification_not_configured"  -> bind an approver
 ```
 
 See [../INSTALL.md](../INSTALL.md) for OPA installation and troubleshooting.

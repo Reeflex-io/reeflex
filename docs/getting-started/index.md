@@ -48,6 +48,25 @@ Reeflex returns `require_approval` — the delete is held for a human, not run:
     publicly-trusted certificate (keep `verify_ssl` **on** — no `-k` needed).
     The token above is a public eval token: dev/eval only, not for production.
 
+    **That `hold_id` cannot be approved on this endpoint, and the walk ends
+    here.** `api-dev.reeflex.io` runs with `REEFLEX_REQUIRE_VERIFIED_APPROVER`
+    on and no approver credential bound, so `POST /v1/holds/{id}/resolve`
+    answers `403 principal_not_verified` to every caller and the hold expires
+    on the 4-hour TTL. That is the endpoint's configuration, not a fault in the
+    hold — it is a **decision** endpoint you can fire at, not an oversight
+    console with approvers in it. Check before you rely on it, in one
+    unauthenticated request:
+
+    ```bash
+    curl -s https://api-dev.reeflex.io/healthz | grep -o '"holds":{[^}]*}'
+    # "resolvable":false  ->  holds are raised here and never approved
+    # no output           ->  that core predates the block; assume nothing
+    ```
+
+    To walk the **whole** loop — raise, approve as a named human, resubmit and
+    get `allow` — run a core of your own and bind one approver credential:
+    [Verified approvers](../reference/configuration.md#verified-approvers).
+
     Rules R2 and R3 only arm in `production`, so switching `target.environment`
     to `dev` or `staging` relaxes them — but this 200-item delete still returns
     `require_approval` in *any* environment, because R5 (the session

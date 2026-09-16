@@ -371,6 +371,97 @@ def verification_configured() -> bool:
     return bool(_load_resolver_tokens())
 
 
+#: The three states a deployment's approval path can be in, as reason codes.
+#: `verification_not_configured` is deliberately the SAME STRING the 403's
+#: `remedy.why` already carries for this case, so an operator greps one word
+#: across /healthz, the refusal body and the docs rather than three.
+CAPABILITY_NOT_CONFIGURED = "verification_not_configured"
+CAPABILITY_CREDENTIALS_BOUND = "credentials_bound"
+CAPABILITY_UNVERIFIED_ACCEPTED = "unverified_approvers_accepted"
+
+
+def approval_capability() -> dict:
+    """Can this deployment accept an approval at all, and on what basis?
+
+    RFX-309.  `api-dev.reeflex.io` -- the only reeflex-core instance that
+    exists -- ran for eight days with `REQUIRE_VERIFIED_APPROVER=true` and no
+    `REEFLEX_RESOLVER_TOKENS`, which is the one combination in which NO
+    credential can approve anything: every resolve is refused at check 4 and
+    every hold reaches its TTL and expires.  551 of the 593 holds in that
+    deployment's ledger ended `expired`; the last resolution was 2026-08-22.
+
+    THE DEFECT WORTH FIXING HERE IS NOT THAT STATE.  Whether a deployment binds
+    an approver is the operator's call, and "this endpoint holds and never
+    approves" is a legitimate thing for an eval endpoint to be.  The defect is
+    that NOTHING SAID SO.  `/healthz` answered `{"status":"ok"}` with a durable
+    ledger and 32 workers; the deploy-drift check compares the running code
+    revision, which was correct every one of those days; the release gate scores
+    an artefact, not a deployment.  Measured dev-1--075: two containers of the
+    production image differing in exactly one environment variable -- one that
+    resolves a hold and returns `allow`, one that refuses and returns `deny` --
+    produced BYTE-IDENTICAL /healthz bodies.  A core that cannot perform the
+    product's central function read exactly like one that can.
+
+    This is the same argument as `ledger.durable` (RFX-197) one subsystem over:
+    report the CAPABILITY, not only the liveness, so the difference is
+    checkable from outside by anything that can make one unauthenticated GET.
+
+    Returns, for the `holds` block of /healthz:
+
+        {"resolvable": bool,          # will an approval be ACCEPTED at all?
+         "reason": "<code>",          # which of the three states, above
+         "require_verified_approver": bool,
+         "verified_approvers": int}   # how many credentials are BOUND
+
+    WHAT `resolvable` DOES NOT PROMISE, because a health fact that overstates
+    is worse than none.  It is a statement about THIS DEPLOYMENT'S CONFIGURATION
+    -- that some credential exists which check 4 would accept.  It is NOT a
+    prediction that a given resolve will succeed: a hold can still be refused
+    for its rule (`NON_RESOLVABLE_RULES`), for the principal's type
+    (`REEFLEX_RESOLUTION_POLICY`), for self-approval (four-eyes), for being
+    already expired or consumed, or because the caller holds a credential that
+    is not one of the bound ones.  `resolvable: true` means the path is not
+    closed at the configuration layer; every other check still runs.
+
+    AND IT IS NOT A FOUR-EYES CLAIM.  With `REQUIRE_VERIFIED_APPROVER=false`
+    and no map, approvals ARE accepted -- so `resolvable` is true -- but they
+    are self-asserted and the record says `decided_by_verified: false`.  That is
+    why `require_verified_approver` and `verified_approvers` ride alongside
+    rather than being folded into one boolean: "an approval is accepted" and
+    "an approval is verified" are different facts and one of them being true
+    tells you nothing about the other.
+
+    WHY THIS IS DERIVED AND NOT TRANSCRIBED.  The fields come from
+    `_load_resolver_tokens()` and `strict_mode()` -- the same two functions
+    `resolve_approver()` itself consults -- and not from a second reading of
+    the environment.  A health fact that re-implements the rule it reports on
+    is a model of the code rather than the code, and drifts from it silently
+    (RFX-303 is that defect one repo over).  `test_healthz_capability.py` walks
+    every configuration through BOTH this function and a real
+    `resolve_approver()` call and fails if they ever disagree.
+
+    WHAT IS DISCLOSED, on an unauthenticated route: a boolean, a reason code,
+    a setting the operator chose, and a COUNT.  No token material, no approver
+    identity, no hold content.  The count is what makes a map that silently
+    shrank to zero -- a rotation that dropped the last binding -- visible; a
+    bare boolean cannot distinguish one approver from twelve.
+    """
+    bound = len(_load_resolver_tokens())
+    strict = strict_mode()
+    if bound:
+        resolvable, reason = True, CAPABILITY_CREDENTIALS_BOUND
+    elif strict:
+        resolvable, reason = False, CAPABILITY_NOT_CONFIGURED
+    else:
+        resolvable, reason = True, CAPABILITY_UNVERIFIED_ACCEPTED
+    return {
+        "resolvable": resolvable,
+        "reason": reason,
+        "require_verified_approver": strict,
+        "verified_approvers": bound,
+    }
+
+
 def principal_for_token(bearer: str | None) -> dict | None:
     """Return the principal this bearer token IS, or None if unverifiable.
 

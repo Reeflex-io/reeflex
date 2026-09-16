@@ -132,6 +132,32 @@ The `403` carries a machine-readable `remedy` alongside `error`/`reason`:
 }
 ```
 
+#### Checking, from outside, whether this deployment can approve anything
+
+A core with `REEFLEX_REQUIRE_VERIFIED_APPROVER` on and no `REEFLEX_RESOLVER_TOKENS` refuses **every** resolution, so every hold it raises waits out `REEFLEX_HOLD_TTL_SECONDS` (default 4h) and expires unanswered. That is a legitimate thing for an evaluation endpoint to be — but it used to be invisible: the 403 above is delivered to whoever tries to approve, which on such a deployment is nobody, and `/healthz` answered `{"status":"ok"}` either way.
+
+`GET /healthz` — unauthenticated, one request, no token needed — now reports the approval path (RFX-309). It is **newer than `v0.2.1`**, so a core running that image or older answers without a `holds` block at all; treat an absent block as "this core does not report its approval path", not as "resolvable".
+
+```jsonc
+"holds": {
+  "resolvable": false,                        // will an approval be ACCEPTED at all?
+  "reason": "verification_not_configured",    // the same code the 403's remedy.why carries
+  "require_verified_approver": true,
+  "verified_approvers": 0,                    // how many credentials are BOUND
+  "ttl_seconds": 14400                        // how long an unanswered hold has
+}
+```
+
+| `reason` | `resolvable` | what it means |
+|---|---|---|
+| `credentials_bound` | `true` | at least one bearer token is bound to an approving principal |
+| `unverified_approvers_accepted` | `true` | the opt-out is set and no map exists: approvals are accepted **on the caller's word** and recorded `decided_by_verified: false` |
+| `verification_not_configured` | `false` | strict mode with no map — **no credential in this deployment can approve anything** |
+
+**What `resolvable: true` does not promise.** It is a statement about this deployment's *configuration* — that some credential exists which the approver check would accept. It is not a prediction that a given resolve will succeed: the rule's own `NON_RESOLVABLE_RULES` guard, the resolution policy, the four-eyes check, expiry and consumption all still run. And it is not a four-eyes claim — read it together with `require_verified_approver`, because "an approval is accepted" and "an approval is verified" are different facts.
+
+The map is re-read per request, so a rotation that drops the last binding flips `resolvable` to `false` with no restart — and the same state is printed on stderr at startup.
+
 ## Freeze (operator kill-switch)
 
 | Variable | Default | Purpose |
