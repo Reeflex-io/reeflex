@@ -46,6 +46,50 @@ error and needs none of the suites' dependencies installed:
      and gate.py already turns the ones that matter into a loud component-level
      SKIP (see `run_core_unittest`'s opa handling).
 
+  4. MODULE-LEVEL SILENCERS (RFX-226) — one statement at the top level of a
+     test file that removes the WHOLE file from the run:
+
+         pytest.skip("...", allow_module_level=True)   # ast.Expr(ast.Call)
+         pytestmark = pytest.mark.skip("...")          # ast.Assign
+         raise unittest.SkipTest("...")                # ast.Raise
+
+     Until RFX-226 none of those three node types was looked at, because
+     `collect()` only ever inspected FunctionDef/AsyncFunctionDef/ClassDef. So
+     each of them deleted a whole file's tests while the census went on
+     counting them as collected: one line on `reeflex-core/tests/test_hil.py`
+     took the real runner from `Ran 617` to `Ran 534` — 83 tests, the entire
+     HIL suite, reported by unittest as ONE skip — and this script printed the
+     baseline transcript, byte for byte, and PASS.
+
+     A silenced file's tests are therefore no longer COUNTED either: the
+     printed total is what the runner would run, not what the file defines.
+     That is the point of the component — a number that does not move when 83
+     tests disappear is not a census.
+
+  5. IN-BODY UNCONDITIONAL SKIPS (RFX-226) — the statement twin of detector 3:
+
+         def test_x(self):
+             self.skipTest("...")      # or pytest.skip(...) / raise SkipTest
+
+     Same effect as the decorator, invisible to a detector that only reads
+     `decorator_list`, and `_body_is_empty` sees a non-empty body. These stay
+     COUNTED (the runner does collect them and reports them as skipped), but
+     they are flagged, exactly as their decorator spelling is.
+
+LIMITS OF DETECTORS 4 AND 5, STATED RATHER THAN CLOSED. Both are deliberately
+blind to a silencer nested inside an `if`:
+
+    if not _opa_available():
+        pytest.skip("OPA not installed", allow_module_level=True)
+
+That is how a suite honestly declines a missing prerequisite and MUST NOT be
+flagged — which also means a sabotage spelled `if True:` still evades a static
+detector, and a suite that shrinks for a reason no AST models (a deleted file,
+a changed `-p` pattern) is not modelled here at all. The only instrument that
+would catch those is a recorded total floor compared against the runner's own
+`Ran N` (the `tests/suite_census.json` shape in reeflex-app). This script is
+static by design; the floor is a separate, complementary instrument.
+
 WAIVERS, AND WHY THEY ARE NOT A BACK DOOR. A finding can be legitimate — a
 genuinely platform-specific race, say. Such a case goes in `WAIVERS` below with
 a reason AND a ticket reference (the format is enforced: no ticket, no waiver).
@@ -114,13 +158,20 @@ WAIVERS = {
 TEST_FILE_PREFIX = "test_"
 SKIP_DECORATORS_UNCONDITIONAL = {"skip"}
 SKIP_DECORATORS_CONDITIONAL = {"skipUnless", "skipIf", "skipif"}
+# Call forms that skip when EXECUTED rather than when decorating: `pytest.skip()`,
+# `self.skipTest()`. The conditional names above are decorator-only and never
+# appear as a bare statement, so there is no conditional counterpart to exclude.
+SKIP_CALLS_UNCONDITIONAL = {"skip", "skipTest"}
+# `raise unittest.SkipTest(...)` / `raise SkipTest` -- the unittest spelling.
+SKIP_EXCEPTIONS = {"SkipTest"}
 
 
 class Finding:
     """One thing that does not run, or runs without asserting anything."""
 
     def __init__(self, kind, path, name, detail):
-        self.kind = kind          # "zero-collection" | "empty-body" | "unconditional-skip"
+        # "zero-collection" | "empty-body" | "unconditional-skip" | "module-silenced"
+        self.kind = kind
         self.path = path          # repo-relative
         self.name = name          # test name, or "" for a file-level finding
         self.detail = detail
@@ -192,6 +243,116 @@ def _class_is_skipped(cls):
     return bool(_unconditional_skips(cls))
 
 
+def _called_name(call):
+    """Last attribute/name of a CALL's target: `pytest.skip(...)` -> "skip",
+    `self.skipTest(...)` -> "skipTest". "" if unreadable."""
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return ""
+
+
+def _raised_exception_name(node):
+    """`raise unittest.SkipTest("x")` -> "SkipTest", `raise SkipTest` -> "SkipTest"."""
+    exc = node.exc
+    if exc is None:                       # bare `raise` -- re-raises, not a skip
+        return ""
+    if isinstance(exc, ast.Call):
+        exc = exc.func
+    if isinstance(exc, ast.Attribute):
+        return exc.attr
+    if isinstance(exc, ast.Name):
+        return exc.id
+    return ""
+
+
+def _mark_names(value):
+    """Marker names in a `pytestmark` right-hand side.
+
+    `pytest.mark.skip("x")` -> ["skip"]; `pytest.mark.skipif(c, ...)` ->
+    ["skipif"]; a list/tuple of markers -> all of them. The marker may be
+    called or not -- `pytestmark = pytest.mark.skip` is valid and silences the
+    file just the same."""
+    if isinstance(value, (ast.List, ast.Tuple)):
+        names = []
+        for item in value.elts:
+            names.extend(_mark_names(item))
+        return names
+    if isinstance(value, ast.Call):
+        value = value.func
+    if isinstance(value, ast.Attribute):
+        return [value.attr]
+    if isinstance(value, ast.Name):
+        return [value.id]
+    return []
+
+
+def _module_silencer(node):
+    """RFX-226. A detail string if this MODULE-LEVEL statement removes the whole
+    file from the run, else None.
+
+    Only ever called on `tree.body` members, which is what makes the
+    conditional form (`if not _opa: pytest.skip(...)`) correctly invisible: the
+    silencing call is then a child of an `ast.If`, not a top-level statement.
+    See the module docstring for why that limit is deliberate."""
+
+    # 1. `pytest.skip("x", allow_module_level=True)` -- an ast.Expr(ast.Call).
+    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+        name = _called_name(node.value)
+        if name in SKIP_CALLS_UNCONDITIONAL:
+            flagged = any(kw.arg == "allow_module_level" for kw in node.value.keywords)
+            return (
+                "module-level `%s(...)`%s -- pytest stops importing the file "
+                "here and collects NOTHING from it; the tests below are not "
+                "reported as skipped, they simply do not exist for the run"
+                % (name, " with allow_module_level=True" if flagged else "")
+            )
+
+    # 2. `pytestmark = pytest.mark.skip("x")` -- an ast.Assign.
+    if isinstance(node, (ast.Assign, ast.AnnAssign)):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        is_pytestmark = any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in targets)
+        if is_pytestmark and node.value is not None:
+            unconditional = [m for m in _mark_names(node.value)
+                             if m in SKIP_DECORATORS_UNCONDITIONAL]
+            if unconditional:
+                return (
+                    "`pytestmark = ...%s(...)` -- every test in the file is "
+                    "skipped, unconditionally, on every machine" % unconditional[0]
+                )
+
+    # 3. `raise unittest.SkipTest("x")` -- an ast.Raise.
+    if isinstance(node, ast.Raise):
+        if _raised_exception_name(node) in SKIP_EXCEPTIONS:
+            return (
+                "module-level `raise SkipTest(...)` -- unittest reports the "
+                "WHOLE file as ONE skip, so `Ran N` drops by every test in it "
+                "while the run still prints OK"
+            )
+
+    return None
+
+
+def _unconditional_body_skips(fn):
+    """RFX-226. Skip STATEMENTS at the top level of a test body -- the twin of
+    the decorator detector, and invisible to it.
+
+    Statements nested inside `if`/`try`/`with` are not reached: those are the
+    honest conditional form and must not be flagged."""
+    found = []
+    for stmt in fn.body:
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+            name = _called_name(stmt.value)
+            if name in SKIP_CALLS_UNCONDITIONAL:
+                found.append("%s(...)" % name)
+        elif isinstance(stmt, ast.Raise):
+            if _raised_exception_name(stmt) in SKIP_EXCEPTIONS:
+                found.append("raise SkipTest(...)")
+    return found
+
+
 # --------------------------------------------------------------------------
 # Collection model -- what each runner would ACTUALLY pick up
 # --------------------------------------------------------------------------
@@ -214,6 +375,16 @@ def collect(source, runner):
     testcase_aliases = set()
     has_load_tests = False
 
+    # RFX-226: one module-level statement can delete the whole file from the
+    # run. Collect the file first anyway -- the count is what makes the finding
+    # legible ("83 test(s) silenced") -- then throw the tests away below, so the
+    # printed total is what the runner runs rather than what the file defines.
+    silencers = []
+    for node in tree.body:
+        detail = _module_silencer(node)
+        if detail:
+            silencers.append(detail)
+
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name == "load_tests":
@@ -230,6 +401,10 @@ def collect(source, runner):
                 for skip in _unconditional_skips(node):
                     findings.append(("unconditional-skip", node.name,
                                      "@%s with no condition -- never runs, on any machine" % skip))
+                for call in _unconditional_body_skips(node):
+                    findings.append(("unconditional-skip", node.name,
+                                     "calls `%s` unconditionally in its body -- collected and "
+                                     "counted, asserts nothing, and no decorator says so" % call))
         elif isinstance(node, ast.ClassDef):
             is_tc = _is_testcase_class(node, testcase_aliases)
             if is_tc:
@@ -257,6 +432,22 @@ def collect(source, runner):
                 for skip in skips:
                     findings.append(("unconditional-skip", qual,
                                      "@%s with no condition -- never runs, on any machine" % skip))
+                for call in _unconditional_body_skips(sub):
+                    findings.append(("unconditional-skip", qual,
+                                     "calls `%s` unconditionally in its body -- collected and "
+                                     "counted, asserts nothing, and no decorator says so" % call))
+
+    if silencers:
+        # The file does not run at all, so every per-test finding in it is moot
+        # and every one of its tests is zero: report the silencer, and STOP
+        # COUNTING what the runner will not collect.
+        findings = [
+            ("module-silenced", "",
+             "%s. %d test(s) in this file are silenced and are NOT in the census count"
+             % (detail, len(tests)))
+            for detail in silencers
+        ]
+        tests = []
 
     return tests, bare_functions, findings, has_load_tests
 
@@ -270,7 +461,11 @@ def census_file(rel_path, source, runner):
         return [Finding("zero-collection", rel_path, "",
                         "file does not parse (%s) -- it cannot yield any test" % exc)]
 
-    if not tests and not has_load_tests:
+    silenced = any(kind == "module-silenced" for kind, _, _ in raw)
+
+    # A silenced file yields no tests BECAUSE it is silenced; reporting it as
+    # zero-collection as well would name the symptom over the cause.
+    if not tests and not has_load_tests and not silenced:
         if runner == "unittest" and bare:
             detail = (
                 "yields 0 tests under `unittest discover`: %d bare pytest-style "
@@ -318,6 +513,7 @@ def census(repo_root, roots=None):
                                     "enumerated suite root contains no test_*.py file at all"))
             continue
         root_tests = 0
+        root_silenced = 0
         for name in files:
             rel_path = os.path.join(rel_root, name)
             with open(os.path.join(abs_root, name), encoding="utf-8") as fh:
@@ -331,8 +527,13 @@ def census(repo_root, roots=None):
             total_files += 1
             root_tests += len(tests)
             total_tests += len(tests)
-        lines.append("TEST-CENSUS: %s (%s) -> %d file(s), %d test(s)"
-                     % (rel_root, runner, len(files), root_tests))
+            if any(f.kind == "module-silenced" for f in file_findings):
+                root_silenced += 1
+        lines.append("TEST-CENSUS: %s (%s) -> %d file(s), %d test(s)%s"
+                     % (rel_root, runner, len(files), root_tests,
+                        "" if not root_silenced else
+                        " (%d file(s) SILENCED at module level -- their tests are not in this count)"
+                        % root_silenced))
 
     for rel_root in missing_roots:
         findings.append(Finding("zero-collection", rel_root, "",
@@ -456,6 +657,94 @@ def load_tests(loader, tests, pattern):
     return tests
 '''
 
+# -- RFX-226 fixtures: the three module-level silencers, and the conditional
+# forms that must stay invisible. Each "fires" fixture is the ONE line added to
+# an otherwise healthy file, so the pair proves the detector and not the file.
+_MODULE_SKIP_CALL = '''
+import pytest
+
+pytest.skip("being rewritten", allow_module_level=True)
+
+def test_production_near_misses():
+    assert canon("Prod") == "production"
+'''
+
+_MODULE_PYTESTMARK_SKIP = '''
+import pytest
+
+pytestmark = pytest.mark.skip("being rewritten")
+
+def test_production_near_misses():
+    assert canon("Prod") == "production"
+'''
+
+_MODULE_PYTESTMARK_SKIP_LIST = '''
+import pytest
+
+pytestmark = [pytest.mark.slow, pytest.mark.skip("being rewritten")]
+
+def test_production_near_misses():
+    assert canon("Prod") == "production"
+'''
+
+_MODULE_RAISE_SKIPTEST = '''
+import unittest
+
+raise unittest.SkipTest("being rewritten")
+
+class TestCanon(unittest.TestCase):
+    def test_near_misses(self):
+        self.assertEqual(canon("Prod"), "production")
+'''
+
+# The honest form: a prerequisite the machine may not have. NOT a finding.
+_MODULE_SKIP_CONDITIONAL = '''
+import pytest
+
+if not _opa_available():
+    pytest.skip("OPA binary not installed", allow_module_level=True)
+
+def test_production_near_misses():
+    assert canon("Prod") == "production"
+'''
+
+_MODULE_PYTESTMARK_SKIPIF = '''
+import pytest
+
+pytestmark = pytest.mark.skipif(not _opa_available(), reason="OPA not installed")
+
+def test_production_near_misses():
+    assert canon("Prod") == "production"
+'''
+
+# Detector 5: the decorator's twin, spelled as a statement.
+_IN_BODY_SKIP = '''
+import unittest
+
+class TestThing(unittest.TestCase):
+    def test_delivers(self):
+        self.skipTest("flaky here")
+        self.assertTrue(deliver())
+'''
+
+_IN_BODY_RAISE_SKIPTEST = '''
+import unittest
+
+class TestThing(unittest.TestCase):
+    def test_delivers(self):
+        raise unittest.SkipTest("flaky here")
+'''
+
+_IN_BODY_SKIP_CONDITIONAL = '''
+import unittest
+
+class TestThing(unittest.TestCase):
+    def test_delivers(self):
+        if not self._tls_available:
+            self.skipTest("openssl not available")
+        self.assertTrue(deliver())
+'''
+
 
 def selftest():
     checks = []
@@ -512,6 +801,47 @@ def _selftest_body(checks, check):
     check("a CONDITIONAL skipUnless is NOT flagged (honest declined prerequisite)",
           findings(_CONDITIONAL_SKIP, "unittest") == [])
 
+    # -- 3b. RFX-226: module-level silencers, both ways --------------------
+    check("a module-level pytest.skip(allow_module_level=True) is flagged",
+          kinds(_MODULE_SKIP_CALL, "pytest") == ["module-silenced"])
+    check("...and its tests STOP being counted (the count is what runs)",
+          collect(_MODULE_SKIP_CALL, "pytest")[0] == []
+          and collect(_MODULE_SKIP_CALL.replace(
+              'pytest.skip("being rewritten", allow_module_level=True)', ''), "pytest")[0]
+          == ["test_production_near_misses"])
+    check("...and the finding names how many tests it silenced",
+          "1 test(s) in this file are silenced" in findings(_MODULE_SKIP_CALL, "pytest")[0].detail)
+    check("a `pytestmark = pytest.mark.skip(...)` assignment is flagged",
+          kinds(_MODULE_PYTESTMARK_SKIP, "pytest") == ["module-silenced"])
+    check("...including when it is one marker in a LIST",
+          kinds(_MODULE_PYTESTMARK_SKIP_LIST, "pytest") == ["module-silenced"])
+    check("a module-level `raise unittest.SkipTest(...)` is flagged",
+          kinds(_MODULE_RAISE_SKIPTEST, "unittest") == ["module-silenced"])
+    check("...and the whole TestCase stops being counted (this is the 83-test shape)",
+          collect(_MODULE_RAISE_SKIPTEST, "unittest")[0] == [])
+    check("a silenced file is NOT also reported as zero-collection (cause, not symptom)",
+          all(f.kind == "module-silenced" for f in findings(_MODULE_RAISE_SKIPTEST, "unittest")))
+    check("a CONDITIONAL module skip (inside `if`) is NOT flagged",
+          findings(_MODULE_SKIP_CONDITIONAL, "pytest") == [])
+    check("...and its tests are still counted",
+          collect(_MODULE_SKIP_CONDITIONAL, "pytest")[0] == ["test_production_near_misses"])
+    check("a `pytestmark = pytest.mark.skipif(...)` is NOT flagged",
+          findings(_MODULE_PYTESTMARK_SKIPIF, "pytest") == [])
+    check("a healthy file is not flagged as silenced",
+          "module-silenced" not in kinds(_UNITTEST_STYLE, "unittest"))
+
+    # -- 3c. RFX-226: the in-body skip STATEMENT, the decorator's twin ------
+    check("an unconditional self.skipTest(...) in a test body is flagged",
+          kinds(_IN_BODY_SKIP, "unittest") == ["unconditional-skip"])
+    check("...and says no decorator declares it",
+          "no decorator says so" in findings(_IN_BODY_SKIP, "unittest")[0].detail)
+    check("...and the test is STILL counted (the runner does collect it)",
+          collect(_IN_BODY_SKIP, "unittest")[0] == ["TestThing.test_delivers"])
+    check("an unconditional `raise unittest.SkipTest(...)` in a body is flagged",
+          kinds(_IN_BODY_RAISE_SKIPTEST, "unittest") == ["unconditional-skip"])
+    check("a skipTest nested inside an `if` is NOT flagged (the real test_telemetry shape)",
+          findings(_IN_BODY_SKIP_CONDITIONAL, "unittest") == [])
+
     # -- 4. an empty enumerated root, and a missing one --------------------
     with tempfile.TemporaryDirectory() as tmp:
         os.makedirs(os.path.join(tmp, "empty_root"))
@@ -542,6 +872,32 @@ def _selftest_body(checks, check):
               any(l.startswith("TEST-CENSUS: FAIL (") for l in lines))
         check("FAIL names the offending file",
               any("test_env_canon.py" in l for l in lines))
+
+    # -- 5b. RFX-226 end to end: the printed COUNT must move ---------------
+    with tempfile.TemporaryDirectory() as tmp:
+        root = os.path.join(tmp, "suite")
+        os.makedirs(root)
+        with open(os.path.join(root, "test_good.py"), "w") as fh:
+            fh.write(_UNITTEST_STYLE)          # 1 test
+        with open(os.path.join(root, "test_hil.py"), "w") as fh:
+            fh.write(_UNITTEST_STYLE)          # 1 more -> 2 collected
+        ok, lines = census(tmp, roots=[("suite", "unittest")])
+        check("two healthy files census as 2 tests", ok and
+              any("suite (unittest) -> 2 file(s), 2 test(s)" in l for l in lines))
+
+        # ONE line added to one of them -- the RFX-226 sabotage, in miniature.
+        with open(os.path.join(root, "test_hil.py"), "w") as fh:
+            fh.write(_MODULE_RAISE_SKIPTEST)
+        ok, lines = census(tmp, roots=[("suite", "unittest")])
+        check("one silencing line turns the census RED", not ok)
+        check("...and the printed count DROPS to what the runner would run",
+              any("suite (unittest) -> 2 file(s), 1 test(s)" in l for l in lines))
+        check("...and the per-root line says a file was silenced",
+              any("SILENCED at module level" in l for l in lines))
+        check("...and the FAIL line names the kind",
+              any(l.startswith("TEST-CENSUS: FAIL (") and "module-silenced" in l for l in lines))
+        check("...and the finding names the file",
+              any("test_hil.py" in l for l in lines))
 
     # -- 6. waivers: enforced both ways ------------------------------------
     if True:
