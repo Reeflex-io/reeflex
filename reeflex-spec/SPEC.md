@@ -101,6 +101,7 @@ The backend-specific operation is preserved in `action.ability` for fine-grained
 
 - normalize (Unicode NFKC, drop control/format characters, trim, casefold), so `"Delete"`, `"DELETE"`, `"delete "`, a trailing newline and a zero-width character are all the same verb;
 - alias-map to the member above — this covers synonyms (`remove`, `destroy`, `purge`, `drop`, `truncate`, `rm`, …), compound spellings (`hard-delete`, `bulk_delete`) and CamelCase API operation names (`DeleteObject`, `GetObject`);
+- a **compound** the alias map does not cover as a whole resolves to the **most-guarded word it contains**, not its first (RFX-304): `delete` outranks every other member, `read` is outranked by every other member, ties go to the earliest word so a verb-first name (`DeleteObject`, `GetObject`) is unaffected. Reading the first word alone resolved `findOneAndDelete` to `read` and handed an irreversible production deletion the read-only allow rule. The trade is stated rather than hidden: a genuine read whose name embeds a destructive word (`list_trash`) now escalates, which costs a hold once a deletions budget is exceeded — declare a canonical verb and it does not arise. A word the canon has no entry for is invisible to this, so it is a safety net and not a classifier;
 - an **unrecognized** verb resolves conservatively: to `delete` when `axes.reversibility` is `irreversible`, otherwise to `update`. It is never resolved to `read`, which would grant the read-only allow rule.
 
 Adapters SHOULD still emit one of the seven canonical verbs — that is the normative requirement above, and canonicalization is a safety net, not a licence to send anything. Two consequences worth knowing:
@@ -108,7 +109,7 @@ Adapters SHOULD still emit one of the seven canonical verbs — that is the norm
 - The **normalized** verb is what appears in the cumulative ledger (`count_by_verb`), the hold record, and the audit line. The backend's own operation name is preserved in `action.ability`, which is where fine-grained detail belongs.
 - Because the verb is part of the action-defining projection, `envelope_hash` (§5.1) is computed over the *canonical* verb. Both submission and resubmission canonicalize identically, so the hold binding is unaffected.
 
-`action.verb` is **asserted by the adapter and not verifiable by core**. Canonicalization closes the near-miss and synonym surface; it cannot make a deliberately mislabelled action honest. As one cross-check, core treats a non-delete verb as a delete when `action.ability` names one (e.g. `verb: "read"` carrying `ability: "wordpress/delete-post"`). Full integrity here depends on envelope signing (§6, roadmap).
+`action.verb` is **asserted by the adapter and not verifiable by core**. Canonicalization closes the near-miss and synonym surface; it cannot make a deliberately mislabelled action honest. As one cross-check, core treats a non-delete verb as a delete when any word of `action.ability`'s operation segment names one (e.g. `verb: "read"` carrying `ability: "wordpress/delete-post"`, or `"mongodb/findOneAndDelete"`; the namespace before the last `/` is not read, and past-tense forms such as `s3/list-deleted-objects` are absent from the alias map on purpose and do not signal). Full integrity here depends on envelope signing (§6, roadmap).
 
 ---
 

@@ -212,7 +212,12 @@ class TestNonDeleteVerbsPreserved(unittest.TestCase):
 class TestAbilityCrossCheck(unittest.TestCase):
     """A delete mislabelled as a read is caught by its own ability id.
 
-    Narrow by construction: last "/" segment, FIRST token only.
+    Narrow by construction: the last "/" segment only, so a namespace cannot
+    signal. RFX-304 widened the segment side from its FIRST token to ANY of
+    its words — reading only the first token gave this guard the same blind
+    spot as the defect it backs up (`mongodb/findOneAndDelete` was silent).
+    The past-tense cases below are what keeps it narrow, and they hold because
+    this matches _VERB_CANON, which has no past-tense entries.
     """
 
     def test_delete_ability_escalates_a_non_delete_verb(self):
@@ -221,8 +226,9 @@ class TestAbilityCrossCheck(unittest.TestCase):
         self.assertEqual(_verb("read", ability="db/drop_table"), "delete")
 
     def test_past_tense_and_object_names_do_not_false_positive(self):
-        # First token is "list"/"get", so these stay reads -- the case that
-        # would otherwise manufacture a wrong-DENY.
+        # "deleted"/"removals" are absent from _VERB_CANON on purpose, so no
+        # word of these abilities maps to a delete and they stay reads -- the
+        # case that would otherwise manufacture a wrong-DENY.
         self.assertEqual(_verb("read", ability="s3/list-deleted-objects"), "read")
         self.assertEqual(_verb("read", ability="wp/get-deleted-posts"), "read")
         self.assertEqual(_verb("read", ability="api/list-removals"), "read")
