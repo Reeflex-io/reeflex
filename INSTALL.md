@@ -219,10 +219,19 @@ reason. It holds two files:
 | `decisions.jsonl` | the append-only audit log (evidence) |
 | `ledger.jsonl` | the per-session cumulative ledger (**enforcement**) |
 
-**What is guaranteed.** One core: spend survives a restart, an image upgrade
+**What the volume buys.** One core: spend survives a restart, an image upgrade
 and a container replacement. Several cores that mount the **same** volume:
 they enforce **one** budget between them, because the file is the ledger and
 every read re-synchronises from it before deciding.
+
+All of that is a property of **the volume**, not of the image — measured on the
+published `v0.2.1` image, two arms differing in one line of compose, the same
+session replayed after `docker compose up -d --force-recreate`:
+
+| `/app/audit` is | 5th call | same session after the recreate |
+|---|---|---|
+| a named volume | held (R5) | still held — 5 entries restored |
+| the container's writable layer | held (R5) | **allowed: the whole budget back** |
 
 **What is not.** Cores that do **not** share storage each keep their own
 ledger, and each therefore grants a full budget — so *N* replicas multiply
@@ -239,10 +248,32 @@ case — see [docs/roadmap.md](docs/roadmap.md). Until then, this is *checkable
 rather than assumed*:
 
 ```bash
-# every replica must report durable:true and agree on path
+# every replica must report path_ephemeral:false and agree on path
 curl -s http://replica-1:8080/healthz | python -c "import json,sys; print(json.load(sys.stdin)['ledger'])"
 curl -s http://replica-2:8080/healthz | python -c "import json,sys; print(json.load(sys.stdin)['ledger'])"
 ```
+
+**Read `path_ephemeral`, not `durable`.** `durable` answers "is
+`REEFLEX_LEDGER_PERSIST` on", which is one env var and nothing about storage; a
+core with **no volume** reports `durable: true` and loses the ledger anyway.
+That is the reading that was measured above, so this check used to pass in the
+arm where the budget resets:
+
+| field | means | `true` is |
+|---|---|---|
+| `durable` | `REEFLEX_LEDGER_PERSIST` is not off | necessary, not sufficient |
+| `path_ephemeral` | the directory sits on a container writable layer (`overlay`) or a memory filesystem (`tmpfs`) | **the failure** |
+| `path_fstype`, `path_mount_point` | the raw rows the flag was derived from | what makes the flag checkable |
+
+`path_ephemeral: true` is definite — that state does not outlive a container
+replacement. `false` means "not one of those filesystems", which is weaker:
+core reads its own mount table and cannot see whether the storage *behind* a
+mount is durable, so a bind mount to a host tmpdir also reads `false`.
+`null` means core could not read its mount table and is saying so rather than
+reporting the reassuring answer.
+
+Core also prints a startup `WARN` naming the filesystem when it is configured
+to persist onto storage that is discarded with the container.
 
 Each core also writes one `ledger_epoch` record to the audit stream at boot,
 saying what it restored and from where, and stamps every decision record with

@@ -29,6 +29,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
   Two further changes make the number mean something rather than only the verdict: a silenced file's tests are **no longer counted as collected** (that root's line drops to what the runner would run and says a file was silenced), and an unconditional skip **statement** in a test body — `self.skipTest(...)`, `pytest.skip(...)`, `raise SkipTest` — is flagged as the twin of the decorator the census already caught, since `_body_is_empty` sees a full body and `decorator_list` is empty.
 
   Both new detectors are deliberately blind to the conditional form (`if not _opa_available(): pytest.skip(...)`) — that is how a suite honestly declines a missing prerequisite — which also means a sabotage spelled `if True:` still evades a static pass. A recorded total floor compared against the runner's own `Ran N` is the complementary instrument and is not part of this change. `scripts/tests/test_check_test_census.py` runs the detectors under the gate's own unittest runner, and the script's `--selftest` proves each of them both ways (fires on the shape, stays silent on the conditional form).
+- **`/healthz` said `durable: true` on a core whose ledger a `docker compose up -d` discarded (RFX-230).**
+
+  `ledger.durable` reads one environment variable, `REEFLEX_LEDGER_PERSIST`. It answers *"am I configured to write a file"* and was being read — by `INSTALL.md`, which sends an operator to it by name — as *"does that file outlive this container"*. Those came apart on the deployed instance, which ran with `.Mounts == []`, so `/app/audit` was the container's writable layer.
+
+  **Measured on the published `ghcr.io/reeflex-io/reeflex-core:v0.2.1` image, two arms differing in one line of compose, same session replayed after `up -d --force-recreate`:**
+
+  | `/app/audit` | 5th call | after the recreate | `/healthz` |
+  |---|---|---|---|
+  | named volume | held, `session_delete_budget` | still held, 5 entries restored | `durable: true` |
+  | writable layer | held, `session_delete_budget` | **`allow` — the full budget back** | `durable: true` |
+
+  In the second arm `ledger.jsonl` and `holds.jsonl` were gone and `decisions.jsonl` was back to one line. The in-process guarantee RFX-197 shipped was intact in both; a container replacement returned the product to the pre-RFX-197 behaviour anyway, with no human, no privilege, and nothing in the audit log saying so. `INSTALL.md` names this exact failure — *"removing the volume … silently returns the product to this behaviour"* — and offered `/healthz`'s `ledger` block as the check for it. The check passed in the arm where the budget resets.
+
+  `ledger_epoch()` and `/healthz` now also report **`path_ephemeral`**, **`path_fstype`** and **`path_mount_point`**, derived from core's own mount table. `path_ephemeral: true` is definite: the directory sits on a container writable layer (`overlay`) or a memory filesystem (`tmpfs`, `ramfs`), and that state does not outlive a container replacement — core prints a startup `WARN` naming the filesystem when it is configured to persist onto one. `false` is deliberately weaker and documented as such: core cannot see whether the storage *behind* a mount is durable, so a bind mount to a host tmpdir also reads `false`. Where the mount table cannot be read the field is **`null`**, not `false` — an instrument that cannot see must not report the reassuring answer.
+
+  `durable` keeps its old meaning rather than absorbing the new one: it is the only report of `REEFLEX_LEDGER_PERSIST`, and overloading it would silently change what every existing reading of it meant.
 
 ## [0.2.1] - 2026-09-16 — reeflex-claude 0.2.0 + reeflex-litellm 0.1.0 (first publication) + reeflex-core 0.2.1
 

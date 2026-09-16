@@ -372,6 +372,14 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
                 _ledger_health = {
                     "durable": bool(_epoch.get("durable")),
                     "path": _epoch.get("path", ""),
+                    # RFX-230: `durable` is an env-var read. These three say
+                    # whether the PATH outlives a container replacement, which
+                    # is the question INSTALL.md sends an operator here to
+                    # answer and which `durable` alone cannot. path_ephemeral
+                    # is None when core cannot read its own mount table.
+                    "path_mount_point": _epoch.get("path_mount_point", ""),
+                    "path_fstype": _epoch.get("path_fstype", ""),
+                    "path_ephemeral": _epoch.get("path_ephemeral"),
                     "epoch_id": _epoch.get("epoch_id", ""),
                     "window_seconds": _epoch.get("window_seconds", 0),
                     "restored_sessions": _epoch.get("restored_sessions", 0),

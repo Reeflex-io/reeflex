@@ -246,6 +246,116 @@ def _lock_path() -> pathlib.Path:
     return ledger_path().with_suffix(ledger_path().suffix + ".lock")
 
 
+# ---------------------------------------------------------------------------
+# WHERE THE LEDGER FILE ACTUALLY LIVES (RFX-230)
+#
+# `durable` above answers "am I configured to write a file at all" — it reads
+# one env var and nothing else. It does NOT answer "does that file outlive this
+# container", and those two came apart in production: the core on the deployed
+# instance ran with no volume, so /app/audit was the container's writable layer,
+# and `durable: true` was reported on a core whose ledger a `docker compose up
+# -d` discarded. Measured, both arms on the same published image:
+#
+#   no volume  5th call held -> recreate -> SAME session allowed again,
+#              ledger.jsonl and holds.jsonl gone, /healthz durable: true
+#   volume     5th call held -> recreate -> SAME session still held,
+#              restored 5 entries,          /healthz durable: true
+#
+# The two states are indistinguishable in the field INSTALL.md nominates as the
+# operator's check for precisely this failure. So report the storage underneath
+# the path as well as the path.
+#
+# WHAT THIS CAN SEE: the filesystem type the ledger's directory sits on, which
+# is what separates a container's writable layer (`overlay`) and a memory
+# filesystem (`tmpfs`, `ramfs`) from a volume or a bind mount.
+#
+# WHAT THIS CANNOT SEE, and the docstrings below repeat it: whether the storage
+# behind a real mount is itself durable. A bind mount to a host tmpdir, an NFS
+# export that is about to go away, and a named volume an operator prunes all
+# look the same from in here. `ephemeral: false` therefore means "not one of the
+# filesystems that are discarded with the container", which is weaker than "this
+# will survive" — and it is the half that was missing, because `ephemeral: true`
+# IS definite: that state does not outlive the container.
+# ---------------------------------------------------------------------------
+
+#: Filesystems whose contents are discarded when the container is replaced.
+#: `overlay`/`aufs` are the container writable layer; `tmpfs`/`ramfs` are memory.
+EPHEMERAL_FSTYPES = frozenset({"overlay", "overlayfs", "aufs", "tmpfs", "ramfs"})
+
+
+def parse_mount_for_path(path: str, mountinfo: str) -> dict:
+    """Which mount does `path` sit on, per a /proc/self/mountinfo TEXT?
+
+    Pure on purpose: the tests feed synthetic mountinfo, so they assert on this
+    logic rather than on whatever the machine running them happens to mount.
+
+    mountinfo field layout (man 5 proc): mount point is field 4, and the fstype
+    is the first field AFTER the " - " separator, which is required because the
+    optional fields before it are variable in number.
+
+    Returns {"mount_point", "fstype"}; both "" when nothing matched or the text
+    is unparseable. An unreadable /proc must not stop core answering /healthz.
+    """
+    best_point = ""
+    best_fstype = ""
+    target = str(path)
+    for line in mountinfo.splitlines():
+        fields = line.split()
+        try:
+            sep = fields.index("-")
+        except ValueError:
+            continue
+        if sep + 1 >= len(fields) or sep < 5:
+            continue
+        point = fields[4]
+        fstype = fields[sep + 1]
+        # The mount this path sits on is the LONGEST mount point that is a
+        # path-prefix of it. "/app/audit" must not match "/app/audit-other",
+        # hence the separator check rather than a bare startswith.
+        if target == point or target.startswith(point.rstrip("/") + "/") or point == "/":
+            if len(point) >= len(best_point):
+                best_point, best_fstype = point, fstype
+    return {"mount_point": best_point, "fstype": best_fstype}
+
+
+def _read_mountinfo() -> str:
+    """/proc/self/mountinfo, or "" where it cannot be read (non-Linux, hardened
+    container). "" makes the storage UNKNOWN below, never "fine"."""
+    try:
+        with open("/proc/self/mountinfo", "r", encoding="utf-8") as fh:
+            return fh.read()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def path_storage(path=None, mountinfo=None) -> dict:
+    """Describe the storage under the ledger file. Never raises.
+
+    ephemeral   True   the state does NOT outlive a container replacement.
+                       Definite: the directory sits on a container writable
+                       layer or a memory filesystem.
+                False  not one of those filesystems. NOT a promise that the
+                       storage behind the mount is durable — see the block
+                       above; core cannot see past the mount.
+                None   unknown, because mountinfo could not be read or did not
+                       describe this path. Reported as unknown, not as false.
+    """
+    p = ledger_path() if path is None else pathlib.Path(str(path))
+    directory = str(p.parent)
+    text = _read_mountinfo() if mountinfo is None else mountinfo
+    found = parse_mount_for_path(directory, text)
+    fstype = found["fstype"]
+    if not fstype:
+        ephemeral = None
+    else:
+        ephemeral = fstype in EPHEMERAL_FSTYPES
+    return {
+        "mount_point": found["mount_point"],
+        "fstype": fstype,
+        "ephemeral": ephemeral,
+    }
+
+
 def _default_window_seconds() -> int:
     """The rolling window, for the epoch record when no caller supplied one.
 
@@ -550,16 +660,36 @@ def _mint_epoch(window_seconds: int) -> None:
     """Record what this process restored, and whether it can remember at all."""
     global _epoch
     durable = _persist_enabled()
+    # RFX-230: a path is not storage. With REEFLEX_LEDGER_PERSIST off the state
+    # is ephemeral by configuration; with it on, it is ephemeral anyway if the
+    # directory sits on the container's writable layer.
+    storage = path_storage() if durable else {"mount_point": "", "fstype": "", "ephemeral": True}
     _epoch = {
         "epoch_id": uuid.uuid4().hex,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "durable": durable,
         "path": str(ledger_path()) if durable else "",
+        "path_mount_point": storage["mount_point"],
+        "path_fstype": storage["fstype"],
+        "path_ephemeral": storage["ephemeral"],
         "window_seconds": window_seconds,
         "restored_sessions": len(_ledger),
         "restored_entries": sum(len(v) for v in _ledger.values()),
         "scan_truncated": _scan_truncated,
     }
+    if durable and storage["ephemeral"] is True:
+        # The RFX-230 shape: configured to persist, onto storage that is
+        # discarded with the container. Loud, because the field that used to be
+        # the operator's only signal (`durable`) reads true here.
+        print(
+            "[reeflex-core] WARN: session ledger path "
+            f"{_epoch['path']} sits on {storage['fstype']!r} "
+            f"(mount {storage['mount_point']!r}), which does NOT outlive a "
+            "container replacement: every cumulative budget resets and the "
+            "audit log is discarded when this container is replaced. Mount "
+            "/app/audit on a volume.",
+            file=sys.stderr,
+        )
     if not durable:
         print(
             "[reeflex-core] WARN: session ledger is EPHEMERAL "
