@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+### Added
+
+- **The release gate now fails when a published artefact's sources differ from this tree's under the SAME version string (RFX-300).**
+
+  On 2026-09-16 the published `reeflex-mcp` **0.1.3** was measured **317 source lines across 5 files** behind the `main` that declares `version = "0.1.3"`. Among the lines a customer cannot reach: RFX-173 (`trust_annotations` made opt-in), RFX-174/175 (`destructiveHint` had been a *downgrade*, so an honest upstream was punished), RFX-138 (`agent_id` was the bare constant `agent:mcp-client`, making core's ordered actor comparison vacuous) and RFX-129/214. `pip install -U reeflex-mcp` resolves `0.1.3 == 0.1.3` and reports **"already satisfied"**. `reeflex-mcp` is the only *proxying* adapter, so on that wheel an ALLOW is the action happening.
+
+  **Nothing in the repository could go red over this, and the instrument that looks closest could not have caught it.** `gate.py`'s `pypi-smoke` installs each published package and asserts the entry point answers `--help`: 0.1.3 answers perfectly. `scripts/check_published_classifier.py` (RFX-241 step 3) compares *behaviour* on the conformance corpus — the right instrument for the defect it was built for, and blind to this one for two measured reasons: it scopes to `reeflex-claude`, and a hole present in **both** trees scores zero divergences. There is no version *lag* here to detect; there is a version **collision**.
+
+  `scripts/check_published_content.py` compares **content**. For every directory declaring a `[project]` name and version, it fetches that exact version's wheel from the PyPI JSON API and diffs every file the wheel ships under its package directory against the tree — not only `*.py`: `reeflex-mcp` ships three `mappings/*.yaml` files that decide how a tool name is classified, and a `.py`-only comparison would be blind to precisely the change that matters most. (Those three are identical today; the widening did not move this run's verdict and is in scope for what it could hide.) Wired as two `gate.py` components: `pypi-content-selftest` (13 arms on synthetic wheels, no network, the instrument proven before its verdict is trusted) and `pypi-content`.
+
+  **Three outcomes, and the middle one is the design.** Equal version + different content = **RED**. Identical = PASS. A version **not on the index** = **PASS**, deliberately: the tree being ahead of the index is the normal state between a version bump and its release, and a gate that reddens on the remedy for RFX-300 is a gate that gets switched off within a day. Absence is printed on its own line rather than merely tolerated. If the index cannot be reached the component **fails closed** and says so — it does not print a verdict word that leaves the exit status alone (RFX-97).
+
+  **The two collisions that exist today are waived against the tickets that own them — `reeflex-mcp` 0.1.3 (RFX-300) and `reeflex-claude` 0.2.0 (RFX-299) — and each waiver dies with its defect.** A waiver is pinned to an exact version, must name a ticket, and **FAILS the gate once its collision is gone or the tree moves off that version**: a waiver that outlives what it excuses is a checkbox. An index outage is explicitly not read as a waiver expiring. Both waived collisions are still printed in full, file by file, in every run that waives them.
+
+  Measured, with the controls that make it a reading rather than a blanket failure: in one run `reeflex-mcp==0.1.3` and `reeflex-claude==0.2.0` report COLLISION (317 lines / 16 lines) while `reeflex-holds==0.2.0` and `reeflex-litellm==0.1.0` report MATCH. Control both ways on a package that matches: two lines appended to `reeflex_holds/__init__.py` → `PUBLISHED-CONTENT: FAIL`, exit 1; reverted → MATCH, exit 0, same command.
+
+  **What it cannot see, stated because a gate is worth what its limits are.** It answers *"same content"*, never *"same origin"* — there is no provenance attestation here and two commits can produce identical sources. It reads the package directory only, so `dist-info` metadata and dependency pins are out of scope. It cannot say whether a version *should* have moved: cutting `0.1.4` is a release-sequencing decision, not a measurement, and **this change does not take it — neither RFX-300's republish nor RFX-299's bump is closed by this PR.** A package with no `pyproject.toml` is not discovered, which is why `reeflex-core` (artefact: the GHCR image) is absent by design.
+
 ### Fixed
 
 - **The SHA-256-pinned setup document told a customer the token exchange returns no secret. It has returned one since 2026-09-08 (RFX-284), and the engine it points at has never been token-free (RFX-290).**

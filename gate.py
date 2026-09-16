@@ -53,6 +53,29 @@ assertion. Location is not execution. Three components now close that class:
   pypi-smoke    `--pypi delegated` now VERIFIES that a sibling job actually
                 invokes smoke-pypi.yml. Delegation you cannot point at is not
                 delegation, it is an unrun component printing a reassuring word.
+
+THE ARTEFACT IS NOT THE TREE (RFX-300). `pypi-smoke` installs the published
+packages and proves the entry point answers `--help`; it cannot see whether that
+artefact is the CODE this repository believes it published. On 2026-09-16 the
+published reeflex-mcp 0.1.3 was measured 317 source lines behind the main that
+declares the same version — including the fix for a hole that let a governed MCP
+upstream classify its own destructive tool as read-only and turn core's DENY
+into an ALLOW. `pip install -U` reports "already satisfied" and delivers none of
+it. Two components close that class:
+
+  pypi-content-selftest  the comparator proven on synthetic wheels, no network,
+                BEFORE its verdict is trusted — the instrument before the
+                measurement, same pattern as dep-floors-selftest.
+  pypi-content  scripts/check_published_content.py — for every package that
+                declares a name and version, the PUBLISHED wheel's sources are
+                compared to this tree's. Equal version + different content =
+                RED. A version NOT on the index is a PASS (the tree being ahead
+                of the index is the normal state between a bump and a release,
+                and a gate that reddens on the remedy gets switched off). The
+                two collisions that exist today are waived against the tickets
+                that own them, pinned to an exact version, and each waiver FAILS
+                the gate once its collision is gone — a waiver that outlives its
+                defect is a checkbox.
 """
 
 from __future__ import annotations
@@ -176,6 +199,12 @@ SKIP_REGISTRY = {
     "pypi-smoke":
         "--pypi skip is a deliberate tree-health-only run; the published-artifact "
         "smoke is owned by smoke-pypi.yml, which also runs daily on a schedule.",
+    "pypi-content":
+        "--pypi skip is a deliberate tree-health-only run. This component reads "
+        "the PyPI JSON API, so it is unrunnable on a box with no network — but "
+        "it is NOT allowed to skip for any other reason: a content comparison "
+        "that did not run is not a green one (RFX-300). Note the SELFTEST arm "
+        "(pypi-content-selftest) needs no network and is never skippable.",
     "unittest-core":
         "the core suite silently drops its ~40 opa-dependent tests without the opa "
         "binary, so without opa the whole component is a loud SKIP rather than a "
@@ -206,6 +235,7 @@ N8N_PASS_RE = re.compile(r"^(\d+) passed, (\d+) failed, (\d+) total$", re.M)
 MIGRATION_HEADS_RE = re.compile(r"^MIGRATION-HEADS: (PASS|FAIL) \((.*)\)$", re.M)
 DEP_FLOORS_RE = re.compile(r"^DEP-FLOORS: (PASS|FAIL) \((.*)\)$", re.M)
 TEST_CENSUS_RE = re.compile(r"^TEST-CENSUS: (PASS|FAIL) \((.*)\)$", re.M)
+PUBLISHED_CONTENT_RE = re.compile(r"^PUBLISHED-CONTENT: (PASS|FAIL) \((.*)\)$", re.M)
 USAGE_RE_TMPL = r"^usage: %s\b"
 COMPONENT_RE = re.compile(r"^COMPONENT ([a-z0-9-]+): (PASS|FAIL|SKIPPED|DELEGATED)\b(?: \((.*)\))?$")
 
@@ -299,6 +329,24 @@ def parse_test_census(exit_code, text):
         return False, m.group(2)
     if exit_code == 0:
         return False, "exit 0 but no anchored 'TEST-CENSUS: PASS' summary — cannot confirm"
+    return False, "exit %d" % exit_code
+
+
+def parse_published_content(exit_code, text):
+    """PASS iff exit 0 AND the checker's own anchored PUBLISHED-CONTENT line.
+
+    Same shape as parse_test_census (DoD 5). The exit code alone is not taken:
+    RFX-97 is the ticket about a verdict that did not move an exit status, and
+    this component's whole subject is artefacts that report success while being
+    the wrong thing.
+    """
+    m = PUBLISHED_CONTENT_RE.search(text)
+    if exit_code == 0 and m and m.group(1) == "PASS":
+        return True, m.group(2)
+    if m and m.group(1) == "FAIL":
+        return False, m.group(2)
+    if exit_code == 0:
+        return False, "exit 0 but no anchored 'PUBLISHED-CONTENT: PASS' summary — cannot confirm"
     return False, "exit %d" % exit_code
 
 
@@ -709,6 +757,48 @@ class Gate:
         "conformance-decisions.php",
     ]
 
+    def run_published_content(self):
+        """RFX-300: the tree and the index disagreeing under ONE version number.
+
+        `pypi-smoke` above installs the published packages and proves the entry
+        point answers `--help`. It cannot see this: reeflex-mcp 0.1.3 on the
+        index answers `--help` perfectly and is 317 lines of merged security
+        fixes behind the tree that declares the same version, so
+        `pip install -U` delivers nothing and reports success.
+
+        Deliberately NOT folded into pypi-smoke. That component's question is
+        "does the published artefact run"; this one's is "is the published
+        artefact the code we think we published". Two questions, two verdicts —
+        folding them means one PASS standing for both, and it is the second one
+        that was false for 36 days.
+        """
+        key = "pypi-content"
+        if self.args.pypi == "skip":
+            self.component(key, "SKIPPED",
+                           "explicitly disabled via --pypi skip (tree-health run)")
+            return
+        code, out = self.run_cmd(
+            [sys.executable, os.path.join(REPO_ROOT, "scripts",
+                                          "check_published_content.py")])
+        ok, detail = parse_published_content(code, out)
+        # Always shown in full: a waived collision is only accounted for if the
+        # reader can see WHICH files moved, in the run that waived it.
+        self.show(out, full=True)
+        self.component(key, "PASS" if ok else "FAIL", detail)
+
+    def run_published_content_selftest(self):
+        key = "pypi-content-selftest"
+        code, out = self.run_cmd(
+            [sys.executable, os.path.join(REPO_ROOT, "scripts",
+                                          "check_published_content.py"), "--selftest"])
+        ok = code == 0
+        m = re.search(r"^SELFTEST: (PASS|FAIL) \((.*)\)$", out, re.M)
+        if not m or m.group(1) != "PASS":
+            ok = False
+        detail = m.group(2) if m else "no anchored 'SELFTEST:' line — cannot confirm"
+        self.show(out, full=not ok, tail=15)
+        self.component(key, "PASS" if ok else "FAIL", detail)
+
     def run_wp(self):
         key = "wp-conformance"
         if not self.args.core_url:
@@ -932,6 +1022,8 @@ class Gate:
             ("npm-n8n         n8n-nodes-reeflex npm ci + npm test", self.run_n8n),
             ("entrypoints     build wheels from tree + invoke every entry point", self.run_entrypoints),
             ("pypi-smoke      fresh install of the PUBLISHED packages", self.run_pypi_smoke),
+            ("pypi-content-selftest  the content comparator, on synthetic wheels, before its verdict is trusted", self.run_published_content_selftest),
+            ("pypi-content    PUBLISHED sources vs this tree, under the SAME version string (RFX-300)", self.run_published_content),
             ("wp-conformance  WordPress live-core harness", self.run_wp),
             ("wp-spec-conformance  SPEC axis vectors, no live core (RFX-131, RFX-164)", self.run_wp_spec),
             ("dep-floors-selftest  the manifest parser, on fixtures, before its verdict is trusted", self.run_dep_floors_selftest),
@@ -1052,6 +1144,22 @@ def selftest():
           not parse_test_census(0, "note: TEST-CENSUS: PASS (all good) probably\n")[0])
     check("test-census rejects exit 0 with no anchored line",
           not parse_test_census(0, "collected some tests\n")[0])
+
+    # pypi-content (RFX-300): the artefact is not the tree. Same anchored
+    # discipline — the exit code alone cannot flip this component green, because
+    # the whole subject of the component is a thing that reports success while
+    # being the wrong thing.
+    check("pypi-content accepts the anchored PASS line",
+          parse_published_content(0, "PUBLISHED-CONTENT: PASS (2 matched)\n")[0])
+    check("pypi-content rejects nonzero exit despite PASS line",
+          not parse_published_content(1, "PUBLISHED-CONTENT: PASS (2 matched)\n")[0])
+    check("pypi-content reports FAIL detail verbatim",
+          parse_published_content(1, "PUBLISHED-CONTENT: FAIL (reeflex-mcp==0.1.3)\n")
+          == (False, "reeflex-mcp==0.1.3"))
+    check("pypi-content rejects prose mention",
+          not parse_published_content(0, "note: PUBLISHED-CONTENT: PASS (fine) maybe\n")[0])
+    check("pypi-content rejects exit 0 with no anchored line",
+          not parse_published_content(0, "compared some wheels\n")[0])
 
     # skip-ledger: an allowance without a written justification is refused (RFX-108)
     reg = {"known": "a registered reason"}
