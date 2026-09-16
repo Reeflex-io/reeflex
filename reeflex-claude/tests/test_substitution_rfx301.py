@@ -49,7 +49,18 @@ for _p in (_PARENT, _HERE):
         sys.path.insert(0, _p)
 
 from reeflex_claude.classify import classify
-from test_conformance_bash import policy_oracle
+
+# THE ORACLE MOVES UNDER RFX-241 (open PR #153), so import it from wherever it
+# currently lives rather than from one of the two places.  #153 lifts
+# `policy_oracle` out of tests/test_conformance_bash.py into the corpus module,
+# because a third consumer -- scripts/check_published_classifier.py -- must
+# score a published wheel with the TREE's verdict function.  Whichever of these
+# two branches lands first, this file works; what it must never do is grow its
+# own third copy of the pack.
+try:                                            # after RFX-241 / PR #153
+    from reeflex_claude.conformance import policy_oracle
+except ImportError:                             # on main today
+    from test_conformance_bash import policy_oracle
 
 _TIMEOUT = 20
 
