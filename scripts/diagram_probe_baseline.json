@@ -24,129 +24,22 @@
     "Recorded 2026-09-11 (dev-3 round 066, RFX-266) against main at 7c6e132,",
     "viewport 1440 CSS px, content column 740 px, deviceScaleFactor 3, Inter",
     "loaded. Re-measure with:",
-    "  mkdocs build -d /tmp/site && python scripts/probe_diagrams.py /tmp/site"
+    "  mkdocs build -d /tmp/site && python scripts/probe_diagrams.py /tmp/site",
+    "",
+    "SHRUNK 2026-09-16 (dev-3 round 067): 15 entries -> 2. Closed by fixing the",
+    "defect, not by waiving it — RFX-279 (`\\n` was never a line break; the labels",
+    "are now `<br/>` and actually wrap), which was the root cause of RFX-276",
+    "(Decision flow 2433.5 -> 676.25 px natural, 4.86 -> 16.00 px effective) and",
+    "of RFX-277 (Variant B 1440 -> 459 px, Concepts 1445 -> 707 px, both now",
+    "16.00 px); and RFX-278 (the slate autonumber badge, 2.29 -> 7.05:1 painted,",
+    "by darkening the badge INK — the ember is unchanged and the owner's",
+    "#fff-on-ember call stays open).",
+    "",
+    "RFX-270 is the only entry left: the autonumber badges on 'The decision",
+    "round-trip' are 12 px declared under a 0.655 shrink = 7.86 px effective.",
+    "That is a SIZE defect and is not in round 067's scope; it stays listed."
   ],
   "known": [
-    {
-      "check": "label-text",
-      "src": "docs/architecture.md",
-      "palette": "default",
-      "diagram": "Decision flow",
-      "labels": 9,
-      "worst": null,
-      "ticket": "RFX-279",
-      "note": "`\\n` is not a line break in a quoted mermaid label, so the reader sees the two characters AND the label never wraps. This is the root cause of the width below, not a separate cosmetic issue. `worst` is null because a label either contains the characters or it does not; only the count ratchets."
-    },
-    {
-      "check": "label-text",
-      "src": "docs/architecture.md",
-      "palette": "slate",
-      "diagram": "Decision flow",
-      "labels": 9,
-      "worst": null,
-      "ticket": "RFX-279",
-      "note": "As default: this is text, not colour."
-    },
-    {
-      "check": "label-text",
-      "src": "docs/architecture.md",
-      "palette": "default",
-      "diagram": "Variant A — Full on-prem (available now, free)",
-      "labels": 4,
-      "worst": null,
-      "ticket": "RFX-279",
-      "note": "This diagram fits the column (539.75 px, scale 1.0), so only the literal characters are wrong here — which is why the text check is separate from the size check."
-    },
-    {
-      "check": "label-text",
-      "src": "docs/architecture.md",
-      "palette": "slate",
-      "diagram": "Variant A — Full on-prem (available now, free)",
-      "labels": 4,
-      "worst": null,
-      "ticket": "RFX-279",
-      "note": "As default."
-    },
-    {
-      "check": "label-text",
-      "src": "docs/architecture.md",
-      "palette": "default",
-      "diagram": "Variant B — Hosted / subscription",
-      "labels": 5,
-      "worst": null,
-      "ticket": "RFX-279",
-      "note": "Five labels; the same root cause as the 8.22 px size entry below."
-    },
-    {
-      "check": "label-text",
-      "src": "docs/architecture.md",
-      "palette": "slate",
-      "diagram": "Variant B — Hosted / subscription",
-      "labels": 5,
-      "worst": null,
-      "ticket": "RFX-279",
-      "note": "As default."
-    },
-    {
-      "check": "label-size",
-      "src": "docs/architecture.md",
-      "palette": "default",
-      "diagram": "Decision flow",
-      "labels": 16,
-      "worst": 4.86,
-      "ticket": "RFX-276",
-      "note": "2433.5 px natural in a 740 px column = 0.304 shrink, so every 16 px label lands at 4.86 px. The least legible diagram on the site, and the first four harnesses never saw it because all four probed only docs/architecture/diagrams.md. Likely DOWNSTREAM of RFX-279: the labels are wide because they never wrap."
-    },
-    {
-      "check": "label-size",
-      "src": "docs/architecture.md",
-      "palette": "slate",
-      "diagram": "Decision flow",
-      "labels": 16,
-      "worst": 4.86,
-      "ticket": "RFX-276",
-      "note": "Identical in both palettes: this is geometry, not colour."
-    },
-    {
-      "check": "label-size",
-      "src": "docs/architecture.md",
-      "palette": "default",
-      "diagram": "Variant B — Hosted / subscription",
-      "labels": 11,
-      "worst": 8.22,
-      "ticket": "RFX-277",
-      "note": "1440 px natural in a 740 px column = 0.514 shrink. Likely DOWNSTREAM of RFX-279."
-    },
-    {
-      "check": "label-size",
-      "src": "docs/architecture.md",
-      "palette": "slate",
-      "diagram": "Variant B — Hosted / subscription",
-      "labels": 11,
-      "worst": 8.22,
-      "ticket": "RFX-277",
-      "note": "1440 px natural in a 740 px column = 0.514 shrink. Likely DOWNSTREAM of RFX-279."
-    },
-    {
-      "check": "label-size",
-      "src": "docs/concepts/index.md",
-      "palette": "default",
-      "diagram": "Concepts",
-      "labels": 12,
-      "worst": 8.19,
-      "ticket": "RFX-277",
-      "note": "1445 px natural in a 740 px column = 0.512 shrink."
-    },
-    {
-      "check": "label-size",
-      "src": "docs/concepts/index.md",
-      "palette": "slate",
-      "diagram": "Concepts",
-      "labels": 12,
-      "worst": 8.19,
-      "ticket": "RFX-277",
-      "note": "1445 px natural in a 740 px column = 0.512 shrink."
-    },
     {
       "check": "label-size",
       "src": "docs/architecture/diagrams.md",
@@ -166,16 +59,6 @@
       "worst": 7.86,
       "ticket": "RFX-270",
       "note": "As default: geometry, not colour."
-    },
-    {
-      "check": "contrast",
-      "src": "docs/architecture/diagrams.md",
-      "palette": "slate",
-      "diagram": "The decision round-trip",
-      "labels": 10,
-      "worst": 2.29,
-      "ticket": "RFX-278",
-      "note": "The autonumber badge paints #ffffff on the ember border colour --md-mermaid-node-fg-color. In `default` that is #b0512a and reads 5.18:1; in `slate` it is --rf-ember-2 #f0946b and reads 2.29:1. Same class as the open owner call on #fff-on-ember (2.97:1), so it is recorded here and NOT fixed by an agent."
     }
   ]
 }

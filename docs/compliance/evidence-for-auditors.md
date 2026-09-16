@@ -70,11 +70,11 @@ records have, and it is why the evidence is worth producing at all.
     is a working document. It is not a product you can generate a report from.
 
     **The engine** — the thing that reads your evidence and produces an
-    auditor's report today — assesses **three controls**: NIS2 Article 21(2),
-    EU AI Act Article 12, and EU AI Act Article 14. That is the list. It is
-    short on purpose.
+    auditor's report today — assesses **four controls**: NIS2 Article 21(2),
+    EU AI Act Article 12, EU AI Act Article 14, and DORA Article 9. That is
+    the list. It is short on purpose.
 
-    If you buy Reeflex Attest today, you get reports over those three. The
+    If you buy Reeflex Attest today, you get reports over those four. The
     other frameworks in the table are mapped, not shipped, and the table says
     so on every row.
 
@@ -93,7 +93,7 @@ records have, and it is why the evidence is worth producing at all.
 | Framework · obligation | In the engine today | Coverage | Not evidenced |
 |---|---|---|---|
 | **NIS2 Article 21(2)** — cybersecurity risk-management measures | **Assessed today** | **Partial** | Business continuity and backup \(c\) · supply-chain security (d) · security in acquisition and development, vulnerability handling (e) · cyber hygiene and training (g) · MFA and secured communications (j) |
-| **DORA Article 9** — protection and prevention | Mapped — not in the engine | **Partial** | Cryptographic key management · secure data transfer · resilience and continuity |
+| **DORA Article 9** — protection and prevention | **Assessed today** | **Partial** | Information-security policy, network management, cryptographic key management and patching \(9(4)(a)/(b)/(d)/(f)\). Of what it does assess, no aspect is labelled **Evidences**: 9(2) and 9(4)(e) are **Partial**, and 9(1), 9(3)(b)/\(c\) and 9(4)\(c\) rest on the audited party's word. |
 | **EU AI Act Article 12** — record-keeping (logging) | **Assessed today** | **Evidences** — for agent-action events | The AI system's own internal telemetry. This is a record of what actions were attempted and how each was decided, not a model trace. |
 | **EU AI Act Article 14** — human oversight | **Assessed today** | **Evidences** — the oversight allocation trail | Oversight exercised somewhere Reeflex cannot see. A decision taken outside the holds inbox is reported as resting on the audited party's word. |
 | **EU AI Act — the rest of it** (Art. 9 risk management, Art. 15 accuracy and robustness, Art. 50 transparency, conformity assessment) | — | **Not evidenced** | All of it. Reeflex evidences two articles of this regulation and makes no claim about the others. |
@@ -135,8 +135,14 @@ evidence is needed this quarter.
 **DORA has applied to EU financial entities since January 2025**, and Article
 9's protection-and-prevention duties — continuous control of ICT operations,
 preventing unauthorised or high-impact actions, authorising changes before they
-execute — describe an agent gate almost line for line. It is mapped and it is
-the next control we intend to ship; it is not in the engine today.
+execute — describe an agent gate almost line for line. It is **in the engine
+today**, and it is the most reserved of the four: no aspect of it is labelled
+**Evidences**. 9(4)(e) — authorisation before execution — is the one that earns
+it a place, because it reconciles the changes a report presents as authorised
+against our own record of a human deciding them, and reports the difference
+rather than assuming it away. What it cannot see, it says: the record names a
+verb and a target system, not a diff, so nothing here establishes that the
+change which executed is the change that was approved.
 
 **The EU AI Act's Articles 12 and 14 are the one we are ready early for.** The
 Digital Omnibus (Regulation (EU) 2026/1744, in force 27 July 2026) moved the
@@ -307,7 +313,7 @@ package, not as proof of where it came from.
 
 The gaps are the part of the report a serious auditor reads first, because a
 report with no gaps in it is either a very quiet month or an instrument that
-cannot see. Today the engine emits **seventeen gap codes** across the three
+cannot see. Today the engine emits **twenty gap codes** across the four
 controls, six of them at high severity.
 
 The ones that tend to matter most:
@@ -334,7 +340,7 @@ The ones that tend to matter most:
   attacker would need exactly one step: fabricate against a hold nobody
   resolved here, and there is nothing to contradict.
 
-??? note "The full vocabulary — all seventeen codes"
+??? note "The full vocabulary — all twenty codes"
 
     **EU AI Act Art.12 — record-keeping**
 
@@ -367,6 +373,14 @@ The ones that tend to matter most:
     |---|---|---|
     | `NIS2_ESCALATION_NOT_IN_THE_PORTAL` | medium | Records report an action escalated to a human, and the holds inbox never received the hold. Either the push failed or no human was ever given the decision. |
     | `NIS2_NO_DENY_COVERAGE` | info | No denials or approvals required in the period — either nothing risky occurred or the policy did not gate. For the auditor to interpret, not for us to assert. |
+
+    **DORA Art.9 — protection and prevention**
+
+    | Code | Severity | What it means |
+    |---|---|---|
+    | `DORA9_CHANGE_AUTHORISATION_UNCORROBORATED` | medium | Changes this report presents as authorised before execution rest on the audited party's word alone: Reeflex's own holds inbox has no record of a human deciding them. Either the hold was resolved somewhere other than this app, or the authorisation is not corroborable. Reeflex cannot tell those apart and does not guess. |
+    | `DORA9_CONTROL_DID_NOT_CLASSIFY` | medium | A hold was raised because the gate could not classify the action, not because a rule identified one as risky. Counted separately so it cannot read as evidence that the control caught something. |
+    | `DORA9_NO_GATED_DECISIONS` | info | Nothing was gated in the period. For the auditor to interpret, not for us to assert. |
 
 ---
 

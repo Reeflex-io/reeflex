@@ -17,18 +17,18 @@ This document describes the decision flow and the two deployment variants. For t
 An adapter intercepts a backend-specific action, normalizes it into a universal Action Envelope, and posts it to `reeflex-core`. The engine evaluates the envelope against OPA/Rego policy and returns a deterministic decision. The adapter enforces that decision before the backend action executes. On `require_approval`, the adapter stores a **hold** instead of executing; resolving that hold is a separate handover step, covered in [Hold resolution (HIL, HOTL, AIL)](#hold-resolution-hil-hotl-ail) below.
 
 ```mermaid
-flowchart LR
-    A[AI Agent] --> B["Adapter\n(normalize to\nAction Envelope)"]
-    B -->|"POST /v1/decide\n{ActionEnvelope}"| C["reeflex-core\n/v1/decide"]
+flowchart TD
+    A[AI Agent] --> B["Adapter<br/>(normalize to<br/>Action Envelope)"]
+    B -->|"POST /v1/decide<br/>{ActionEnvelope}"| C["reeflex-core<br/>/v1/decide"]
     C --> D{Decision}
-    D -->|allow| E["Adapter:\nexecute action"]
-    D -->|deny| F["Adapter:\nblock, surface reason"]
-    D -->|require_approval| G["Adapter:\nstore hold"]
-    G --> H{{"Resolved by the principal\nyou designate\n(human / agent / automation)\nunder your resolution policy"}}
-    H -->|approved| I["Adapter:\nre-submit envelope\napproval.present = true"]
+    D -->|allow| E["Adapter:<br/>execute action"]
+    D -->|deny| F["Adapter:<br/>block, surface reason"]
+    D -->|require_approval| G["Adapter:<br/>store hold"]
+    G --> H{{"Resolved by the principal<br/>you designate<br/>(human / agent / automation)<br/>under your resolution policy"}}
+    H -->|approved| I["Adapter:<br/>re-submit envelope<br/>approval.present = true"]
     I --> C
     H -->|rejected| F
-    C --> AU[("Audit log\n(append-only)")]
+    C --> AU[("Audit log<br/>(append-only)")]
 ```
 
 Key invariants:
@@ -126,12 +126,12 @@ flowchart TD
     subgraph CLIENT["Client Infrastructure"]
         direction TB
         AG["AI Agent"]
-        AD["Adapter\n(e.g. reeflex-wordpress plugin)"]
-        RC["reeflex-core\nPython + OPA/Rego\nHTTP :8080\n/v1/decide + /v1/holds"]
-        AU[("Audit log\nJSONL — append-only")]
+        AD["Adapter<br/>(e.g. reeflex-wordpress plugin)"]
+        RC["reeflex-core<br/>Python + OPA/Rego<br/>HTTP :8080<br/>/v1/decide + /v1/holds"]
+        AU[("Audit log<br/>JSONL — append-only")]
     end
     AG -->|"backend intent"| AD
-    AD -->|"POST /v1/decide\n{ActionEnvelope}"| RC
+    AD -->|"POST /v1/decide<br/>{ActionEnvelope}"| RC
     RC -->|"write"| AU
     RC -->|"{ allow | deny | require_approval }"| AD
     AD -->|"proceed / block / hold"| AG
@@ -148,18 +148,20 @@ Requirements: Python 3.12, OPA 1.x binary, a persistent service process. Does no
 In this variant the client installs only a thin adapter. The adapter calls a Reeflex-operated engine over HTTPS. Works on any hosting environment, including shared hosting.
 
 ```mermaid
-flowchart LR
+flowchart TD
     subgraph CLIENT["Client Infrastructure"]
+        direction TB
         AG2["AI Agent"]
-        AD2["Adapter\n(thin plugin)"]
+        AD2["Adapter<br/>(thin plugin)"]
     end
     subgraph HOSTED["PLANNED: reeflex.io (hosted by Reeflex)"]
-        RC2["reeflex-core\n(hosted engine)"]
-        OPA2["OPA/Rego\nevaluation"]
-        AU2[("Audit log\nPostgres — roadmap")]
+        direction TB
+        RC2["reeflex-core<br/>(hosted engine)"]
+        OPA2["OPA/Rego<br/>evaluation"]
+        AU2[("Audit log<br/>Postgres — roadmap")]
     end
     AG2 -->|"intent"| AD2
-    AD2 -->|"POST /v1/decide\n{ActionEnvelope}\nover HTTPS"| RC2
+    AD2 -->|"POST /v1/decide<br/>{ActionEnvelope}<br/>over HTTPS"| RC2
     RC2 --> OPA2
     RC2 --> AU2
     RC2 -->|"Decision"| AD2

@@ -37,7 +37,7 @@ ledger and returns <span class="rf-verdict rf-allow">allow</span> /
 and writes an append-only audit record either way.
 
 ```mermaid
-flowchart LR
+flowchart TD
     A["AI agent"] --> B["Adapter"]
     B -- "POST /v1/decide" --> C["reeflex-core (OPA/Rego)"]
     C --> D{Decision}
