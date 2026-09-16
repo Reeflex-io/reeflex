@@ -1163,11 +1163,25 @@
       "id": "fp-rm-file-named-truncate",
       "tool": "Bash",
       "input": {
-        "command": "rm /srv/app/truncate.log"
+        "command": "rm /home/dev/acme/truncate.log"
       },
       "effect": "deleting one file whose name contains a SQL keyword",
       "expect": "allow",
       "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "single"
+    },
+    {
+      "id": "protected-rm-single-file-under-srv",
+      "tool": "Bash",
+      "input": {
+        "command": "rm /srv/app/truncate.log"
+      },
+      "effect": "deleting one file of declared production state -- R6 holds it at a cardinality R2 never reaches",
+      "expect": "ask",
+      "family": "destroy",
       "check": false,
       "residual": null,
       "expect_verb": "delete",

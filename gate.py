@@ -88,6 +88,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -185,6 +186,13 @@ SKIP_REGISTRY = {
         "needs a live reeflex-core and a php CLI. NOTE (RFX-105): CI now STARTS a "
         "core and passes --core-url, so this allowance is no longer used there — "
         "it remains for local runs on a box with no php.",
+    "claude-corpus-live":
+        "replays the Bash conformance corpus through the real hook against a "
+        "LIVE reeflex-core (pass --core-url), so it cannot run on a box with no "
+        "core. CI starts one and passes it, so this allowance is not used there "
+        "— it exists for a local tree-health run. NOTE (RFX-303): the OFFLINE "
+        "half of the same corpus still runs in pytest-claude on every run; what "
+        "is lost when this skips is the comparison between the two planes.",
     "wp-spec-conformance":
         "needs a php CLI and NOTHING else — no core, no network (RFX-131, "
         "RFX-164). It is "
@@ -236,6 +244,8 @@ MIGRATION_HEADS_RE = re.compile(r"^MIGRATION-HEADS: (PASS|FAIL) \((.*)\)$", re.M
 DEP_FLOORS_RE = re.compile(r"^DEP-FLOORS: (PASS|FAIL) \((.*)\)$", re.M)
 TEST_CENSUS_RE = re.compile(r"^TEST-CENSUS: (PASS|FAIL) \((.*)\)$", re.M)
 PUBLISHED_CONTENT_RE = re.compile(r"^PUBLISHED-CONTENT: (PASS|FAIL) \((.*)\)$", re.M)
+CORPUS_LIVE_RE = re.compile(r"^CORPUS-LIVE: (PASS|FAIL) \((.*)\)$", re.M)
+CORPUS_SELFTEST_RE = re.compile(r"^SELFTEST: (PASS|FAIL) \((.*)\)$", re.M)
 USAGE_RE_TMPL = r"^usage: %s\b"
 COMPONENT_RE = re.compile(r"^COMPONENT ([a-z0-9-]+): (PASS|FAIL|SKIPPED|DELEGATED)\b(?: \((.*)\))?$")
 
@@ -348,6 +358,21 @@ def parse_published_content(exit_code, text):
     if exit_code == 0:
         return False, "exit 0 but no anchored 'PUBLISHED-CONTENT: PASS' summary — cannot confirm"
     return False, "exit %d" % exit_code
+def parse_corpus_live(exit_code, text):
+    """PASS iff exit 0 AND the anchored `CORPUS-LIVE: PASS (...)` line matches.
+
+    The exit code alone is not enough and neither is the line alone: the probe
+    exits non-zero for four different reasons, and a run that dies before
+    printing its verdict exits non-zero with no line at all. Both, or nothing
+    turns green — the same discipline as parse_opa and parse_migration_heads.
+    """
+    m = CORPUS_LIVE_RE.search(text)
+    if exit_code == 0 and m and m.group(1) == "PASS":
+        return True, m.group(2)
+    if m:
+        return False, "%s (exit %d)" % (m.group(2), exit_code)
+    return False, ("exit %d and no anchored 'CORPUS-LIVE:' verdict — the live "
+                   "corpus arm did not finish, so nothing was compared" % exit_code)
 
 
 def audit_skips(statuses, allow_skips, registry=None):
@@ -797,6 +822,70 @@ class Gate:
             ok = False
         detail = m.group(2) if m else "no anchored 'SELFTEST:' line — cannot confirm"
         self.show(out, full=not ok, tail=15)
+    CORPUS_PROBE = "attack-probe-rfx144-agent-prices-own-action.py"
+
+    def run_corpus_live(self):
+        """RFX-303: the Bash conformance corpus, through the real hook, against
+        a real core — and every verdict compared back against the SAME offline
+        oracle the unit suite uses.
+
+        WHY THIS IS A COMPONENT AND NOT A LINE IN pytest-claude. The offline
+        suite scores the corpus against a transcription of the policy pack. A
+        transcription drifts, and this arm is the only thing that can see it
+        drift. It existed, it worked, and it was invoked by NOTHING: before
+        this ticket `attack-probe` appeared zero times in this file and zero
+        times in .github/workflows/, while four files in the tree said the two
+        planes were kept honest against each other by running both in the gate.
+        Two divergences had accumulated in the gap — the oracle was missing R6
+        (`irreversible_protected_asset_prod`, shipped with RFX-153) and it
+        ranked R1 first where the pack ranks it last.
+
+        THE SELFTEST RUNS FIRST, IN THIS COMPONENT, and its failure fails the
+        component. A divergence detector that cannot detect a divergence
+        reports a clean run over anything — which is this same defect one layer
+        down. It is folded in here rather than filed as a sixth component
+        because it proves THIS instrument and nothing else.
+
+        THE TARGET IS PINNED, ALWAYS. This is an attack suite: it replays
+        ground-truth production destructions. It is handed --core-url
+        explicitly and the probe itself now refuses the hosted hostnames and
+        has no default target — until RFX-303 its default was
+        api-dev.reeflex.io, which is the production core.
+        """
+        key = "claude-corpus-live"
+        if not self.args.core_url:
+            self.component(key, "SKIPPED",
+                           "needs a LIVE reeflex-core (pass --core-url); it replays the whole "
+                           "corpus through the real hook and compares every verdict against the "
+                           "offline oracle in reeflex-claude/tests/policy_oracle.py")
+            return
+        probe = os.path.join(REPO_ROOT, "scripts", self.CORPUS_PROBE)
+
+        # The instrument, before the verdict.
+        code, out = self.run_cmd([sys.executable, probe, "--selftest"])
+        m = CORPUS_SELFTEST_RE.search(out)
+        if code != 0 or not m or m.group(1) != "PASS":
+            self.show(out, full=True)
+            self.component(key, "FAIL",
+                           "the live-vs-oracle comparator failed its own selftest — no verdict "
+                           "from this component can be trusted")
+            return
+        self.emit("  -- comparator selftest: %s" % m.group(2))
+
+        env = {
+            "REEFLEX_PROBE_BASE": self.args.core_url,
+            "REEFLEX_PROBE_PACE": "0",
+            # R5 is keyed on session_id server-side. A fixed run id would make
+            # the second gate run against a long-lived core inherit the first
+            # one's cumulative ledger.
+            "REEFLEX_PROBE_RUN": "gate-%d" % int(time.time()),
+        }
+        code, out = self.run_cmd([sys.executable, probe], env_extra=env)
+        ok, detail = parse_corpus_live(code, out)
+        # tail 22 on a pass is chosen to reach the "LIVE vs OFFLINE ORACLE"
+        # block: a reader must be able to see that the comparison HAPPENED, not
+        # only that the component passed.
+        self.show(out, full=not ok, tail=22)
         self.component(key, "PASS" if ok else "FAIL", detail)
 
     def run_wp(self):
@@ -1024,6 +1113,8 @@ class Gate:
             ("pypi-smoke      fresh install of the PUBLISHED packages", self.run_pypi_smoke),
             ("pypi-content-selftest  the content comparator, on synthetic wheels, before its verdict is trusted", self.run_published_content_selftest),
             ("pypi-content    PUBLISHED sources vs this tree, under the SAME version string (RFX-300)", self.run_published_content),
+            ("claude-corpus-live  the Bash corpus through the real hook vs a real core, "
+             "compared against the offline oracle (RFX-303)", self.run_corpus_live),
             ("wp-conformance  WordPress live-core harness", self.run_wp),
             ("wp-spec-conformance  SPEC axis vectors, no live core (RFX-131, RFX-164)", self.run_wp_spec),
             ("dep-floors-selftest  the manifest parser, on fixtures, before its verdict is trusted", self.run_dep_floors_selftest),
@@ -1160,6 +1251,31 @@ def selftest():
           not parse_published_content(0, "note: PUBLISHED-CONTENT: PASS (fine) maybe\n")[0])
     check("pypi-content rejects exit 0 with no anchored line",
           not parse_published_content(0, "compared some wheels\n")[0])
+    # claude-corpus-live: the live arm's verdict, same discipline (RFX-303).
+    # The FAIL cases matter more than the PASS one here: this component's whole
+    # job is to go red on a disagreement between the two planes, and it spent
+    # its existence being run by nothing at all.
+    _CL_PASS = ("CORPUS-LIVE: PASS (85 cases vs http://127.0.0.1:8099: 0 destructions "
+                "allowed, 0 live-vs-oracle divergences, 0 everyday blocked)\n")
+    _CL_FAIL = ("CORPUS-LIVE: FAIL (85 cases vs http://127.0.0.1:8099: 0 destructions "
+                "allowed, 1 live-vs-oracle divergences, 0 everyday blocked)\n")
+    check("corpus-live accepts real PASS", parse_corpus_live(0, _CL_PASS)[0])
+    check("corpus-live rejects real FAIL even at exit 0",
+          not parse_corpus_live(0, _CL_FAIL)[0])
+    check("corpus-live rejects nonzero exit despite PASS line",
+          not parse_corpus_live(1, _CL_PASS)[0])
+    check("corpus-live rejects prose mention",
+          not parse_corpus_live(0, "we think CORPUS-LIVE: PASS (probably)\n")[0])
+    check("corpus-live rejects a lowercase imitation",
+          not parse_corpus_live(0, "corpus-live: pass (85 cases)\n")[0])
+    check("corpus-live rejects exit 0 with no anchored line — a run that died "
+          "before comparing anything",
+          not parse_corpus_live(0, "### core=http://127.0.0.1:8099\n")[0])
+    ok, detail = parse_corpus_live(2, _CL_FAIL)
+    check("corpus-live carries the divergence count into the component detail",
+          not ok and "1 live-vs-oracle divergences" in detail)
+    check("claude-corpus-live's skip is registered with a written reason",
+          "claude-corpus-live" in SKIP_REGISTRY)
 
     # skip-ledger: an allowance without a written justification is refused (RFX-108)
     reg = {"known": "a registered reason"}

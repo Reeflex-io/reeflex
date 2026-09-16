@@ -338,20 +338,31 @@ non-zero exit, malformed output, wrong decision) without touching your real
 
 `test_conformance_bash.py` runs the corpus in `reeflex_claude/conformance.py`
 — commands whose real-world effect was written down before the classifier was
-— through the classifier and an offline transcription of R1–R4, and fails if
-any irreversible production destruction reaches `allow`, or if any everyday
-command stops reaching it. The **live** equivalent of the same corpus, through
-the real hook against a real core, is:
+— through the classifier and an offline transcription of the policy pack
+(`tests/policy_oracle.py`), and fails if any irreversible production
+destruction reaches `allow`, or if any everyday command stops reaching it. The
+**live** equivalent of the same corpus, through the real hook against a real
+core, is:
 
 ```bash
-python3 scripts/attack-probe-rfx144-agent-prices-own-action.py --strict --budget
+REEFLEX_PROBE_BASE=http://127.0.0.1:8099 \
+  python3 scripts/attack-probe-rfx144-agent-prices-own-action.py --strict --budget
 ```
 
+`REEFLEX_PROBE_BASE` is required and the hosted hostnames are refused: this
+harness replays ground-truth production destructions, so it must only ever be
+pointed at a core built for the run.
+
 Its exit code is the number of ground-truth production destructions that were
-allowed with no human, so CI can gate on it directly. Known residuals are
-printed with the ticket that tracks them and excluded from the count — a
-bounded gate that says what it does not cover is honest; one that silently
-drops cases from its own total reads as "covered everything".
+allowed with no human, **plus the number of cases where the live core and the
+offline oracle disagreed** — both planes score the same corpus against the same
+oracle, and a disagreement means one of them is wrong about the shipped pack.
+`gate.py` runs it as the `claude-corpus-live` component against the core it
+already starts (RFX-303); before that ticket nothing ran it at all, and the two
+planes had drifted apart in two places. Known residuals are printed with the
+ticket that tracks them and excluded from the count — a bounded gate that says
+what it does not cover is honest; one that silently drops cases from its own
+total reads as "covered everything".
 
 ## Limits / upgrade paths
 

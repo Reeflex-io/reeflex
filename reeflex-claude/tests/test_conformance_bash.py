@@ -7,13 +7,23 @@ test_classify.py asserts the classifier's outputs. This asserts the DECISION
 those outputs produce, over a corpus of commands whose real-world effect was
 fixed before the fix was written (reeflex_claude/conformance.py).
 
-The oracle below is R1-R4 of the shipped policy pack transcribed into Python.
-That is deliberate duplication: it lets the corpus fail in a unit suite, with
-no network and no OPA, at the exact moment a classifier change stops routing a
-production destruction to a human. The LIVE equivalent -- the same corpus
-replayed through the real hook against a real core -- is
-scripts/attack-probe-rfx144-agent-prices-own-action.py, and the two are kept
-honest against each other by running both in the gate.
+The oracle is a transcription of the shipped policy pack into Python. That is
+deliberate duplication: it lets the corpus fail in a unit suite, with no network
+and no OPA, at the exact moment a classifier change stops routing a production
+destruction to a human. The LIVE equivalent -- the same corpus replayed through
+the real hook against a real core -- is
+scripts/attack-probe-rfx144-agent-prices-own-action.py.
+
+RFX-303: THE ORACLE NOW LIVES IN tests/policy_oracle.py, AND THE LIVE ARM RUNS.
+Until RFX-303 the oracle was a private copy of R1-R4 in this file, the sentence
+here claimed the two planes were "kept honest against each other by running both
+in the gate", and the live arm was invoked by nothing at all -- `attack-probe`
+appeared zero times in gate.py and zero times in .github/workflows/. Two
+divergences had accumulated in that gap (the oracle was missing R6; it ranked R1
+first where the pack ranks it last). Both planes now import the SAME oracle, and
+gate.py's `claude-corpus-live` component replays the corpus through a real core
+and fails when the two disagree on any case. See policy_oracle.py for what the
+oracle still does not model.
 """
 
 from __future__ import annotations
@@ -25,27 +35,19 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from reeflex_claude import conformance
 from reeflex_claude.classify import classify
 
-
-def policy_oracle(cls: dict, environment: str = "production") -> str:
-    """
-    R1-R4 of reeflex-core/policy/reeflex.rego for a FIRST call in a session.
-
-    R5 (cumulative budgets) needs session history and is out of scope here;
-    it can only make a verdict stricter, never looser, so a case that reaches
-    `ask`/`deny` under this oracle reaches at least that under the real pack.
-    """
-    if cls["verb"] == "read" and cls["externality"] == "internal":
-        return "allow"                                              # R1
-    irreversible = cls["reversibility"] == "irreversible"
-    if irreversible and cls["blast_radius"] == "systemic" and environment == "production":
-        return "deny"                                               # R3
-    if irreversible and cls["blast_radius"] == "broad" and environment == "production":
-        return "ask"                                                # R2
-    return "allow"                                                  # R4
+from policy_oracle import (  # noqa: E402  -- the SHARED oracle (RFX-303)
+    PROTECTED_PREFIXES,
+    DEFAULT_PROTECTED,
+    policy_oracle,
+    policy_oracle_rule,
+    protected_assets_from_rego,
+    rego_path,
+)
 
 
 class TestBashConformanceCorpus(unittest.TestCase):
@@ -163,6 +165,75 @@ class TestBashConformanceCorpus(unittest.TestCase):
                     f"{case['id']} now reaches {case['expect']} -- remove its "
                     f"residual={case['residual']} marker")
         self.assertEqual([], unexpectedly_passing, "\n".join(unexpectedly_passing))
+
+
+class TestRFX303TheOracleTracksTheShippedPack(unittest.TestCase):
+    """
+    The oracle is a hand transcription of policy an operator EDITS, which is
+    the exact shape of the defect RFX-303 was filed about. These two tests are
+    what stop it drifting again in the direction the live arm cannot see
+    cheaply: a prefix added to protected.rego that the oracle never learns
+    about would make the oracle score `allow` where a real core holds, and
+    every corpus case would have to happen to land on it for the live arm to
+    notice.
+
+    Keyed on the MONOREPO (reeflex-spec/SPEC.md), not on protected.rego, for
+    the reason TestSpecArtefactIsInSync gives: keying the skip on the file
+    under test makes a DELETED file skip silently instead of fail.
+    """
+
+    def _require_monorepo(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        if not (repo_root / "reeflex-spec" / "SPEC.md").exists():
+            self.skipTest("no monorepo checkout around this file (installed wheel)")
+
+    def test_the_protected_prefixes_are_the_ones_the_pack_ships(self):
+        self._require_monorepo()
+        parsed = protected_assets_from_rego()
+        self.assertIsNotNone(
+            parsed,
+            f"{rego_path()} is missing -- the oracle's protected list is now "
+            "unverifiable against the pack it claims to transcribe")
+        self.assertEqual(
+            tuple(parsed["protected_assets"]), tuple(PROTECTED_PREFIXES),
+            "tests/policy_oracle.py's PROTECTED_PREFIXES no longer matches "
+            "reeflex-core/policy/protected.rego. The offline oracle would now "
+            "score a protected path `allow` while a real core holds it.")
+        self.assertEqual(
+            parsed["default_protected"], DEFAULT_PROTECTED,
+            "protected.rego's posture switch moved; the oracle still models "
+            "the old posture")
+
+    def test_r1_is_ranked_last_not_first(self):
+        """
+        reeflex.rego's `read_only_internal` decision carries
+        `not r2/r3/budget/r6/r7`, and says why: letting R1 win would hand back
+        a one-field evasion of R6 -- relabel the delete `read`. The oracle
+        ranked R1 first until RFX-303, so it scored exactly that evasion
+        `allow`. Measured against a real core v0.2.1: `require_approval`.
+        """
+        evasion = {"verb": "read", "externality": "internal",
+                   "reversibility": "irreversible", "blast_radius": "broad",
+                   "target_ref": "/srv/prod/data"}
+        verdict, rule = policy_oracle_rule(evasion)
+        self.assertEqual("ask", verdict,
+                         "an irreversible broad production action relabelled "
+                         "verb=read must not reach R1")
+        self.assertEqual("reeflex.policy/irreversible_broad_prod", rule)
+
+        # R6 too: at cardinality one, R2 does not fire and only R6 is left.
+        single = dict(evasion, blast_radius="single")
+        self.assertEqual(
+            ("ask", "reeflex.policy/irreversible_protected_asset_prod"),
+            policy_oracle_rule(single))
+
+        # The control: a genuine read is still allowed, by R1, and reports it.
+        self.assertEqual(
+            ("allow", "reeflex.policy/read_only_internal"),
+            policy_oracle_rule({"verb": "read", "externality": "internal",
+                                "reversibility": "reversible",
+                                "blast_radius": "single",
+                                "target_ref": "/srv/prod/README.md"}))
 
 
 class TestRFX146AuditRecordTruthfulness(unittest.TestCase):
