@@ -160,6 +160,13 @@ jobs:
         # migration-heads stays allowed — it validates the PRIVATE reeflex-app
         # repo's alembic graph, which is never checked out on this runner, and
         # reeflex-app's own ci.yml runs the enforcing copy on every PR.
+        #
+        # RFX-241: `--pypi delegated` does NOT delegate `pypi-behaviour`. That
+        # component scores the PUBLISHED reeflex-claude wheel against this
+        # tree's conformance corpus, and the smoke-pypi job it would delegate to
+        # checks out nothing — so it runs inline here and costs this step one
+        # venv and one PyPI resolve. Delegating it would print DELEGATED for a
+        # check that runs nowhere, which is the failure gate.py exists to stop.
         run: |
           python gate.py --pypi delegated \
             --allow-skips migration-heads \
