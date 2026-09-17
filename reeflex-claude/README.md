@@ -85,7 +85,33 @@ or point at an existing deployment.
 ```bash
 reeflex-claude setup   # writes the fail-closed PreToolUse hook into .claude/settings.json
 reeflex-claude check   # verifies the deny path: fails closed if core is unreachable
+reeflex-claude status  # says WHICH tools reach the gate, and how to widen it if not all
 ```
+
+> ### Upgrading from any 0.1.x? Run `reeflex-claude setup` again.
+>
+> **`pip install -U reeflex-claude` rewrites the code and never rewrites
+> `settings.json`.** Your hook entry — including its `matcher` — stays exactly
+> as the version that wrote it left it, and `pip` says nothing about that.
+>
+> This matters because **0.1.7 and earlier wrote a matcher that was an
+> allowlist of eleven built-in tool names** (`Bash|Write|Edit|MultiEdit|Read|
+> Glob|Grep|LS|NotebookEdit|WebFetch|WebSearch`), and Claude Code never
+> invokes a hook for a tool the matcher does not select. On such an
+> installation every `mcp__*` tool, `Task`, `SlashCommand`, `Skill`,
+> `BashOutput` and `KillShell` **reaches no gate at all**: the tool runs, no
+> decision is made, no audit record is written and your engine is never asked.
+> 0.2.0 fixed the matcher for *new* installations; only re-running `setup`
+> fixes an existing one.
+>
+> From 0.2.1 the hook **records** this rather than running silently: once per
+> session it appends one record to the adapter's audit stream under
+> `reeflex.adapter/matcher_narrowed`, naming the matcher it is running under,
+> the one this version ships, and the command that widens it. It does **not**
+> block the call — a narrowing may be deliberate and the hook cannot tell
+> deliberate from stale. `reeflex-claude status` reports the same thing on
+> demand, and `reeflex-claude status --strict` exits `1` on it, which is the
+> command to hang CI on.
 
 `setup` targets the current project's `./.claude/settings.json` by default
 (created, with parent directories, if absent); pass `--global` to target
@@ -132,6 +158,43 @@ PASS -- fail-closed verified
 hook denied the probe and exited 0 (fail-closed verified). stdout=...
 [reeflex-claude] settings OK: /path/to/.claude/settings.json contains the reeflex-claude PreToolUse hook.
 ```
+
+### `check` and `status` answer different questions
+
+`check` asks about the **package**: can the command wired into `settings.json`
+actually be started, and does the hook fail closed when core is unreachable.
+
+`status` asks about the **installation**: of the tools Claude Code has, which
+ones are routed to the hook at all. `check` cannot answer that and does not
+try — it reports a narrowing as a WARNING and still prints `PASS`, because a
+matcher does not weaken the fail-closed path, it **bypasses** it. Neither
+command's verdict is a claim about the other's question.
+
+Expected `reeflex-claude status` output on an installation upgraded from
+0.1.x without re-running `setup`:
+
+```
+======================================================================
+COVERAGE: NARROWED -- some tools reach no gate at all
+======================================================================
+[reeflex-claude] matcher this version installs: '*'
+[reeflex-claude] matcher(s) this installation is wired with:
+[reeflex-claude]   'Bash|Write|Edit|MultiEdit|Read|Glob|Grep|LS|NotebookEdit|WebFetch|WebSearch'  (DOES NOT cover every tool)
+[reeflex-claude]     from: /path/to/.claude/settings.json
+...
+[reeflex-claude] Widen it by running, in the same place you ran setup:
+[reeflex-claude]   reeflex-claude setup
+```
+
+**What `status` cannot see, and says so:** if you launch with `claude
+--settings <path>`, the hook is never told which settings file was loaded —
+its stdin payload carries the session, cwd and tool call, and its environment
+carries `CLAUDE_PROJECT_DIR` and the loaded settings' `env` block, but nothing
+names that path. Coverage then reads **UNVERIFIED**, recorded under its own
+rule id (`reeflex.adapter/matcher_unverified`) so it is never mistaken for a
+measured narrowing — and never for silence. Re-running `setup` writes a
+`REEFLEX_CLAUDE_MATCHER` stamp into the settings `env` block, which *does*
+travel to the hook and closes that case for the file it was written into.
 
 `check` forces the probe's own `REEFLEX_MODE=enforce` and points it at an
 unreachable core address regardless of your real configuration — it is
@@ -259,6 +322,8 @@ about.
 | `REEFLEX_CLAUDE_STRICT`     | unset                               | if set truthy: unknown execute → irreversible **and broad**, so an unrecognised command in production reaches a human. Before RFX-145 it lifted only reversibility, and R2 requires `broad`, so it could not change any verdict — it changed a word in the audit log. |
 | `REEFLEX_CLAUDE_PRINCIPAL`  | null                                | on_behalf_of value in the envelope           |
 | `REEFLEX_CLAUDE_AUDIT_LOG`  | `<tempdir>/reeflex-claude-audit.jsonl`| adapter-side audit log path                |
+| `REEFLEX_CLAUDE_STATE_DIR`  | `<dir of the audit log>/.reeflex-claude-sessions` | where the once-per-session markers live that keep the coverage check off the hot path. After the first tool call of a session the check costs one `stat`. Wiping this directory makes the next call re-check and, if coverage is narrowed, re-record it. |
+| `REEFLEX_CLAUDE_MATCHER`    | written by `setup` (0.2.1+)         | the matcher `setup` wired, stamped where the hook can read it. **Only** consulted when no settings file at a fixed location names the hook — a `claude --settings <path>` launch. A settings file always wins over it, because the file is what governs now and a stamp is what `setup` wrote then. |
 | `REEFLEX_CLAUDE_TIMEOUT`    | `5`                                 | HTTP timeout to core in seconds              |
 | `REEFLEX_VERIFY_SSL`        | `true` (full TLS verification)     | set to `0`/`false`/`no`/`off` (case-insensitive) to **disable** TLS certificate verification on the call to core. Insecure — dev/self-signed endpoints only, at the operator's own risk. Same env name as the WordPress adapter. |
 | `REEFLEX_CORE_TOKEN`        | unset                               | optional bearer token; when set, adds `Authorization: Bearer <token>` to the `/v1/decide` request. Never logged. Same env name as the WordPress adapter. |

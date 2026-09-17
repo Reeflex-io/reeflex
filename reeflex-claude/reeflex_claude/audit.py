@@ -7,6 +7,22 @@ This module always catches its own exceptions and logs a WARN to stderr.
 Default log path: <tempdir>/reeflex-claude-audit.jsonl
 Override with env REEFLEX_CLAUDE_AUDIT_LOG.
 
+TWO RECORD SHAPES SHARE THIS ONE STREAM, distinguished by the "event" key
+(absent on decision records, for backward compatibility with every consumer
+written before RFX-325; present on the others).  Same discipline as
+reeflex-core's own append-only log:
+
+  1. DECISION records (emit(), no "event" key) -- one per tool call the hook
+     was invoked for.  The shape below.
+  2. ADAPTER POSTURE records (emit_raw() via posture.py, "event":
+     "adapter_posture") -- at most one per session, saying that the matcher
+     this hook runs under is narrower than the one it ships, or that its
+     coverage could not be verified.  They carry NO "decision" key, because
+     they are not a verdict on a tool call: a consumer filtering on
+     `"decision" in record` skips them, and one counting sessions reads them.
+     See posture.py for why silence there was indistinguishable from having no
+     gate installed at all (RFX-325, measured by qa--222).
+
 Record fields (one per decision):
   ts                 UTC ISO-8601 Z
   session_id         "claude:<hook_session_id>" (from envelope.agent.session_id)
@@ -86,6 +102,23 @@ def emit(
             obligations=obligations,
             mode=mode,
         )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[reeflex-claude] WARN: audit write failed: {exc}", file=sys.stderr)
+        return
+    emit_raw(record)
+
+
+def emit_raw(record: dict) -> None:
+    """
+    Append one already-built record to the audit stream.
+
+    Same invariant as emit(): never raises, warns to stderr on failure, and a
+    write failure never changes a decision.  Exists so posture.py can put its
+    own shape (§ "TWO RECORD SHAPES" above) on the SAME ordered stream as the
+    decision records, rather than in a second file an operator would have to
+    know to join.
+    """
+    try:
         line = json.dumps(record, separators=(",", ":")) + "\n"
         log_path = _audit_log_path()
         # Ensure parent directory exists
