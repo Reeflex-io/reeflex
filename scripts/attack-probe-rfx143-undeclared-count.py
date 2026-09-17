@@ -83,7 +83,21 @@ def envelope(session_id, verb="delete", env="production",
     env_ = {
         "reeflex_version": "0.1",
         "agent": {"id": "agent:dev-1-synthetic", "session_id": session_id},
-        "action": {"namespace": "eval", "verb": verb, "ability": "eval/synthetic"},
+        # ABILITY: `rfx143/row`, and the name is load-bearing (dev-1--071).
+        #
+        # This probe shipped saying `eval/synthetic`. R7 (authority.rego) landed
+        # afterwards, reads `action.ability`, and `eval` is a member of its
+        # `executable_signals` -- so on every build carrying R7 EVERY cell of
+        # this probe answered `require_approval / authority_change_prod` at call
+        # 1, including the no-regression controls, and the budget it exists to
+        # measure was invisible. RFX-167's trap, arrived at from the other side:
+        # the preempting rule was not even in the file being measured.
+        #
+        # Neither token here is in authority.rego's three lists. A future signal
+        # named `row` or `rfx143` would silently re-break this probe, which is
+        # why the RFX-293 section below asserts an expected trip point instead of
+        # printing a table: a cell that reads 1 everywhere now says SUSPECT.
+        "action": {"namespace": "probe", "verb": verb, "ability": "rfx143/row"},
         "target": {"kind": "synthetic", "ref": "eval:dev-1", "environment": env},
         "params": {},
         "axes": {"reversibility": reversibility, "blast_radius": blast,
@@ -203,21 +217,70 @@ def main():
     print("  omitted field -- it is `count: 1` next to a declared whole-table")
     print("  blast radius. reversibility=recoverable so R2/R3 cannot fire and")
     print("  the budget is again the only thing that can hold.\n")
-    walk("w-broad-1", "delete, broad, count=1", limit=40,
-         blast="broad", reversibility="recoverable", count=1)
-    walk("w-broad-omit", "delete, broad, magnitude OMITTED", limit=40,
-         blast="broad", reversibility="recoverable")
-    walk("w-sys-1", "delete, systemic, count=1", limit=40,
-         blast="systemic", reversibility="recoverable", count=1)
+    n_broad_1, _, _ = walk("w-broad-1", "delete, broad, count=1", limit=40,
+                           blast="broad", reversibility="recoverable", count=1)
+    n_broad_omit, _, _ = walk("w-broad-omit", "delete, broad, magnitude OMITTED",
+                              limit=40, blast="broad", reversibility="recoverable")
+    n_sys_1, _, _ = walk("w-sys-1", "delete, systemic, count=1", limit=40,
+                         blast="systemic", reversibility="recoverable", count=1)
 
     banner("NO-REGRESSION CONTROLS  single and scoped must not move")
     print("  count_floor leaves single and scoped at 1 deliberately: `scoped`")
     print("  is the everyday value our adapters emit, and a floor there would")
     print("  retune every ordinary session (the RFX-158 trade in reverse).\n")
-    walk("w-single-1", "delete, single, count=1", limit=40,
-         blast="single", reversibility="recoverable", count=1)
-    walk("w-scoped-1", "delete, scoped, count=1", limit=40,
-         blast="scoped", reversibility="recoverable", count=1)
+    n_single_1, _, _ = walk("w-single-1", "delete, single, count=1", limit=40,
+                            blast="single", reversibility="recoverable", count=1)
+    n_scoped_1, _, _ = walk("w-scoped-1", "delete, scoped, count=1", limit=40,
+                            blast="scoped", reversibility="recoverable", count=1)
+
+    banner("RFX-293  WHICH HALF OF THE BUDGET IS THIS BUILD CHARGING?")
+    # RFX-143 floored the CURRENT action. Until RFX-293 the CUMULATIVE term was
+    # summed from ledger entries carrying the caller's RAW magnitude.count, so
+    # the two terms were priced by different parties. The trip point is the
+    # arithmetic that tells them apart, and it is the whole reason this section
+    # states an expectation rather than printing a table:
+    #
+    #   current floored, history raw   first i where floor + (i-1) > limit
+    #   both floored                   first i where floor * i     > limit
+    #
+    # At broad (floor 10, limit 20) that is 12 versus 3 -- and 12 is eleven
+    # calls of a whole-table delete before the gate asks. Systemic (floor 20)
+    # reads 2 under BOTH arithmetics, so it cannot tell the builds apart; it is
+    # printed for completeness and deliberately not used as the verdict.
+    floors = {"broad": 10, "systemic": 20, "single": 1, "scoped": 1}
+
+    def trip_both_floored(floor):
+        return DELETIONS_LIMIT // floor + 1
+
+    def trip_current_only(floor):
+        # floor + (i-1) > limit  ->  i > limit - floor + 1
+        return max(1, DELETIONS_LIMIT - floor + 2)
+
+    print("  limit %d, strict `>`.  Expected first non-allow:\n" % DELETIONS_LIMIT)
+    print("    %-22s %-16s %-16s %s"
+          % ("cell", "current-only", "both floored", "measured"))
+    rows = [
+        ("broad, count=1", floors["broad"], n_broad_1),
+        ("broad, OMITTED", floors["broad"], n_broad_omit),
+        ("systemic, count=1", floors["systemic"], n_sys_1),
+        ("single, count=1", floors["single"], n_single_1),
+        ("scoped, count=1", floors["scoped"], n_scoped_1),
+    ]
+    for label, floor, measured in rows:
+        a = trip_current_only(floor)
+        b = trip_both_floored(floor)
+        note = ""
+        if a == b:
+            note = "  (cannot tell the two builds apart)"
+        elif measured == b:
+            note = "  <- RFX-293 IS live on this build"
+        elif measured == a:
+            note = "  <- RFX-293 is NOT live: the history is still summing the caller's count"
+        else:
+            note = "  *** neither arithmetic *** HARNESS OR POLICY SUSPECT"
+        print("    %-22s %-16s %-16s %s%s" % (label, a, b, measured, note))
+    print("\n  The verdict cell is `broad, count=1`: it is the shape our own")
+    print("  adapters emit, and it is the one where the two arithmetics differ.")
     walk("w-scoped-omit", "delete, scoped, magnitude OMITTED", limit=40,
          blast="scoped", reversibility="recoverable")
 

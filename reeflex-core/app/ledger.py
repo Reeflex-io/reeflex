@@ -799,16 +799,49 @@ def compute_cumulative(session_id: str, window_seconds: int) -> dict:
     }
 
 
-def append_entry(session_id: str, envelope: dict) -> None:
+def append_entry(
+    session_id: str, envelope: dict, charged_count: int | None = None
+) -> None:
     """
     Append the decided action to the session ledger.
     Called AFTER OPA eval so cumulative only reflects settled decisions.
+
+    `charged_count` is the policy's own price for this action
+    (budgets.rego::ledger_charge, carried out of the same evaluation that
+    produced the verdict). Pass it; the raw-count fallback exists for callers
+    that have no evaluation to hand and for envelopes built by a path that
+    predates it.
 
     RFX-197: RAISES LedgerWriteError if the action cannot be recorded. That is
     deliberately unlike audit.py's best-effort write: an unrecorded action
     means the NEXT call's budget under-counts, which is the fail-open this
     module exists to close, so decide.py denies instead.
     """
+    # RFX-293 — THE HISTORY IS PRICED BY THE POLICY, NOT BY THE CALLER.
+    #
+    # This line used to be `int(envelope["magnitude"]["count"] or 1)`, full
+    # stop, and that was the whole defect. budgets.rego charges the CURRENT
+    # action max(count, count_floor[blast_radius]) (RFX-143), but the
+    # CUMULATIVE term of every dimension is summed from these entries — so an
+    # adapter that declared `count: 1` while declaring the blast radius a whole
+    # table paid the floor once and 1 per call thereafter. Measured on the
+    # published v0.2.1 image, one session, 45 accounts deleted per call: the
+    # enumerated arm was held at call 1 and the predicate arm at call 12, i.e.
+    # 495 accounts deleted before the gate asked, for the same deletions.
+    #
+    # The floor table is NOT re-implemented here. `charged_count` arrives from
+    # the OPA evaluation decide.py already runs, so policy/budgets.rego stays
+    # the single place these numbers are written; a Python copy is the
+    # unchecked mirror RFX-216 is about.
+    #
+    # The fallback is the raw count, and that is a REAL limit, not a cosmetic
+    # one: a caller of append_entry() that passes nothing gets the pre-RFX-293
+    # arithmetic. Both of core's callers pass the charge (decide.py Step 10 and
+    # the approved-resubmission path); the default is here for tests and for
+    # any future caller that has no evaluation, and it is deliberately the
+    # caller's number rather than a guessed floor, because guessing the floor
+    # HERE is exactly the mirror this fix avoids.
+    raw_count = int((envelope.get("magnitude") or {}).get("count") or 1)
     entry: dict[str, Any] = {
         "event_type": "entry",
         "session_id": session_id,
@@ -816,7 +849,7 @@ def append_entry(session_id: str, envelope: dict) -> None:
         "verb": envelope.get("action", {}).get("verb", "unknown"),
         "ability": envelope.get("action", {}).get("ability", ""),
         "externality": (envelope.get("axes") or {}).get("externality", ""),
-        "count": int((envelope.get("magnitude") or {}).get("count") or 1),
+        "count": raw_count if charged_count is None else int(charged_count),
         "amount_by_currency": {},
     }
 

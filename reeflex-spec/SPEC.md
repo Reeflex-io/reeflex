@@ -306,14 +306,24 @@ Three consequences follow, and they are normative:
    a floor there would retune every everyday session rather than the
    unbounded ones.
 
-**What this does not fix.** `ledger.py` records the raw `magnitude.count`, so
-the floor applies to the action being decided and not to the cumulative history
-it is compared against. A repeated recoverable `broad` delete under one session
-therefore reaches a human on the 12th call rather than the 3rd (measured; the
-floor is 10 and the ledger keeps summing 1s). Routing the policy's charged
-count back into the ledger is the sound fix and is not yet done — do not read
-this section as a claim that an unbounded action is priced correctly across a
-session, only that it is no longer priced as the smallest possible one.
+4. **Both terms of a cumulative budget are charged the same number** (RFX-293).
+   A budget compares `prior + current` against its limit, and the two used to
+   be priced by different parties: the current action by `budgets.rego`, the
+   history by `ledger.py`, which recorded the raw `magnitude.count`. An
+   under-declaring caller therefore paid the floor once and `1` per call
+   thereafter — measured on core v0.2.1, a repeated recoverable `broad` delete
+   under one session reached a human on the **12th** call rather than the 3rd.
+   The charge the policy computes is now what the ledger records, so the floor
+   applies to the history it is compared against as well. **The floors are
+   read in exactly one place**: an implementation that re-derives them outside
+   the policy pack is free to drift from the file an operator edits, and is not
+   conformant.
+
+**What this does not fix.** Nothing here prices an action that is never
+*decided*: a budget can only count what reaches `/v1/decide`. And the floor is
+a function of the declared `blast_radius` alone — an adapter that declares
+`single` for a whole-table operation is mis-declaring the axis, which is §4.2's
+subject and the conformance suite's, not this section's.
 
 ---
 

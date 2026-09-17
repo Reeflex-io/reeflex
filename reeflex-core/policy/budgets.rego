@@ -130,17 +130,25 @@ default_budgets := {
 # Before this change the trip point was 21 for ALL FOUR values -- the declared
 # blast radius was worth nothing to the budget.
 #
-# `broad` lands on 12 and not on 3 because THE FLOOR APPLIES TO THE ACTION
-# BEING DECIDED AND NOT TO THE LEDGER'S HISTORY. ledger.py::append_entry
-# records the RAW `magnitude.count`, so the cumulative term keeps summing 1s
-# while the current term is charged 10: the trip is the first i where
-# 10 + (i-1) > 20, i.e. 12. Charging the floor on the cumulative side too would
-# put it at 3, and that is a ledger.py change -- deliberately NOT made here,
-# because the single source of truth for these floors is this file and a Python
-# copy of the table would be exactly the unchecked mirror RFX-216 is about. The
-# sound version routes the policy's own charged_count back into append_entry
-# (decide.py already appends AFTER evaluating, so the seam exists). Filed
-# rather than bodged; see the RFX-143 report.
+# `broad` landed on 12 and not on 3 because THE FLOOR APPLIED TO THE ACTION
+# BEING DECIDED AND NOT TO THE LEDGER'S HISTORY: ledger.py::append_entry
+# recorded the RAW `magnitude.count`, so the cumulative term kept summing 1s
+# while the current term was charged 10, and the trip was the first i where
+# 10 + (i-1) > 20, i.e. 12.
+#
+# RFX-293 CLOSED THAT HALF. `ledger_charge` below is the same number, published
+# out of the same evaluation, and decide.py hands it to append_entry -- so the
+# history now sums what the policy charged rather than what the caller declared,
+# and `broad` trips at 3. The floors are still read only here: nothing outside
+# this file re-derives them, which is the RFX-216 constraint that made the
+# ledger-side fix worth doing properly rather than mirroring the table in
+# Python. Re-measured after the change on the same instrument:
+#
+#   blast_radius    before RFX-143   after RFX-143   after RFX-293
+#   single           21               21              21    unchanged, by design
+#   scoped           21               21              21    unchanged, by design
+#   broad            21               12               3
+#   systemic         21                2               2
 #
 # An unrecognised blast_radius cannot reach this table: envelope.py matches
 # `_AXIS_ALLOWED` exactly and coerces anything else to the most-guarded member.
@@ -165,6 +173,45 @@ current_count_floor := f if {
 #: is read defensively (absent -> 1) so this file behaves identically for an
 #: envelope built by a path that predates F2's default.
 charged_count := max([object.get(input, ["magnitude", "count"], 1), current_count_floor])
+
+#: WHAT THE LEDGER MUST RECORD FOR THIS ACTION (RFX-293) — the SAME number the
+#: dimensions above charge, published so the write side cannot disagree with the
+#: read side.
+#
+# THE HALF RFX-143 LEFT OPEN. `charged_count` priced the action being DECIDED.
+# ledger.py::append_entry recorded the RAW `magnitude.count`, so the CUMULATIVE
+# term of every dimension kept summing the caller's own number while the current
+# term was charged the floor. Measured on the published v0.2.1 image, one
+# session per arm, 45 accounts deleted per call, WordPress normalizer,
+# target.environment=staging (in production R2 holds both arms at call 1 and
+# hides this dimension entirely):
+#
+#   arm                             magnitude.count  first non-allow  accounts deleted
+#                                                                     before the gate asked
+#   A  users/delete ids[3001..3045]       45          call  1                0
+#   B  users/delete role=subscriber        1          call 12              495
+#
+# Same ability, same object kind, same 45 accounts per call, same session shape.
+# The arms differed only in how much the caller disclosed: the trip point is the
+# first i where floor + (i-1) > limit, i.e. 10 + (i-1) > 20 -> 12. Charging the
+# floor on the cumulative side too puts it at 3, which is what this rule buys.
+#
+# THE TABLE STAYS IN THIS FILE. decide.py reads THIS rule out of the same
+# evaluation that produced the verdict and hands the number to append_entry; it
+# does NOT re-derive it. A Python copy of `count_floor` is exactly the unchecked
+# mirror RFX-216 is about — it would be free to drift from the file a policy
+# author edits, and nothing would notice.
+#
+# TOTAL BY CONSTRUCTION, and the default is the EXPENSIVE end. opa.py asks for
+# this rule and `decision` in ONE query expression, so an undefined member would
+# make the whole object undefined and fail EVERY decision closed. `default`
+# removes that coupling. Its value is the systemic floor rather than 1 because a
+# charge core could not compute must not be the cheapest one available; Rego
+# requires a constant here, so `count_floor.systemic` cannot be referenced and
+# budgets_count_test.rego pins the two together instead.
+default ledger_charge := 20
+
+ledger_charge := charged_count
 
 # Empty by default; a deployment adds entries like:
 #   "agent:some-session-id": {"objects_touched": {"limit": 10}}
