@@ -454,7 +454,22 @@ class TestWatchdogAnswersAndExits(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         with open(log, encoding="utf-8") as fh:
             records = [json.loads(line) for line in fh if line.strip()]
-        self.assertEqual(len(records), 1, "the deadline answer must leave a record")
+        # RFX-325 (merged after this test was written) appends its own
+        # once-per-session posture record when the hook is running under a
+        # matcher narrower than the one this version ships, so the DECISION
+        # record is selected by rule rather than by being the only line.  Both
+        # halves are still asserted -- exactly one decision, and every other
+        # line accounted for -- because "some other record also appeared" is a
+        # thing this test should still notice.
+        decisions = [r for r in records
+                     if r.get("rule") == "reeflex.core/deadline_exceeded"]
+        self.assertEqual(len(decisions), 1, "the deadline answer must leave a record")
+        others = [r.get("rule") for r in records if r not in decisions]
+        posture_rules = {"reeflex.adapter/matcher_narrowed",
+                         "reeflex.adapter/matcher_unverified"}
+        self.assertTrue(all(rule in posture_rules for rule in others),
+                        f"unexplained extra audit records: {others}")
+        records = decisions
         self.assertEqual(records[0]["rule"], "reeflex.core/deadline_exceeded")
         self.assertEqual(records[0]["permission_decision"], "deny")
         # and it says WHICH action, not just that something timed out
