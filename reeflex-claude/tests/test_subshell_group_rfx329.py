@@ -33,9 +33,11 @@ WHAT THIS DOES NOT COVER, stated rather than left to be inferred:
     body only exists at runtime (`(eval "$CMD")`) is still unread -- that is
     the `gap-` family, not this fix.
   * RFX-328 (the `depth < 3` ceiling in `_shell_segments`, and the nested
-    `sh -c` sharing that budget) is a DIFFERENT cause in the same file and is
-    deliberately not addressed here; `test_the_depth_ceiling_is_still_open`
-    below pins it so the gap stays declared rather than silently assumed.
+    `sh -c` sharing that budget) was a DIFFERENT cause in the same file and
+    was deliberately not addressed here.  It was closed afterwards by dev-2
+    round 071; `test_the_depth_ceiling_is_closed` below is the tripwire this
+    file left for that, updated after it fired.  The walk's own bounds are
+    tested in `test_substitution_budget_rfx328.py`.
 """
 
 from __future__ import annotations
@@ -206,18 +208,22 @@ class TestClassifyPlaneInvariants(unittest.TestCase):
         result = classify("Bash", {"command": "(psql -c \"DROP TABLE t\")"})
         self.assertEqual("delete", result.get("verb"))
 
-    def test_the_depth_ceiling_is_still_open(self):
+    def test_the_depth_ceiling_is_closed(self):
         """
-        RFX-328, pinned rather than fixed.  This asserts the CURRENT state so
-        that closing RFX-328 makes this test fail loudly and the declaration
-        gets updated, instead of the gap quietly outliving its own comment.
+        RFX-328/RFX-336, closed by dev-2 round 071.  This test used to assert
+        the OPPOSITE -- it pinned the gap open so that closing it would fail
+        loudly rather than let the gap outlive its own comment.  It fired as
+        designed, and this is the updated form it asked for.
+
+        `depth < 3` became a work budget: see `_WalkBudget` in classify.py.
         """
         escaping = "echo $(echo $(echo $(echo $(rm -rf /var/lib/pgsql))))"
         result = classify("Bash", {"command": escaping})
-        self.assertNotEqual(
+        self.assertEqual(
             "delete", result.get("verb"),
-            "RFX-328 appears to be fixed -- update this test and the "
-            "declaration in _shell_segments rather than deleting it")
+            "RFX-328 has regressed -- the substitution walk is stopping "
+            "before the fourth level again")
+        self.assertEqual("irreversible", result.get("reversibility"))
 
 
 if __name__ == "__main__":

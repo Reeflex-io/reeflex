@@ -600,6 +600,12 @@ _BLOCK_DEVICE_RE = re.compile(
 # anchor is what keeps this from eating `--flag=value`.
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
+# A redirection operator, optionally with the file descriptor it applies to:
+# `>f` `>>f` `<f` `2>f` `2>&1` `&>f` `>|f` `<<<w` `<<EOF`.  Used to peel a
+# redirection written BEFORE the command word (RFX-337); no command word can
+# begin with one of these, so this cannot swallow a real command.
+_REDIRECTION_RE = re.compile(r"^(?:\d+|&)?(?:>>|>\||>&|<<<|<<|<&|>|<)")
+
 # Interpreters whose inline program text is visible on the command line.
 _INLINE_INTERPRETERS = frozenset([
     "python", "python2", "python3", "perl", "ruby", "node", "nodejs",
@@ -832,7 +838,29 @@ def _classify_bash(tool_input: dict) -> dict:
             file_path=None,
         )
 
-    segments = _shell_segments(command_str)
+    budget = _WalkBudget()
+    segments = _shell_segments(command_str, budget=budget)
+
+    # RFX-328/336/337.  The walk ran out before it finished reading the line,
+    # so what came back is a PREFIX of the commands this line runs and the
+    # unread remainder is exactly where a `rm -rf` would be hidden.  Pricing
+    # the prefix is the fail-open; this is the RFX-322 treatment of a command
+    # we did not read, under its own signature so the reason is legible.
+    if budget.exhausted:
+        return _make(
+            verb="execute",
+            reversibility="irreversible",
+            blast_radius="systemic",
+            externality="internal",
+            magnitude_count=1,
+            target_kind="command",
+            target_ref=None,
+            danger_signature="unwalkable_command",
+            classification_tier="destructive_systemic",
+            command_preview=preview,
+            file_path=None,
+        )
+
     if not segments:
         return _classify_bash_execute(command_str, preview)
 
@@ -2063,11 +2091,111 @@ def _shell_c_payload(tokens: list):
     return None
 
 
-def _shell_segments(command: str, depth: int = 0) -> list:
+# ---------------------------------------------------------------------------
+# What one substitution walk may spend  (RFX-328 / RFX-336 / RFX-337)
+# ---------------------------------------------------------------------------
+#
+# `_shell_segments` used to guard its recursion with `depth < 3`, and `sh -c`
+# unwrapping spent the SAME counter, so wrappers and nestings were fungible.
+# Five destructive lines got past it, every one of which a real bash really
+# runs -- ground truth read off the filesystem, not argued:
+#
+#     echo $(echo $(echo $(echo $(rm -rf /var/lib/pgsql))))   -> priced benign
+#     echo `echo \`rm -rf /var/lib/pgsql\``                   -> priced benign
+#     sh -c 'sh -c "echo \$(rm -rf /var/lib/pgsql)"'          -> priced benign
+#
+# WHY THIS IS A BUDGET AND NOT A BIGGER NUMBER.  RFX-328 asked for a fix that
+# says what it bounds and measures the cost at the bound; raising the constant
+# fails that test three ways, all measured on main `ba3ccb4`:
+#
+#   * Depth is the CHEAP axis, and it was the only one bounded.  Walking
+#     nesting 3 -> 256 costs 8 ms and yields the same 4 segments.
+#   * Breadth is the EXPENSIVE axis, and it was not bounded AT ALL.  One
+#     segment holding 800 substitutions produced 801 segments unchecked, and
+#     fan-out x depth reached 585 segments / 223 ms from one 58 KB line.
+#   * Removing the ceiling does not merely cost cycles.  At nesting depth
+#     1000 the walk raises RecursionError, and RFX-323 measured Claude Code's
+#     PreToolUse runner FAILING OPEN when the hook crashes -- so the naive fix
+#     trades a depth-4 escape for a depth-1000 one.
+#
+# So the walk is bounded by the work it does rather than by how deep it goes,
+# and the bounds are sized against what real commands actually need: over the
+# 211 Bash commands in `reeflex-spec/conformance/claude-adapter-bash.json` and
+# this package's own suite, the worst case is 4 segments, 87 characters walked
+# and nesting depth 2.
+#
+# AND THE BOUND NO LONGER DECIDES THE OUTCOME, which is the point.  A walk
+# that stops early has not READ the command, so the command is not priced from
+# the part that was read: `_classify_bash` returns SPEC §2's safe-conservative
+# axes under `unwalkable_command`, exactly as RFX-322 already does for a
+# command over the size cap.  Writing `$(` 65 times now buys a refusal rather
+# than an allow, so no value of these constants is an escape hatch.
+# WHICH BOUND ACTUALLY FIRES, measured rather than assumed -- worth stating,
+# because a bound nobody can reach is not a bound and should not be described
+# as one:
+#   * CHARS is the working bound.  It is what stops fan-out x depth (8 wide by
+#     4 deep, 58 KB) and deep nesting (8000 levels, 64 KB).
+#   * DEPTH stops nesting that is deep but cheap in characters (200 levels,
+#     1.6 KB) -- the shape that would otherwise reach CPython's stack.
+#   * SEGMENTS is a backstop only: under the 64 KiB command cap nothing
+#     reaches it, and no input found in testing ever did.
+#
+# The segment count is set ABOVE anything the command cap can produce rather
+# than tuned down.  At 512 it WAS reached -- by `echo hello && ...` repeated to
+# 64 KiB, a completely benign line, which it refused.  That is the gate an
+# operator switches off (the argument `_substitution_bodies` already makes
+# about `grep`).  The shortest chainable command is ~5 chars with its `&&`, so
+# 64 KiB cannot hold more than ~13 100 of them.
+#
+# COST AT THE BOUND, since RFX-328 asked for it: the worst case reachable
+# under the command cap is 359 ms (fan-out 8 x depth 4).  The 64 KiB cap
+# itself already costs ~0.3 s by the note above, and the PreToolUse deadline
+# is 30 s, so the walk is not what spends it.
+_WALK_MAX_SEGMENTS = 16384    # backstop; above the ~13 100 a 64 KiB line chains
+_WALK_MAX_CHARS = 262144      # 4x the 64 KiB command cap; ~3000x the worst (87)
+_WALK_MAX_DEPTH = 64          # 32x the worst real nesting (2), and ~15x clear
+                              # of CPython's default 1000-frame stack limit
+
+
+class _WalkBudget:
+    """
+    What one `_shell_segments` walk may spend, and whether it ran out.
+
+    `exhausted` is the load-bearing field.  A caller that cannot tell
+    "read the whole line, found nothing destructive" from "stopped looking"
+    will report the first when it means the second, which is the fail-open
+    this class exists to remove.
+    """
+
+    __slots__ = ("segments", "chars", "exhausted")
+
+    def __init__(self) -> None:
+        self.segments = _WALK_MAX_SEGMENTS
+        self.chars = _WALK_MAX_CHARS
+        self.exhausted = False
+
+    def charge(self, segment: str) -> bool:
+        """Charge one emitted segment.  False once the walk must stop."""
+        self.segments -= 1
+        self.chars -= len(segment)
+        if self.segments < 0 or self.chars < 0:
+            self.exhausted = True
+            return False
+        return True
+
+
+def _shell_segments(command: str, depth: int = 0,
+                    budget: "Optional[_WalkBudget]" = None) -> list:
     """
     Split a shell command line into the individual commands it will run,
-    expanding `sh -c '<inner>'` in place (up to three levels) so a wrapped
-    command is classified by what it actually runs and not by the wrapper.
+    expanding `sh -c '<inner>'` in place so a wrapped command is classified by
+    what it actually runs and not by the wrapper.
+
+    The walk continues to whatever depth the line reaches until `budget` runs
+    out; see the comment above `_WalkBudget` for what is bounded and why.
+    Callers that need to know whether the whole line was read must pass a
+    `budget` in and check `budget.exhausted` -- the returned list cannot say
+    so on its own.
 
     RFX-301: the body of a command substitution is one of those commands, and
     it was not being read.  `echo $(rm -rf /var/lib/pgsql)` was priced
@@ -2083,6 +2211,9 @@ def _shell_segments(command: str, depth: int = 0) -> list:
     consumer, `_sql_reachable`, is the same direction -- a database client
     inside a substitution re-arms the SQL patterns rather than disarming them.
     """
+    if budget is None:
+        budget = _WalkBudget()
+
     if not command.strip():
         return []
 
@@ -2097,19 +2228,36 @@ def _shell_segments(command: str, depth: int = 0) -> list:
         if not segment:
             continue
 
-        inner = None
-        if depth < 3:
-            peeled, _ = _peel_wrappers(_safe_split(segment))
-            inner = _shell_c_payload(peeled)
+        # Charged BEFORE the segment is read, so the budget bounds the work
+        # this walk is about to do rather than the work it has already done.
+        if not budget.charge(segment):
+            return out
+
+        peeled, _ = _peel_wrappers(_safe_split(segment))
+        inner = _shell_c_payload(peeled)
+        if inner and _c_payload_quote(segment) != "'":
+            # RFX-337.  The outer shell has consumed these backslashes before
+            # the inner shell ever sees the payload; single quotes are the one
+            # spelling where it has not.
+            inner = _unescape(inner, "$`\"\\")
+        bodies = _substitution_bodies(segment)
+
+        if depth >= _WALK_MAX_DEPTH and (inner or bodies):
+            # Stopping here would leave a destructive body unread and the line
+            # priced from the `echo` wrapping it.  Say the line was not read
+            # instead: `_classify_bash` turns `exhausted` into a refusal.
+            budget.exhausted = True
+            out.append(segment)
+            continue
+
         if inner:
-            expanded = _shell_segments(inner, depth + 1)
+            expanded = _shell_segments(inner, depth + 1, budget)
             out.extend(expanded or [segment])
         else:
             out.append(segment)
 
-        if depth < 3:
-            for body in _substitution_bodies(segment):
-                out.extend(_shell_segments(body, depth + 1))
+        for body in bodies:
+            out.extend(_shell_segments(body, depth + 1, budget))
     return out
 
 
@@ -2192,7 +2340,12 @@ def _substitution_bodies(text: str) -> list:
 
         if ch == "`":
             body, i = _to_backtick(text, i + 1)
-            bodies.append(body)
+            # RFX-336.  By the time the shell RUNS this body it has already
+            # consumed the backslashes inside it, so honouring them here left
+            # a nested backtick unread and the line priced as the `echo`
+            # around it.  A `$( )` body is deliberately NOT unescaped -- see
+            # `_unescape` for the measurement that separates the two.
+            bodies.append(_unescape(body, "$`\\"))
             continue
 
         if quote is None and (text.startswith("<(", i) or text.startswith(">(", i)):
@@ -2203,6 +2356,87 @@ def _substitution_bodies(text: str) -> list:
         i += 1
 
     return [b for b in (x.strip() for x in bodies) if b]
+
+
+def _unescape(text: str, specials: str) -> str:
+    """
+    Remove the backslashes a shell consumes before `specials`, so a nested
+    command is read the way the shell will run it rather than the way it was
+    typed one level up.
+
+    WHICH CONSTRUCTS NEED THIS IS MEASURED, NOT TAKEN FROM THE STANDARD -- a
+    real bash against synthetic victim directories, canary read off disk
+    afterwards (RFX-336/RFX-337, dev-2 round 071):
+
+        echo `echo \\`rm -rf V\\``      DESTROYED   backtick body: unescape
+        echo `echo \\$(rm -rf V)`       DESTROYED   backtick body: unescape
+        echo $(echo \\`rm -rf V\\`)     SURVIVED    `$( )` body:   do NOT
+        echo $(echo \\$(rm -rf V))      SURVIVED    `$( )` body:   do NOT
+        sh -c "echo \\$(rm -rf V)"      DESTROYED   dquoted payload: unescape
+        sh -c 'echo \\$(rm -rf V)'      SURVIVED    squoted payload: do NOT
+
+    That asymmetry is the entire reason this is applied at two named call
+    sites instead of as a pass over the whole segment: unescaping a `$( )`
+    body would price `echo $(echo \\$(rm -rf V))` as a delete, and a gate that
+    refuses a line the shell does not run is a gate people switch off.
+    """
+    if "\\" not in text:
+        return text
+    out: list = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] == "\\" and i + 1 < n and text[i + 1] in specials:
+            out.append(text[i + 1])
+            i += 2
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+def _c_payload_quote(segment: str):
+    """
+    The quote character the `-c` payload of `segment` was written in -- `'`,
+    `"`, or None when it was unquoted.
+
+    `shlex` removes the quotes but not the backslashes inside them, and the
+    two spellings do not mean the same thing to a shell (measured above), so
+    the payload alone cannot say whether its backslashes are still live.
+    Without this, `sh -c 'sh -c "echo \\$(rm -rf V)"'` -- which really deletes
+    -- was priced benign, because after one unwrap the classifier still saw an
+    escaped `$` and the shell did not.
+
+    Scans with quote state so a `-c` inside an argument is not mistaken for
+    the flag.  Consulted only when `_shell_c_payload` has already established
+    that this segment IS a `sh -c`.
+    """
+    i, n, quote = 0, len(segment), None
+    while i < n:
+        ch = segment[i]
+        if quote is not None:
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+            i += 1
+            continue
+        if ch == "-" and (i == 0 or segment[i - 1].isspace()):
+            j = i + 1
+            while j < n and segment[j].isalpha():
+                j += 1
+            if segment[i + 1:j] in ("c", "lc", "ic") and j < n and segment[j].isspace():
+                while j < n and segment[j].isspace():
+                    j += 1
+                return segment[j] if j < n and segment[j] in "'\"" else None
+            i = j
+            continue
+        i += 1
+    return None
 
 
 def _balanced_paren(text: str, start: int):
@@ -2288,6 +2522,34 @@ def _peel_wrappers(tokens: list):
         # cannot swallow `--flag=value`.
         if _ENV_ASSIGN_RE.match(tokens[i]):
             i += 1
+            continue
+
+        # RFX-337.  A redirection is shell grammar, not a command word.  The
+        # shell applies `>/dev/null` and then runs `rm`, but the classifier
+        # read the redirection AS the command word and priced the line an
+        # unrecognised execute:
+        #     echo $(>/dev/null rm -rf /var/lib/pgsql)   -> was allowed
+        # and it really deletes (ground truth off disk, with `> /dev/null`,
+        # `2>/dev/null` and `>>/dev/null` all destroying too).  This is the
+        # same shape as the env-assignment prefix directly above -- a prefix
+        # the shell consumes before the command begins -- with a different
+        # spelling, so it is peeled in the same place.
+        redirect = _REDIRECTION_RE.match(tokens[i])
+        if redirect:
+            # `>/dev/null` carries its target in this token; a bare `>` or
+            # `2>` puts it in the next one, which is a filename and not a
+            # command word either way.
+            nxt = i + 1
+            if redirect.end() == len(tokens[i]) and nxt < n:
+                nxt += 1
+            # A redirection with NOTHING after it is not a prefix -- it IS the
+            # operation.  `> /srv/prod/db.sqlite` truncates that file and is a
+            # delete (RFX-144's `TestTruncatingOverwrite`), so peeling it here
+            # would turn a destructive line into an empty command.  Only a
+            # redirection that something else follows is a prefix.
+            if nxt >= n:
+                break
+            i = nxt
             continue
 
         if word in _UNBOUNDED_WRAPPERS:
