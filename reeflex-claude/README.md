@@ -325,6 +325,9 @@ about.
 | `REEFLEX_CLAUDE_STATE_DIR`  | `<dir of the audit log>/.reeflex-claude-sessions` | where the once-per-session markers live that keep the coverage check off the hot path. After the first tool call of a session the check costs one `stat`. Wiping this directory makes the next call re-check and, if coverage is narrowed, re-record it. |
 | `REEFLEX_CLAUDE_MATCHER`    | written by `setup` (0.2.1+)         | the matcher `setup` wired, stamped where the hook can read it. **Only** consulted when no settings file at a fixed location names the hook — a `claude --settings <path>` launch. A settings file always wins over it, because the file is what governs now and a stamp is what `setup` wrote then. |
 | `REEFLEX_CLAUDE_TIMEOUT`    | `5`                                 | HTTP timeout to core in seconds              |
+| `REEFLEX_CLAUDE_TIMEOUT`    | `5`                                 | HTTP timeout to core in seconds. **An upper request, not a grant:** it is clamped under the hook deadline below, so raising it buys only what is left of the budget. Before RFX-321 a value above the hook entry's timeout inverted the gate to fail-**open** — see "The gate is no more fail-closed than the hook runner". |
+| `REEFLEX_CLAUDE_HOOK_TIMEOUT`| `30` (written by `setup`)          | What the hook believes the PreToolUse runner's timeout is, i.e. when it will be killed. **Read for LOWERING only** — `min(value, 30)`. A number a customer can set *above* the runner's real timeout is the RFX-321 defect, not a fix for it. `setup` writes this and the hook entry's own `timeout` from one value; `check` warns when they have drifted apart. |
+| `REEFLEX_CLAUDE_MAX_COMMAND_CHARS`| `65536`                       | Longest Bash command the classifier will tokenize. Past it the command is **not parsed** and the action is refused under `adapter/command_too_large`. **Lowerable, not raisable**, for the same reason as the hook timeout. |
 | `REEFLEX_VERIFY_SSL`        | `true` (full TLS verification)     | set to `0`/`false`/`no`/`off` (case-insensitive) to **disable** TLS certificate verification on the call to core. Insecure — dev/self-signed endpoints only, at the operator's own risk. Same env name as the WordPress adapter. |
 | `REEFLEX_CORE_TOKEN`        | unset                               | optional bearer token; when set, adds `Authorization: Bearer <token>` to the `/v1/decide` request. Never logged. Same env name as the WordPress adapter. |
 
@@ -430,6 +433,67 @@ what it does not cover is honest; one that silently drops cases from its own
 total reads as "covered everything".
 
 ## Limits / upgrade paths
+
+### The gate is no more fail-closed than the hook runner (measured)
+
+Everything below, and every fail-closed sentence in this README, is conditional
+on one thing this adapter does not own: **what Claude Code does with a
+PreToolUse hook that fails to answer cleanly.** It was assumed for a long time
+and measured for the first time by round `qa--221` on **`claude` 2.1.268**,
+against the published `reeflex-claude` 0.2.0 wheel. The observable was whether
+`rm -rf <fixture>` actually ran, with a healthy-allow and a healthy-deny control
+in the same run.
+
+| what the hook did | did the tool run? |
+|---|---|
+| well-formed JSON `deny` (exact lowercase), exit 0 | **no** — blocked |
+| exit code 2 (the documented blocking path) | **no** — blocked |
+| raised, exit 1 with a traceback | **yes** |
+| wrote non-JSON on stdout, exit 0 | **yes** |
+| wrote nothing, exit 0 | **yes** |
+| ran longer than the entry's `timeout` (killed) | **yes** |
+| `"Deny"` / `"DENY"` — one capitalised letter | **yes** |
+| `command` in settings.json does not exist | **yes** (hook never runs) |
+
+Read the right-hand column as the contract: **a hook that dies, stalls, crashes
+or mis-spells its verdict is not blocking anything.** A late `deny` is not a
+deny at all — the runner has already moved on. This is Claude Code's behaviour,
+not something the adapter chose, and it may differ on another version; re-measure
+before relying on it. `RFX-323` tracks it.
+
+Two customer-reachable conditions used to break that precondition, and both put
+`rm -rf` through with no human (RFX-321 / RFX-322):
+
+- **`REEFLEX_CLAUDE_TIMEOUT` set above the hook entry's timeout.** Two numbers
+  in two places with nothing comparing them; `45` is what an operator with a
+  slow engine reaches for. The socket waited 45 s, the runner killed the hook at
+  30 s, and the tool ran.
+- **A Bash command large enough that `classify()` alone overran the timeout**
+  (~700 KB and up — the cost is `shlex` tokenisation and is super-linear in
+  command length). Same ending.
+
+**What the adapter does about it now.** `deadline.py` starts a clock at import
+and arms a watchdog in `hook.main()`. At 80 % of the runner's timeout (24 s of
+the shipped 30 s) it writes a real verdict — `deny` in enforce mode, `allow` in
+observe, which must never block — and terminates the process, *before* the
+runner can kill it, whatever the socket or the classifier is still doing. The
+socket timeout is clamped under what is left of that budget, and `classify()`
+refuses to tokenize past `REEFLEX_CLAUDE_MAX_COMMAND_CHARS`. Every stdout write
+in `hook.py` goes through one `_emit_once()`, so the watchdog and the pipeline
+cannot both answer — two JSON lines is the "garbage on stdout" row above.
+
+**What that costs, said here rather than discovered later.** An operator who
+raises the hook entry's `timeout` to 60 s because their engine is genuinely slow
+does **not** get a 60 s budget: the deadline is derived from the built-in 30 s,
+and they will see a `deny` at ~24 s whose reason says so. Raising the ceiling
+takes a release, not an env var — the direction is deliberate, because a noisy
+deny is recoverable and a late one is the fail-open this exists to close.
+
+**What this does not close.** Nothing here helps when the hook never *starts*
+(a missing command or a broken `PATH` — RFX-205, the last row of the table) or
+when the event never reaches the hook (the matcher — RFX-204/206). Those are a
+different layer with their own tickets. This is about a hook that did start and
+has to finish in time.
 
 - **Bash classification** is heuristic — structural matching on each command
   of the line, not a shell AST.  Since RFX-144 the whole line is classified
