@@ -340,6 +340,13 @@ _VERB_CANON: dict[str, str] = {
     "batch_delete": "delete", "mass_delete": "delete", "force_delete": "delete",
     "uninstall": "delete", "deregister": "delete", "detach": "delete",
     "unpublish": "delete", "unset": "delete", "format": "delete",
+    # RFX-308: seven words an operator uses for a destruction and this map
+    # had no entry for at all.  See the "WIDENING THIS VOCABULARY" note
+    # below for why each of these is `delete` and why two of the nine words
+    # the ticket named are deliberately still absent.
+    "expire": "delete", "reset": "delete", "rotate": "delete",
+    "overwrite": "delete", "compact": "delete", "vacuum": "delete",
+    "restore": "delete",
     # -- execute: run / trigger / deploy ----------------------------------
     "execute": "execute", "exec": "execute", "run": "execute",
     "invoke": "execute", "call": "execute", "trigger": "execute",
@@ -377,6 +384,86 @@ _VERB_CANON: dict[str, str] = {
 # axis — see "WHICH DEFAULT AN UNRECOGNIZED VERB GETS" above.
 _VERB_DEFAULT_IRREVERSIBLE: str = "delete"
 _VERB_DEFAULT: str = "update"
+
+# ---------------------------------------------------------------------------
+# RFX-308: WIDENING THIS VOCABULARY — AND THE ONE DIRECTION IT MUST NOT MOVE.
+#
+# THE GAP.  reeflex-mcp's `_MUTATING_STEMS` (51 stems, RFX-175) is the other
+# layer's reading of "this word names a mutation".  42 of the 51 had an entry
+# here.  NINE did not: expire, reset, restore, rotate, overwrite, commit,
+# compact, vacuum, install.  Measured on the deployed v0.2.1 (image id
+# sha256:2f18d19f…, whose `envelope.py` is byte-identical to origin/main), one
+# /v1/decide per word with only `action.verb` varying, canonical verb read back
+# out of the container's own audit line:
+#
+#     verb: "vacuum"   irreversible/single/internal/production -> recorded
+#                      `delete`  (the F6 default, not the word)
+#     verb: "vacuum"   REVERSIBLE/single/internal/production   -> recorded
+#                      `update`  (the policy-inert default)
+#     ability: "db/vacuum-rows" with verb "read"               -> recorded
+#                      `read`, decided reeflex.policy/read_only_internal
+#
+# i.e. each of the nine was indistinguishable from `frobnicate`, and 25
+# reversible `expire` / `overwrite` / `vacuum` calls in one session charged
+# R5's deletions budget nothing at all (the canonical-`delete` control in the
+# same run held on call 21).  The ability cross-check below shared the gap: it
+# resolves the operation id through THIS map, so an adapter naming the
+# operation honestly — `db/expire-rows` — signalled nothing.
+#
+# THE TRAP, AND WHY THE TICKET'S OWN PROPOSED MAPPING WOULD HAVE WEAKENED CORE.
+# RFX-308 suggested `rotate/overwrite/compact/vacuum -> update` and
+# `restore -> create`.  Measuring what happens TODAY shows why that is the
+# wrong direction: an unrecognized IRREVERSIBLE verb already resolves to
+# `delete` (the guarded default, twenty lines above).  So mapping any of these
+# words to a non-`delete` member would REMOVE an irreversible production
+# `overwrite` from the one budget that prices destruction — a de-escalation
+# bought with a compound fix, on the exact surface R5 exists to close.
+#
+# THE RULE THIS MAP NOW FOLLOWS, STATED SO THE NEXT ADDITION KEEPS IT: a word
+# joins the destructive section only if `delete` is at least as guarded as
+# what it resolves to today on BOTH reversibility values.  In practice that
+# means the widening is `delete` or nothing, and the seven above are the ones
+# that earn it — each names the removal of state that was there before:
+#   expire    a session, token or object stops existing (neighbours: `evict`,
+#             `flush`, `revoke`)
+#   reset     current state is discarded for the initial one (`truncate`)
+#   rotate    the superseded credential stops working (`revoke`)
+#   overwrite the prior content is gone.  `replace` is still `update`, which
+#             is deliberate and is the asymmetry a reader will ask about:
+#             `search_and_replace` names a write, `overwrite_backup` names the
+#             loss of the backup.
+#   compact   superseded versions and tombstones are dropped
+#   vacuum    same, under the word a DBA uses for it
+#   restore   from the operator's side this creates; from the data's side the
+#             live state it lands on is gone, and that is the side a budget
+#             called "deletions" is counting.
+#
+# `commit` AND `install` ARE DELIBERATELY ABSENT, and this is the residual.
+# Neither names a destruction (`commit` is a transaction or a revision;
+# `install` adds software), so neither earns `delete`, and mapping them to
+# `transact`/`execute` would lower today's guard on their irreversible use.
+# What that leaves open: WITH the RFX-304 election in the tree, a compound
+# like `count_and_install` still elects `count` -> `read` -> R1.  That is
+# unchanged by this commit rather than introduced by it, and the fix for it is
+# a rule about UNKNOWN words in the election (an unknown word outranking
+# `read`, since an unknown word never resolves to `read` on its own), not more
+# vocabulary.  Filed separately.
+#
+# THE COST, MEASURED (dev-1--080 evidence).  A word here escalates any name
+# that CONTAINS it, so a genuine read can be priced a delete.  Over the 39
+# real MCP tool names in reeflex-mcp's own test corpus the wrong-escalation
+# count is 0 and `count_and_compact` — the name RFX-308 is written around —
+# stops reading as `read`; over nine read-only names built adversarially to
+# carry one of these words, four escalate (`get_reset_token_status`,
+# `get_overwrite_policy`, `show_vacuum_progress`, `describe_restore_point`).
+# The past-tense and noun forms an operator actually writes for a read do NOT
+# match, because this map has no entry for them: `list_expired_sessions`,
+# `list_installed_packages`, `get_compaction_stats` and `check_rotation_
+# schedule` stay reads.  A wrong escalation costs a HOLD once the operator's
+# deletions budget is spent, names its reason, and is removed by declaring a
+# canonical verb — one field.  The other direction costs a customer their data
+# with no human in it.
+# ---------------------------------------------------------------------------
 
 # Separators an adapter may use inside a compound verb ("hard-delete",
 # "hard delete", "hard.delete", "delete/all") — all folded to "_" so one
