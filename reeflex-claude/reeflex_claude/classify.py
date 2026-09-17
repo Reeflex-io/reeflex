@@ -479,6 +479,14 @@ _UNBOUNDED_WRAPPERS = frozenset(["xargs", "parallel"])
 
 _RM_COMMANDS = frozenset(["rm", "rmdir", "unlink", "shred"])
 
+# Account / group destruction (RFX-166).  Deleting a principal removes the
+# account row and its credentials; a shell has no undo and no trash for it,
+# which is why the shared corpus prices it `irreversible` on both reference
+# adapters (reeflex-spec/conformance/reversibility.json::user/single).
+_ACCOUNT_DELETE_COMMANDS = frozenset([
+    "userdel", "deluser", "groupdel", "delgroup",
+])
+
 # ---------------------------------------------------------------------------
 # RFX-144 (ported from PR #98, dev-1 round 054) -- a path that names a
 # CONTAINER of records rather than one leaf entity.
@@ -962,6 +970,32 @@ def _infra_destructive(cmd0: str, args: list, low: list, segment: str):
         if "rm" in low:
             return ("container_delete", "scoped", _first_positional(args))
         return None
+
+    # Account / group destruction -- the principal is gone (RFX-166).
+    #
+    # Before this branch existed the whole family matched nothing here and fell
+    # through to the default Bash EXECUTE arm, which prices `recoverable`.
+    # reversibility is one of the two axes R2/R3 read to hold a destructive
+    # action, so the adapter was telling core that a deleted account could be
+    # restored.  The WordPress adapter has priced the same operation
+    # `irreversible` since RFX-164; this is the one row where the two reference
+    # adapters still genuinely disagreed, and it disagreed in the direction that
+    # under-prices.
+    #
+    # blast_radius stays `scoped`, which is exactly what the default branch
+    # already returned.  SPEC §4.2 lets a name-derived signal RAISE and never
+    # lower, and the cardinality of `userdel alice` is not what was wrong here.
+    #
+    # `deluser alice sudo` / `delgroup alice sudo` name a user AND a group: that
+    # is a membership removal, undone by granting the membership again.  It is
+    # left to the default branch rather than priced as a destruction, because
+    # over-blocking an ordinary permission change is its own defect (RFX-249).
+    # `userdel` and `groupdel` take no such second positional, so the test is
+    # applied only to the two commands that do.
+    if cmd0 in _ACCOUNT_DELETE_COMMANDS:
+        if cmd0 in ("deluser", "delgroup") and len(_positional_args(args)) >= 2:
+            return None
+        return ("account_delete", "scoped", _first_positional(args))
 
     # Disk / filesystem level -- not recoverable at all.
     if cmd0 in _DISK_COMMANDS or cmd0.startswith("mkfs"):
