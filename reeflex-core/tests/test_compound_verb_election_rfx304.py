@@ -215,6 +215,70 @@ class TestVerbFirstConventionPreserved(unittest.TestCase):
         )
 
 
+class TestAReadIsOnlyElectedFromTheLEADINGWord(unittest.TestCase):
+    """The election must not be WEAKER than the fallback it replaces.
+
+    Found by dev-1--080's census, measured on two cores one file apart, same
+    image and same policy: with the rank table alone, a compound whose
+    operative verb the canon does not know resolved to `read` as soon as the
+    name contained an incidental read NOUN — "log", "index", "status",
+    "query".  origin/main lands those on the reversibility default (`delete` /
+    `update`); the election handed them R1:
+
+        compact_event_log          irreversible  main: delete   election: read
+        vacuum_audit_log           irreversible  main: delete   election: read
+        rebuild_search_index       irreversible  main: delete   election: read
+        refresh_materialized_status              main: delete   election: read
+
+    Operation names are verb-first, which is the convention the last resort
+    exists to exploit.  A read word LEADING is the operation; a read word
+    after a leading word we do not recognize is its object.  So `read` is
+    electable from the leading word only, and everything the last resort was
+    added for is unaffected (TestVerbFirstConventionPreserved, above, is the
+    other half of this assertion).
+    """
+
+    # (name, what it must resolve to on an IRREVERSIBLE action)
+    LEADING_WORD_UNKNOWN = [
+        ("compact_event_log", "delete"),
+        ("vacuum_audit_log", "delete"),
+        ("rebuild_search_index", "delete"),
+        ("refresh_materialized_status", "delete"),
+        ("frobnicate_and_list", "delete"),
+        ("zorp_query", "delete"),
+    ]
+
+    def test_an_incidental_read_noun_does_not_make_a_compound_a_read(self):
+        for raw, expected in self.LEADING_WORD_UNKNOWN:
+            with self.subTest(verb=raw):
+                self.assertEqual(_verb(raw, ability=None), expected)
+
+    def test_and_it_lands_on_the_inert_default_when_reversible(self):
+        # Never `read`: that is the one member that would hand out R1.
+        for raw, _ in self.LEADING_WORD_UNKNOWN:
+            with self.subTest(verb=raw):
+                self.assertEqual(
+                    _verb(raw, ability=None, reversibility="reversible"),
+                    "update",
+                )
+
+    def test_a_leading_read_word_is_still_the_operation(self):
+        # The verb-first names this election exists to serve, including the
+        # three-word forms where the later words are unknown.
+        for raw in ("GetObject", "ListBuckets", "query_status",
+                    "list_deleted_objects", "get_pull_request_comments",
+                    "list_directory_with_sizes", "search_files"):
+            with self.subTest(verb=raw):
+                self.assertEqual(_verb(raw, ability=None), "read")
+
+    def test_a_known_non_read_word_still_wins_wherever_it_sits(self):
+        # The guard only suppresses a non-leading READ; it does not touch the
+        # election itself.
+        self.assertEqual(_verb("truncate_and_count", ability=None), "delete")
+        self.assertEqual(_verb("findOneAndDelete", ability=None), "delete")
+        self.assertEqual(_verb("get_and_transfer", ability=None), "transact")
+
+
 class TestTheEscalationCostIsRealAndPinned(unittest.TestCase):
     """The price of the election, asserted rather than left for a surprise.
 

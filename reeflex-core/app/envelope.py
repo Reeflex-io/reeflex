@@ -504,6 +504,35 @@ def _verb_last_resort_key(raw_verb: str) -> str | None:
         rank = _VERB_GUARD_RANK[canon]
         if rank > best_rank:          # strict: first word of a rank wins
             best_rank, best_word = rank, word
+    # A `read` MAY ONLY BE ELECTED FROM THE LEADING WORD (dev-1--080).
+    #
+    # Measured on a core running this file against one running origin/main's,
+    # same image, same policy, one file apart:
+    #
+    #   verb "compact_event_log"    irreversible -> origin/main: `delete`
+    #                                               this rule w/o the guard
+    #                                               below: `read` = R1
+    #   verb "rebuild_search_index"              -> same
+    #   verb "refresh_materialized_status"       -> same
+    #   verb "zorp_query"                        -> same
+    #
+    # The election is only as good as the word it elects.  When the operative
+    # verb is one the canon does NOT know, an incidental read NOUN later in
+    # the name ("log", "index", "status", "query") was the highest-ranked
+    # known word, so the compound resolved to `read` — strictly WEAKER than
+    # the fallback it replaced, which lands an unknown compound on the
+    # reversibility default (`delete` / `update`) and never on `read`.
+    #
+    # The convention this file already relies on settles it: operation names
+    # are VERB-FIRST.  A read word in the leading position IS the operation
+    # ("GetObject", "list_deleted_objects", "query_status" — all preserved);
+    # a read word after a leading word we do not recognize is an object, not
+    # the verb.  So when every known word is a read and none of them leads,
+    # this returns None and the caller falls through to the default that
+    # `_VERB_DEFAULT_IRREVERSIBLE`'s note above calls "deliberately NOT read,
+    # which would hand out R1".
+    if best_rank == 0 and best_word != words[0]:
+        return None
     return best_word
 
 
