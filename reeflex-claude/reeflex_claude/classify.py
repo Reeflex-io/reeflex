@@ -1784,6 +1784,96 @@ def _split_on_operators(command: str) -> list:
     return [p for p in (x.strip() for x in parts) if p]
 
 
+def _paren_balance(text: str) -> int:
+    """
+    Net unquoted paren depth of `text` -- opens minus closes -- ignoring any
+    paren inside quotes or behind a backslash.
+
+    This is what tells a subshell's own closing `)` from the `)` that
+    terminates a `$(...)`.  `_split_on_operators` cuts at operators and knows
+    nothing about groups, so the close of `(cd /tmp && ls)` is left stranded on
+    the last segment (`ls)`, balance -1) while the close of
+    `echo $(rm -rf V)` sits in a segment that is balanced (0).  Only the
+    stranded one may be stripped; taking the other would leave
+    `echo $(rm -rf V` and blind `_substitution_bodies`, undoing RFX-301.
+    """
+    depth = 0
+    quote = None
+    i, n = 0, len(text)
+
+    while i < n:
+        ch = text[i]
+
+        if quote is not None:
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+
+        if ch in ("'", '"'):
+            quote = ch
+        elif ch == "\\" and i + 1 < n:
+            i += 2
+            continue
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        i += 1
+
+    return depth
+
+
+def _peel_group(segment: str) -> str:
+    """
+    Strip the parentheses of a subshell group, so the command word of the
+    segment is the command and not the literal `(rm`.
+
+    RFX-329: one pair of parentheses was the shortest string that escaped the
+    classifier entirely.  `(rm -rf /srv/prod/data)` survives
+    `_split_on_operators` as a single segment, and `shlex` then tokenises it as
+    `['(rm', '-rf', 'V)']`.  `(rm` matches no branch of `_infra_destructive` or
+    `_classify_bash_delete`, so the line fell through to the default Bash
+    EXECUTE arm and was priced execute/recoverable/scoped -- ALLOW -- while
+    bash really deletes the directory.  The target ref was mangled to `V))`
+    too, so R6 could not rescue it either.  The brace group `{ rm -rf V; }`,
+    which has the same semantics, was priced delete/irreversible/broad, so this
+    was specifically the parenthesis form.
+
+    Peeled here rather than in `_split_on_operators` because the splitter's
+    output is also what `_substitution_bodies` reads: cutting at `(` would
+    break `$(...)` apart and undo RFX-301.
+
+    `((...))` is deliberately NOT peeled.  That is arithmetic evaluation, not a
+    subshell -- bash reads `rm` there as a variable name and deletes nothing --
+    so pricing it as the inner command would be a false positive.  The
+    false-positive floor matters as much as the catch here: a subshell is an
+    ordinary thing to write, and `(cd /tmp && ls)` must stay allowed.  It does:
+    peeling makes its segments `cd /tmp` and `ls`, both reads.
+    """
+    text = segment.strip()
+
+    while True:
+        changed = False
+
+        if text.startswith("(") and not text.startswith("(("):
+            text = text[1:].strip()
+            changed = True
+
+        # Only a close with nothing to match it in this segment.
+        while text.endswith(")") and _paren_balance(text) < 0:
+            text = text[:-1].strip()
+            changed = True
+
+        if not changed:
+            break
+
+    return text
+
+
 def _shell_c_payload(tokens: list):
     """
     Return the program text of a `sh -c '<inner>'` invocation, else None.
@@ -1847,6 +1937,15 @@ def _shell_segments(command: str, depth: int = 0) -> list:
 
     out: list = []
     for segment in _split_on_operators(command):
+        # RFX-329.  Before anything reads the command word, take off the
+        # parentheses of a subshell group -- they are shell grammar, not part
+        # of the command.  Done here so every consumer of a segment sees it:
+        # `_classify_segment`, and `_sql_reachable`, which could not see the
+        # client in `(psql -c '...')` either.
+        segment = _peel_group(segment)
+        if not segment:
+            continue
+
         inner = None
         if depth < 3:
             peeled, _ = _peel_wrappers(_safe_split(segment))
