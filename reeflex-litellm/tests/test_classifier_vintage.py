@@ -156,6 +156,16 @@ DESTRUCTIVE_SUBSTITUTIONS = [
     # whole reason the exclusion list has a test of its own.
     ("subst-subshell-group", "echo $( (rm -rf /var/lib/pgsql) )"),
     ("bare-subshell-group", "(rm -rf /var/lib/pgsql)"),
+    # And these five the same way: RFX-336/RFX-337 landed (dev-2 round 071,
+    # the `depth < 3` ceiling replaced by a work budget, backtick bodies
+    # unescaped, `sh -c` payload unescaped unless single-quoted, and a
+    # redirection peeled off the front of the command word).
+    ("subst-nest-4", "echo $(echo $(echo $(echo $(rm -rf /var/lib/pgsql))))"),
+    ("subst-nest-5", "echo $(echo $(echo $(echo $(echo "
+                     "$(rm -rf /var/lib/pgsql)))))"),
+    ("subst-backtick-nested", "echo `echo \\`rm -rf /var/lib/pgsql\\``"),
+    ("subst-redirect-first", "echo $(>/dev/null rm -rf /var/lib/pgsql)"),
+    ("subst-nested-sh-c", "sh -c 'sh -c \"echo \\$(rm -rf /var/lib/pgsql)\"'"),
 ]
 
 # Lines the same walk must NOT price as a delete.  Without these, this file is
@@ -180,22 +190,11 @@ BENIGN_SUBSTITUTIONS = [
 # guarding (the rule `conformance.py` residuals and `check_test_census.py`
 # waivers already run under).
 #
-# Measured on main `7f19d37`, 2026-09-17, through this same path.
-# It was nine on `0d9ef31` an hour earlier; RFX-329 took two of them.
+# Measured on main `ba3ccb4`, 2026-09-17, through this same path.
+# It was nine on `0d9ef31`; RFX-329 took two, and RFX-336/RFX-337 took five
+# more (dev-2 round 071), each moved up into the corpus above because this
+# file's own test went red naming it -- the third time that has worked.
 STILL_OPEN = {
-    # The substitution walk stops before this depth.
-    "open-nest-4": ("echo $(echo $(echo $(echo $(rm -rf /var/lib/pgsql))))",
-                    "RFX-336"),
-    "open-nest-5": ("echo $(echo $(echo $(echo $(echo "
-                    "$(rm -rf /var/lib/pgsql)))))", "RFX-336"),
-    "open-backtick-nest": ("echo `echo \\`rm -rf /var/lib/pgsql\\``",
-                           "RFX-336"),
-    # A redirection before the command word inside the body.
-    "open-redirect-first": ("echo $(>/dev/null rm -rf /var/lib/pgsql)",
-                            "RFX-337"),
-    # `sh -c` inside `sh -c`, with the substitution escaped for the inner shell.
-    "open-nested-sh-c": ("sh -c 'sh -c \"echo \\$(rm -rf /var/lib/pgsql)\"'",
-                         "RFX-337"),
     # The substitution PRODUCES the command word; closing it means evaluating
     # the substitution. Declared a residual in conformance.py as
     # `gap-command-substitution`.
