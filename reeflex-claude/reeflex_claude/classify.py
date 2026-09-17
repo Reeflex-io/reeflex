@@ -1784,6 +1784,62 @@ def _split_on_operators(command: str) -> list:
     return [p for p in (x.strip() for x in parts) if p]
 
 
+def _paren_prefix_balance(text: str) -> list:
+    """
+    Net unquoted paren depth of every PREFIX of `text`: the returned list `p`
+    has `len(text) + 1` entries and `p[i]` is the depth of `text[:i]`, ignoring
+    any paren inside quotes or behind a backslash.
+
+    This is the single scan `_paren_balance` and `_peel_group` both read, so
+    the quoting rules cannot drift between them.
+
+    RFX-335: `_peel_group` used to call the whole-string `_paren_balance` once
+    per stripped character, which is O(n^2) on a run of unmatched closers.
+    Measured on `7f19d374`: 8000 closers took 6.19s, and a full
+    `MAX_BASH_COMMAND_CHARS` run took 417.45s -- against a 30s hook timeout.
+    Because the depth of `text[:i]` does not depend on anything after `i`, one
+    pass answers every question the peel loop asks: the balance of a window
+    `text[lo:hi]` that starts outside quotes is exactly `p[hi] - p[lo]`.
+    """
+    n = len(text)
+    prefix = [0] * (n + 1)
+    depth = 0
+    quote = None
+    i = 0
+
+    while i < n:
+        ch = text[i]
+
+        if quote is not None:
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                prefix[i + 1] = depth
+                prefix[i + 2] = depth
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            prefix[i + 1] = depth
+            i += 1
+            continue
+
+        if ch in ("'", '"'):
+            quote = ch
+        elif ch == "\\" and i + 1 < n:
+            prefix[i + 1] = depth
+            prefix[i + 2] = depth
+            i += 2
+            continue
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+
+        prefix[i + 1] = depth
+        i += 1
+
+    return prefix
+
+
 def _paren_balance(text: str) -> int:
     """
     Net unquoted paren depth of `text` -- opens minus closes -- ignoring any
@@ -1806,34 +1862,7 @@ def _paren_balance(text: str) -> int:
     promises to preserve -- not because a measurement shows it changing a
     verdict today.
     """
-    depth = 0
-    quote = None
-    i, n = 0, len(text)
-
-    while i < n:
-        ch = text[i]
-
-        if quote is not None:
-            if ch == "\\" and quote == '"' and i + 1 < n:
-                i += 2
-                continue
-            if ch == quote:
-                quote = None
-            i += 1
-            continue
-
-        if ch in ("'", '"'):
-            quote = ch
-        elif ch == "\\" and i + 1 < n:
-            i += 2
-            continue
-        elif ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-        i += 1
-
-    return depth
+    return _paren_prefix_balance(text)[-1]
 
 
 def _peel_group(segment: str) -> str:
@@ -1865,22 +1894,44 @@ def _peel_group(segment: str) -> str:
     """
     text = segment.strip()
 
+    # Nothing to peel, and it keeps the scan below off the hot path for the
+    # overwhelming majority of commands, which contain no parenthesis at all.
+    if "(" not in text and ")" not in text:
+        return text
+
+    # RFX-335: peel by moving a window over ONE prefix-balance scan, instead of
+    # re-slicing the string and re-balancing it per stripped character.  The
+    # loop structure below is deliberately the same shape as the O(n^2) version
+    # it replaces -- `prefix[hi] - prefix[lo]` is what `_paren_balance` of the
+    # current text used to return, and `lo`/`hi` are what `.strip()` used to do.
+    prefix = _paren_prefix_balance(text)
+    lo, hi = 0, len(text)
+
     while True:
         changed = False
 
-        if text.startswith("(") and not text.startswith("(("):
-            text = text[1:].strip()
+        # `lo` only ever steps over an unquoted `(` or whitespace, so it stays
+        # outside quotes -- which is what makes `prefix[hi] - prefix[lo]` the
+        # balance of the window rather than of some quoted fragment.
+        if hi - lo >= 1 and text[lo] == "(" and not (
+            hi - lo >= 2 and text[lo + 1] == "("
+        ):
+            lo += 1
+            while lo < hi and text[lo].isspace():
+                lo += 1
             changed = True
 
         # Only a close with nothing to match it in this segment.
-        while text.endswith(")") and _paren_balance(text) < 0:
-            text = text[:-1].strip()
+        while hi > lo and text[hi - 1] == ")" and prefix[hi] - prefix[lo] < 0:
+            hi -= 1
+            while hi > lo and text[hi - 1].isspace():
+                hi -= 1
             changed = True
 
         if not changed:
             break
 
-    return text
+    return text[lo:hi]
 
 
 def _shell_c_payload(tokens: list):
