@@ -80,8 +80,37 @@ classifiers = [
 # closed yet: this only becomes true on the index once the console publishes
 # 0.2.0 (release is console-sequenced), and `reeflex-litellm` is itself on no
 # index, so nothing installs this from PyPI today either way.
+#
+# THE FLOOR MOVED AGAIN, TO 0.2.1, AND THE LAST SENTENCE ABOVE STOPPED BEING
+# TRUE THE DAY IT WAS WRITTEN (RFX-326). `reeflex-litellm 0.1.0` was uploaded to
+# PyPI on 2026-09-16T06:29:54Z. From that moment the `>=0.2.0` floor was no
+# longer a statement about a package nobody could install: it was the floor a
+# real `pip install reeflex-litellm` resolved against, and the newest wheel
+# satisfying it -- `reeflex-claude 0.2.0`, uploaded 23 seconds earlier the same
+# morning -- PREDATES RFX-301 by a day.
+#
+# Measured 2026-09-17 on that exact resolve, driven through this package's own
+# `reeflex-litellm decide` against a core running the live image: 23 of qa-211's
+# 24 destructive command-substitution lines came back `allow`, most under
+# `reeflex.policy/read_only_internal`. `echo $(rm -rf /var/lib/pgsql)` was one
+# of them. Nothing in this package and nothing in core was at fault; the floor
+# admitted a classifier that reads only the outer command word.
+#
+# `reeflex_claude` 0.2.1 is the first version whose tree carries RFX-301
+# (`_substitution_bodies`, commit f1cb5bb 2026-09-17 09:00; the version bump to
+# 0.2.1 came later the same day in 7efbeaf), so >=0.2.1 excludes the mispricing
+# BY VERSION. Until the console publishes 0.2.1 this floor makes
+# `pip install reeflex-litellm` FAIL rather than resolve a classifier that
+# misprices a delete -- which is the direction this package fails in everywhere
+# else. Both distributions ship from the same monorepo tag, so a release that
+# publishes this package publishes a `reeflex-claude` that satisfies it.
+#
+# A floor is still only a declaration about somebody else's index. The
+# measurement that goes with it is `reeflex_litellm/vintage.py`, which scores
+# the classifier ACTUALLY LOADED in the process on every seat's first call and
+# refuses the call if it misprices the canaries.
 dependencies = [
-    "reeflex-claude>=0.2.0,<0.3",
+    "reeflex-claude>=0.2.1,<0.3",
 ]
 
 # litellm is OPTIONAL on purpose.  The decision logic (normalize / envelope /

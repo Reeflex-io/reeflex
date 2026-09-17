@@ -234,6 +234,11 @@ SKIP_REGISTRY = {
         "unreachable — deliberately, because 'I could not install the wheel' must "
         "never render as 'the wheel is fine'. On a box with an index this "
         "component has no reason to skip.",
+    "pypi-litellm-seat":
+        "needs the PyPI index to resolve `reeflex-litellm` and whatever "
+        "reeflex-claude its floor admits (RFX-326). Same skip rules as "
+        "pypi-behaviour, and the same reason: a seat that could not be installed "
+        "is not a seat that was measured.",
     "unittest-core":
         "the core suite silently drops its ~40 opa-dependent tests without the opa "
         "binary, so without opa the whole component is a loud SKIP rather than a "
@@ -269,6 +274,7 @@ CORPUS_LIVE_RE = re.compile(r"^CORPUS-LIVE: (PASS|FAIL) \((.*)\)$", re.M)
 CORPUS_SELFTEST_RE = re.compile(r"^SELFTEST: (PASS|FAIL) \((.*)\)$", re.M)
 
 PUBLISHED_CLASSIFIER_RE = re.compile(r"^PUBLISHED-CLASSIFIER: (PASS|FAIL|SKIP) \((.*)\)$", re.M)
+PUBLISHED_SEAT_RE = re.compile(r"^PUBLISHED-LITELLM-SEAT: (PASS|FAIL|SKIP) \((.*)\)$", re.M)
 USAGE_RE_TMPL = r"^usage: %s\b"
 COMPONENT_RE = re.compile(r"^COMPONENT ([a-z0-9-]+): (PASS|FAIL|SKIPPED|DELEGATED)\b(?: \((.*)\))?$")
 
@@ -396,6 +402,25 @@ def parse_corpus_live(exit_code, text):
         return False, "%s (exit %d)" % (m.group(2), exit_code)
     return False, ("exit %d and no anchored 'CORPUS-LIVE:' verdict — the live "
                    "corpus arm did not finish, so nothing was compared" % exit_code)
+
+def parse_published_seat(exit_code, text):
+    """RFX-326. Same three-valued contract as parse_published_classifier.
+
+    A SEPARATE regex on a SEPARATE anchor on purpose. The two arms install
+    different distributions and score different planes; sharing the anchor
+    would let one arm's verdict be read as the other's, which is a way to have
+    two components and one measurement.
+    """
+    m = PUBLISHED_SEAT_RE.search(text)
+    if m and m.group(1) == "SKIP" and exit_code == 3:
+        return "SKIPPED", m.group(2)
+    if exit_code == 0 and m and m.group(1) == "PASS":
+        return "PASS", m.group(2)
+    if m and m.group(1) == "FAIL":
+        return "FAIL", "%s (exit %d)" % (m.group(2), exit_code)
+    return "FAIL", ("exit %d and no anchored 'PUBLISHED-LITELLM-SEAT:' verdict — "
+                    "the published gateway seat was not scored" % exit_code)
+
 
 def parse_published_classifier(exit_code, text):
     """RFX-241. Returns (status, detail) where status is PASS/FAIL/SKIPPED.
@@ -825,6 +850,34 @@ class Gate:
         self.show(out, full=status != "PASS", tail=8)
         self.component(key, status, detail)
 
+    def run_published_seat(self):
+        # RFX-326. pypi-behaviour scores `pip install reeflex-claude`. NOTHING
+        # scored `pip install reeflex-litellm`, and on 2026-09-16 that stopped
+        # being theoretical: the gateway seat went to PyPI, its own floor
+        # resolved the reeflex-claude wheel uploaded 23 seconds earlier, and the
+        # seat a customer installs allowed 23 of 24 destructive
+        # command-substitution lines. The lag was DECLARED in the other arm,
+        # correctly and with the right ticket — but a waiver is a statement
+        # about blast radius, and nobody re-measured the radius when a second
+        # published package started standing on the waived wheel.
+        #
+        # This arm asks the customer's question: what does THAT resolve decide,
+        # through the seat's own normaliser. It is not a duplicate of
+        # pypi-behaviour: the two install different distributions, and
+        # reeflex-litellm's floor is its own declaration, which a future edit
+        # can move without touching reeflex-claude at all.
+        key = "pypi-litellm-seat"
+        if self.args.pypi == "skip":
+            self.component(key, "SKIPPED", "explicitly disabled via --pypi skip (tree-health run)")
+            return
+        code, out = self.run_cmd(
+            [sys.executable, os.path.join(REPO_ROOT, "scripts",
+                                          "check_published_classifier.py"),
+             "--seat", REPO_ROOT])
+        status, detail = parse_published_seat(code, out)
+        self.show(out, full=status != "PASS", tail=8)
+        self.component(key, status, detail)
+
     def run_published_classifier_selftest(self):
         # The instrument before the verdict. Every branch of the comparison —
         # fail-open, fail-noisy, a declared lag, a STALE declaration, an empty
@@ -1210,6 +1263,7 @@ class Gate:
 
             ("pypi-behaviour-selftest  the published-wheel comparison, on fixtures, before its verdict is trusted", self.run_published_classifier_selftest),
             ("pypi-behaviour  the PUBLISHED reeflex-claude scored with this tree's corpus (RFX-241)", self.run_published_classifier),
+            ("pypi-litellm-seat  the PUBLISHED reeflex-litellm SEAT, and the classifier its own floor admits (RFX-326)", self.run_published_seat),
             ("wp-conformance  WordPress live-core harness", self.run_wp),
             ("wp-spec-conformance  SPEC axis vectors, no live core (RFX-131, RFX-164)", self.run_wp_spec),
             ("dep-floors-selftest  the manifest parser, on fixtures, before its verdict is trusted", self.run_dep_floors_selftest),
@@ -1395,6 +1449,26 @@ def selftest():
           == "SKIPPED")
     check("pypi-behaviour refuses a SKIP line that did not exit 3",
           parse_published_classifier(0, "PUBLISHED-CLASSIFIER: SKIP (not installable)\n")[0]
+          == "FAIL")
+
+    # RFX-326. The seat arm's parser, including the one failure mode that is
+    # specific to having two arms: each must read ONLY its own anchor, or a
+    # green line from one component silently becomes the other's verdict.
+    check("pypi-litellm-seat accepts real PASS",
+          parse_published_seat(0, "PUBLISHED-LITELLM-SEAT: PASS (reeflex-litellm==0.1.0; "
+                                  "96 cases scored)\n")[0] == "PASS")
+    check("pypi-litellm-seat reports FAIL verbatim",
+          parse_published_seat(1, "PUBLISHED-LITELLM-SEAT: FAIL (10 fail-open)\n")[0]
+          == "FAIL")
+    check("pypi-litellm-seat refuses exit 0 with no anchored line",
+          parse_published_seat(0, "installed the seat, looked ok\n")[0] == "FAIL")
+    check("pypi-litellm-seat reports an unreachable index as SKIPPED, not PASS",
+          parse_published_seat(3, "PUBLISHED-LITELLM-SEAT: SKIP (not installable)\n")[0]
+          == "SKIPPED")
+    check("pypi-litellm-seat does NOT read the classifier arm's anchored line",
+          parse_published_seat(0, "PUBLISHED-CLASSIFIER: PASS (all clean)\n")[0] == "FAIL")
+    check("pypi-behaviour does NOT read the seat arm's anchored line",
+          parse_published_classifier(0, "PUBLISHED-LITELLM-SEAT: PASS (all clean)\n")[0]
           == "FAIL")
 
     # skip-ledger: an allowance without a written justification is refused (RFX-108)

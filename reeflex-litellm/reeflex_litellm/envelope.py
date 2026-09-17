@@ -107,6 +107,7 @@ from reeflex_claude import classify as _claude_classify
 from reeflex_claude import envelope as _claude_envelope
 
 from . import tenancy as _tenancy
+from . import vintage as _vintage
 
 NAMESPACE = "litellm-gateway"
 AGENT_PREFIX = "agent:litellm-gateway"
@@ -134,7 +135,16 @@ def build_gateway_envelope(
     `build_envelope()` and deliberately not softened: an envelope with no
     session cannot be charged to a cumulative budget, so accepting one would
     make R5 unenforceable for that request.
+
+    Raises `vintage.StaleClassifier` when the `reeflex_claude` resolved into
+    this process misprices the canary lines (RFX-326).  Both exceptions land in
+    `enforce.rule_one_call()`'s fail-closed branch, so the tool call is
+    REFUSED.  This is the single funnel every seat classifies through -- the
+    guardrail, the connector and the CLI -- which is why the check lives here
+    and not in three constructors.
     """
+    _vintage.assert_usable()
+
     cls = _claude_classify.classify(call.tool_name, call.tool_input)
 
     env = _claude_envelope.build_envelope(

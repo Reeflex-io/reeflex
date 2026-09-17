@@ -177,6 +177,53 @@ PUBLISHED_LAG: dict = {
     "destroy-subst-systemic":        "RFX-301",
 }
 
+# --------------------------------------------------------------------------
+# THE SEAT ARM (RFX-326): the same corpus, one DISTRIBUTION out.
+#
+# The block above scores `pip install reeflex-claude`. No component scored
+# `pip install reeflex-litellm`, and on 2026-09-16 that stopped being a
+# theoretical gap: `reeflex-litellm 0.1.0` went to PyPI, its floor
+# `reeflex-claude>=0.2.0` resolved the 0.2.0 wheel uploaded 23 seconds earlier,
+# and the gateway seat a customer installs allowed 23 of 24 destructive
+# command-substitution lines (qa-211, measured through the package's own
+# `reeflex-litellm decide` against a core running the live image).
+#
+# The lag was DECLARED in PUBLISHED_LAG above, with the correct ticket, on the
+# correct reasoning -- and the declaration's cost was priced against a world in
+# which `reeflex-litellm` was "on no index, so nothing installs this from PyPI
+# today either way" (its own pyproject said so). That sentence stopped being
+# true the day it was written. A waiver is a statement about blast radius, and
+# nothing re-measured the radius when a second published package started
+# standing on the waived wheel.
+#
+# So this arm asks the customer-facing question directly: resolve
+# `reeflex-litellm` from the index, and score what THAT resolve decides, through
+# the seat's own normaliser rather than through `classify()` in isolation.
+SEAT_DIST = "reeflex-litellm"
+SEAT_ANCHOR = "PUBLISHED-LITELLM-SEAT"
+
+# The seat's own lag table. Same shape, same rules, same self-clearing
+# behaviour: each entry names the ticket that closes it, an entry that stops
+# diverging FAILS as STALE, and a declaration naming no ticket FAILS.
+#
+# These are the SAME ten cases as PUBLISHED_LAG, reached one distribution
+# further out, and they close the same way: a republish. They are listed
+# separately rather than aliased because the two resolves are independent --
+# `reeflex-litellm`'s floor is its own declaration and a future edit to it can
+# move this arm without moving the other.
+SEAT_PUBLISHED_LAG: dict = {
+    "destroy-subst-dollar-paren":    "RFX-326",
+    "destroy-subst-backticks":       "RFX-326",
+    "destroy-subst-bare":            "RFX-326",
+    "destroy-subst-double-quoted":   "RFX-326",
+    "destroy-subst-nested":          "RFX-326",
+    "destroy-subst-after-separator": "RFX-326",
+    "destroy-subst-in-argument":     "RFX-326",
+    "destroy-subst-process":         "RFX-326",
+    "destroy-subst-process-write":   "RFX-326",
+    "destroy-subst-systemic":        "RFX-326",
+}
+
 TICKET_RE = re.compile(r"RFX-\d+")
 
 # The ONE place the verdict line is written. gate.py parses it with an anchored,
@@ -186,8 +233,8 @@ TICKET_RE = re.compile(r"RFX-\d+")
 ANCHOR = "PUBLISHED-CLASSIFIER"
 
 
-def anchored_line(status, detail):
-    return "%s: %s (%s)" % (ANCHOR, status, detail)
+def anchored_line(status, detail, anchor=ANCHOR):
+    return "%s: %s (%s)" % (anchor, status, detail)
 
 # Runs INSIDE the venv under test. Deliberately tiny: it knows how to call a
 # classifier and how to print JSON, and nothing about verdicts, corpora or
@@ -219,6 +266,69 @@ except Exception:
 for c in cases:
     try:
         cls = _classify.classify(c["tool"], c["input"])
+        out["rows"][c["id"]] = {"cls": {k: cls.get(k) for k in
+                                ("verb", "reversibility", "blast_radius", "externality",
+                                 "target_ref")}}
+    except Exception:
+        out["rows"][c["id"]] = {"error": traceback.format_exc().strip().splitlines()[-1]}
+json.dump(out, sys.stdout)
+'''
+
+# The SEAT driver. Also runs inside the venv under test, and differs from the
+# one above in exactly one way that matters: the corpus case does not reach the
+# classifier directly. It is expressed as an OpenAI-shaped tool call under a
+# GATEWAY tool name and put through `reeflex_litellm.normalize.normalize_tool_call`
+# first, because that is the path the seat a customer runs actually takes.
+#
+# The gateway names are `gw_<classifier tool>` and they are mapped back by the
+# OPERATOR MAP, not by the name heuristics. That is deliberate: the heuristics
+# cover the tool names a gateway is likely to use (`run_shell`, `write_file`)
+# and have no spelling at all for `Glob`, `LS` or `MultiEdit`, so scoring the
+# whole corpus through them would silently send a third of it down the
+# unknown-tool path and score the wrong thing. The operator map is a real,
+# documented, highest-precedence input, and it round-trips every corpus tool.
+#
+# The round-trip is ASSERTED per case. A normaliser that drops a call onto the
+# unknown path reports as an ERROR for that case, which `audit` already fails
+# on -- rather than as a mispricing, which would blame the classifier for the
+# normaliser's mistake. `scripts/tests/` pins that this is what happens.
+SEAT_DRIVER = r'''
+import json, os, sys, traceback
+import reeflex_claude, reeflex_litellm
+from reeflex_claude import classify as _classify
+from reeflex_litellm import normalize as _normalize
+
+cases = json.load(open(sys.argv[1]))
+tools = sorted({c["tool"] for c in cases})
+os.environ["REEFLEX_LITELLM_TOOL_MAP"] = json.dumps(
+    {"gw_" + t: t for t in tools})
+
+out = {"where": reeflex_claude.__file__,
+       "version": getattr(reeflex_claude, "__version__", "?"),
+       "seat_where": reeflex_litellm.__file__,
+       "seat_version": getattr(reeflex_litellm, "__version__", "?"),
+       "python": sys.version.split()[0],
+       "corpus_cases": None,
+       "rows": {}}
+try:
+    from reeflex_claude import conformance as _conf
+    out["corpus_cases"] = len(_conf.CASES)
+except Exception:
+    pass
+
+for c in cases:
+    try:
+        call = _normalize.normalize_tool_call({
+            "id": c["id"], "type": "function",
+            "function": {"name": "gw_" + c["tool"],
+                         "arguments": json.dumps(c["input"])}})
+        if call.tool_name != c["tool"]:
+            out["rows"][c["id"]] = {"error":
+                "the seat normalised gw_%s onto %r (source %r), not %r -- the "
+                "classification below would be the unknown-tool path"
+                % (c["tool"], call.tool_name, call.mapping_source, c["tool"])}
+            continue
+        cls = _classify.classify(call.tool_name, call.tool_input)
         out["rows"][c["id"]] = {"cls": {k: cls.get(k) for k in
                                 ("verb", "reversibility", "blast_radius", "externality",
                                  "target_ref")}}
@@ -346,11 +456,15 @@ def load_corpus(repo_root):
     return conformance, _oracle_mod.policy_oracle
 
 
-def classify_with_published(python, cases, workdir):
-    """Run the corpus through the classifier installed in `python`'s venv."""
+def classify_with_published(python, cases, workdir, driver_src=DRIVER):
+    """Run the corpus through the classifier installed in `python`'s venv.
+
+    `driver_src` selects the PLANE: `DRIVER` reaches `classify()` directly,
+    `SEAT_DRIVER` reaches it the way the gateway seat does.
+    """
     driver = os.path.join(workdir, "driver.py")
     with open(driver, "w") as fh:
-        fh.write(DRIVER)
+        fh.write(driver_src)
     payload = os.path.join(workdir, "cases.json")
     with open(payload, "w") as fh:
         json.dump([{"id": c["id"], "tool": c["tool"], "input": c["input"]}
@@ -362,34 +476,55 @@ def classify_with_published(python, cases, workdir):
     return json.loads(proc.stdout)
 
 
-def install_published(workdir, version, index_timeout=300):
-    """A throwaway venv with ONE reeflex-claude in it, from the index."""
+def install_published(workdir, version, index_timeout=300, dist=DIST):
+    """A throwaway venv with ONE `dist` in it, from the index.
+
+    For the seat arm `dist` is `reeflex-litellm`, and the resolve that installs
+    it is the measurement: pip picks the `reeflex-claude` that package's own
+    floor admits, which is exactly the customer-facing fact this arm is about.
+    """
     venv = os.path.join(workdir, "venv")
     proc = subprocess.run([sys.executable, "-m", "venv", venv],
                           capture_output=True, text=True)
     if proc.returncode != 0:
         return None, None, "venv creation failed: %s" % proc.stderr.strip()[-300:]
     py = os.path.join(venv, "Scripts" if os.name == "nt" else "bin", "python")
-    spec = DIST if version is None else "%s==%s" % (DIST, version)
+    spec = dist if version is None else "%s==%s" % (dist, version)
     proc = subprocess.run([py, "-m", "pip", "install", "-q", "--no-cache-dir",
                            "--disable-pip-version-check", spec],
                           capture_output=True, text=True, timeout=index_timeout)
     if proc.returncode != 0:
         return None, None, ("pip install %s from the index failed: %s"
                             % (spec, (proc.stderr or proc.stdout).strip()[-400:]))
-    show = subprocess.run([py, "-m", "pip", "show", DIST], capture_output=True, text=True)
+    show = subprocess.run([py, "-m", "pip", "show", dist], capture_output=True, text=True)
     resolved = next((l.split(":", 1)[1].strip() for l in show.stdout.splitlines()
                      if l.startswith("Version:")), "?")
     return py, resolved, None
 
 
-def run(repo_root, version=None, keep=False):
-    lines = ["  repo under test : %s" % repo_root]
+def run(repo_root, version=None, keep=False, seat=False):
+    """Score a published artefact with the checkout's corpus.
+
+    `seat=False` scores `pip install reeflex-claude` through `classify()`.
+    `seat=True` scores `pip install reeflex-litellm` through the gateway seat's
+    own normaliser (RFX-326) -- a different resolve and a different plane, with
+    its own lag table and its own anchored line.
+    """
+    dist = SEAT_DIST if seat else DIST
+    anchor = SEAT_ANCHOR if seat else ANCHOR
+    lag = SEAT_PUBLISHED_LAG if seat else PUBLISHED_LAG
+    driver_src = SEAT_DRIVER if seat else DRIVER
+
+    lines = ["  repo under test : %s" % repo_root,
+             "  plane           : %s" % (
+                 "the gateway seat (normalize_tool_call -> classify)" if seat
+                 else "the classifier directly (classify)")]
     try:
         conformance, tree_oracle = load_corpus(repo_root)
     except Exception as exc:                                   # pragma: no cover
         return 1, ["  %s" % exc,
-                   anchored_line("FAIL", "the checkout's corpus would not load")]
+                   anchored_line("FAIL", "the checkout's corpus would not load",
+                                 anchor)]
     lines.append("  corpus          : %s (%d cases)"
                  % (conformance.__file__, len(conformance.CASES)))
     lines.append("  oracle          : %s (the shared one, RFX-303)"
@@ -397,34 +532,42 @@ def run(repo_root, version=None, keep=False):
 
     workdir = tempfile.mkdtemp(prefix="rfx241-published-")
     try:
-        py, resolved, err = install_published(workdir, version)
+        py, resolved, err = install_published(workdir, version, dist=dist)
         if err:
             lines.append("  %s" % err)
             return 3, lines + [anchored_line(
                 "SKIP", "%s is not installable from the index here — no verdict, "
-                        "not a pass" % DIST)]
-        lines.append("  published wheel : %s==%s (installed from the index)" % (DIST, resolved))
+                        "not a pass" % dist, anchor)]
+        lines.append("  published wheel : %s==%s (installed from the index)" % (dist, resolved))
         try:
-            got = classify_with_published(py, conformance.CASES, workdir)
+            got = classify_with_published(py, conformance.CASES, workdir,
+                                          driver_src=driver_src)
         except RuntimeError as exc:
             lines.append("  %s" % exc)
             return 1, lines + [anchored_line(
                 "FAIL", "%s==%s could not classify at all — a wheel that raises is "
-                        "not a wheel that passes" % (DIST, resolved))]
+                        "not a wheel that passes" % (dist, resolved), anchor)]
         lines.append("  it loaded       : %s (python %s)" % (got["where"], got["python"]))
+        if seat:
+            # WHICH reeflex-claude the seat's own floor pulled in. This is the
+            # measurement, not a detail: the seat is only as honest as the
+            # classifier its dependency declaration admits.
+            lines.append("  the seat        : %s %s"
+                         % (got.get("seat_version"), got.get("seat_where")))
+            lines.append("  it resolved     : reeflex-claude %s" % got.get("version"))
         if got.get("corpus_cases") is not None and got["corpus_cases"] != len(conformance.CASES):
             lines.append("  note            : the published wheel ships its OWN corpus of %d "
                          "cases vs this tree's %d — its installed self-statement is a "
                          "different vintage from the one scoring it here"
                          % (got["corpus_cases"], len(conformance.CASES)))
         ok, audit_lines, stats = audit(got["rows"], conformance.CASES,
-                                       tree_oracle)
+                                       tree_oracle, lag=lag)
         lines += audit_lines
         summary = ("%s==%s; %d cases scored (floor %d); %d fail-open; %d fail-noisy; "
-                   "%d declared" % (DIST, resolved, stats["scored"], MIN_SCORED_CASES,
+                   "%d declared" % (dist, resolved, stats["scored"], MIN_SCORED_CASES,
                                     stats["fail_open"], stats["fail_noisy"],
                                     stats["declared"]))
-        lines.append(anchored_line("PASS" if ok else "FAIL", summary))
+        lines.append(anchored_line("PASS" if ok else "FAIL", summary, anchor))
         return 0 if ok else 1, lines
     finally:
         if keep:
@@ -529,6 +672,33 @@ def selftest():
     check("...and the exclusion is reported, not silent",
           any("1 residual excluded" in l for l in lines))
 
+    # -- the seat arm's own ledger (RFX-326) -------------------------------
+    # The verdict machinery is shared, so what needs proving separately is that
+    # the seat arm carries a REAL lag table and a DISTINCT anchored line. A
+    # second arm that printed the first arm's anchor would be read by gate.py
+    # as the first arm's verdict — two components, one measurement, and nobody
+    # would notice while both were green.
+    check("the seat arm's anchored line is distinct from the classifier arm's",
+          SEAT_ANCHOR != ANCHOR
+          and anchored_line("PASS", "x", SEAT_ANCHOR).startswith(SEAT_ANCHOR))
+    check("every seat lag entry names a ticket",
+          all(TICKET_RE.search(str(t)) for t in SEAT_PUBLISHED_LAG.values()))
+    check("the seat driver puts the corpus through the normaliser, not "
+          "straight into classify",
+          "normalize_tool_call" in SEAT_DRIVER and "REEFLEX_LITELLM_TOOL_MAP" in SEAT_DRIVER)
+    check("the seat driver reports a normalisation MISMATCH as an error rather "
+          "than classifying whatever it landed on",
+          '"error"' in SEAT_DRIVER and "call.tool_name != c[\"tool\"]" in SEAT_DRIVER)
+
+    mismatched = dict(agree)
+    mismatched["c2"] = {"error": "the seat normalised gw_Bash onto 'gw_Bash' "
+                                 "(source 'unmapped'), not 'Bash'"}
+    ok, lines, stats = audit(mismatched, cases, oracle, lag={}, min_scored=5)
+    check("a normalisation mismatch FAILS the seat arm (it is not a mispricing)",
+          not ok and stats["errors"] == 1)
+    check("...and the line names the normaliser, so the classifier is not blamed",
+          any("normalised" in l for l in lines))
+
     failed = [n for n, ok in checks if not ok]
     for n, ok in checks:
         print("  selftest %s: %s" % ("PASS" if ok else "FAIL", n))
@@ -553,11 +723,17 @@ def main(argv=None):
                    help="leave the throwaway venv on disk for inspection")
     p.add_argument("--selftest", action="store_true",
                    help="prove every branch of the verdict on fixtures, no network")
+    p.add_argument("--seat", action="store_true",
+                   help="score the published reeflex-litellm GATEWAY SEAT instead: "
+                        "resolve that package from the index and run the corpus "
+                        "through its normaliser into whichever reeflex-claude its "
+                        "own floor admits (RFX-326)")
     args = p.parse_args(sys.argv[1:] if argv is None else argv)
     if args.selftest:
         return selftest()
     repo_root = args.repo_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    code, lines = run(repo_root, version=args.version, keep=args.keep_venv)
+    code, lines = run(repo_root, version=args.version, keep=args.keep_venv,
+                      seat=args.seat)
     print("\n".join(lines))
     return code
 
