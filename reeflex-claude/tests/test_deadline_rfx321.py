@@ -235,7 +235,33 @@ class TestRunnerTimeoutIsOneWay(unittest.TestCase):
                 self.assertGreater(deadline.deadline(), 0)
 
     def test_installer_and_clock_share_one_constant(self):
+        """
+        The installer's number must be DERIVED from the clock's, not merely
+        equal to it today.
+
+        This test used to assert only the equality, and a break control caught
+        it being vacuous: putting the literal `30` back into setup_settings.py
+        -- which is precisely the two-numbers-in-two-files shape RFX-321 IS --
+        left the whole suite green, because 30 == 30.0. An equality cannot tell
+        derivation from coincidence, so the shape of the assignment is asserted
+        too. Deliberately a source-text check: the alternative, reloading
+        setup_settings under a patched constant, reddened five unrelated tests
+        in other files that hold references to the pre-reload module.
+        """
+        import pathlib
+
+        from reeflex_claude import setup_settings
+
         self.assertEqual(float(DEFAULT_TIMEOUT), deadline.RUNNER_TIMEOUT_SECONDS)
+
+        src = pathlib.Path(setup_settings.__file__).read_text(encoding="utf-8")
+        assignments = [ln for ln in src.splitlines()
+                       if ln.startswith("DEFAULT_TIMEOUT")]
+        self.assertEqual(len(assignments), 1, "DEFAULT_TIMEOUT assigned more than once")
+        self.assertIn("RUNNER_TIMEOUT_SECONDS", assignments[0],
+                      "DEFAULT_TIMEOUT re-declares a number of its own instead of "
+                      "deriving it from deadline.RUNNER_TIMEOUT_SECONDS -- that is "
+                      "the RFX-321 shape, and no value comparison can see it")
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +403,35 @@ class TestWatchdogAnswersAndExits(unittest.TestCase):
         """
         proc, _ = _run_hook_with_slow_enforce({"REEFLEX_CLAUDE_HOOK_TIMEOUT": 3})
         _sole_decision(proc)  # asserts exactly one line
+
+    def test_the_second_writer_is_dropped_by_the_latch(self):
+        """
+        The arm above does NOT exercise the latch, and a break control is how
+        that came to light: the watchdog answers and calls os._exit(), so the
+        pipeline thread never reaches _emit_once() and one writer is the sole
+        writer whatever the latch does. Deleting `if _emitted` left the suite
+        green.
+
+        So the latch is asserted where the race actually is -- two calls, one
+        line of output, and the loser told it lost, because a caller that
+        believes it wrote would audit an answer nobody can read.
+        """
+        import contextlib
+        import io
+
+        from reeflex_claude import hook
+
+        buf = io.StringIO()
+        saved, hook._emitted = hook._emitted, False
+        try:
+            with contextlib.redirect_stdout(buf):
+                first = hook._emit_once('{"answer":"first"}')
+                second = hook._emit_once('{"answer":"second"}')
+        finally:
+            hook._emitted = saved
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(buf.getvalue(), '{"answer":"first"}\n')
 
     def test_observe_mode_answers_allow_at_the_deadline(self):
         """
