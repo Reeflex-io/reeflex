@@ -47,6 +47,7 @@ from reeflex_claude.classify import (  # noqa: E402
 )
 from reeflex_claude.setup_settings import (  # noqa: E402
     DEFAULT_TIMEOUT,
+    HOOK_TIMEOUT_ENV,
     deadline_mismatch,
     wired_hook_timeout,
 )
@@ -531,6 +532,27 @@ class TestSettingsCarryTheRunnerTimeout(unittest.TestCase):
         note = deadline_mismatch(self._settings(30, "90"))
         self.assertIsNotNone(note)
         self.assertIn("LARGER", note)
+
+    def test_an_entry_hand_lowered_with_nothing_declaring_it_is_flagged(self):
+        """
+        RFX-321 reached from the other side, and the clamp does NOT save it.
+        The operator edits the entry down to 10s and leaves the env block
+        alone; the hook still believes it has 30s, puts its deadline at 24s,
+        and the runner kills it at 10s -- which is a hook that did not answer,
+        and Claude Code runs the tool over one of those.  Nothing inside the
+        hook process can see this: it is handed a payload on stdin, not the
+        settings file that summoned it.
+        """
+        note = deadline_mismatch(self._settings(10, None))
+        self.assertIsNotNone(note)
+        self.assertIn("10s", note)
+        self.assertIn(HOOK_TIMEOUT_ENV, note)
+
+    def test_an_entry_at_or_above_the_default_needs_no_env_value(self):
+        # The shipped install, and the deliberately-slow one: neither is the
+        # dangerous direction, so neither is nagged about.
+        self.assertIsNone(deadline_mismatch(self._settings(30, None)))
+        self.assertIsNone(deadline_mismatch(self._settings(60, None)))
 
     def test_setup_writes_both_numbers_from_one_value(self):
         import tempfile

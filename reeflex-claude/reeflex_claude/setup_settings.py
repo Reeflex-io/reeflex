@@ -242,19 +242,37 @@ def deadline_mismatch(settings: Dict[str, Any]):
       * `REEFLEX_CLAUDE_HOOK_TIMEOUT` in settings["env"] -- what the hook
         believes that number is.
     `setup` writes both from one value, so they agree on a fresh install.  They
-    can still drift by hand, and only one direction is dangerous-looking: an env
-    value LARGER than the entry's timeout is a claim of more budget than the
-    runner will give.  deadline.py clamps it away regardless -- this is the
-    check that tells the operator, rather than silently being right for them.
+    can still drift by hand, and BOTH directions of drift are a real
+    installation:
+
+      * an env value LARGER than the entry's timeout claims more budget than
+        the runner will give.  deadline.py clamps it away regardless -- this is
+        the check that tells the operator rather than silently being right for
+        them.
+      * an entry timeout SMALLER than the built-in default with NO env value to
+        declare it.  This one is not cosmetic and the clamp does not save it:
+        the hook believes it has RUNNER_TIMEOUT_SECONDS, sets its deadline
+        inside THAT, and the runner kills it first -- which is RFX-321 again,
+        reached by hand-editing the entry down instead of the socket timeout
+        up.  The hook cannot detect this on its own: it is handed a payload on
+        stdin, not the path of the settings file that summoned it, and Claude
+        Code merges several of those.  So `check` is where it can be seen.
     """
     entry = wired_hook_timeout(settings)
     if entry is None:
         return None
     env = settings.get("env")
     if not isinstance(env, dict):
-        return None
+        env = {}
     raw = str(env.get(HOOK_TIMEOUT_ENV, "")).strip()
     if not raw:
+        if entry < RUNNER_TIMEOUT_SECONDS:
+            return (f"the hook entry's timeout is {entry:.0f}s but nothing tells the "
+                    f"hook so, and it assumes its built-in "
+                    f"{RUNNER_TIMEOUT_SECONDS:.0f}s. The runner would kill the hook "
+                    f"before its own deadline, and Claude Code runs the tool when a "
+                    f"PreToolUse hook is killed. Re-run 'reeflex-claude setup', or set "
+                    f"{HOOK_TIMEOUT_ENV}={entry:.0f} in the settings env block.")
         return None
     try:
         declared = float(raw)
