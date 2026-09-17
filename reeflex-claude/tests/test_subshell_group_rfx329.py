@@ -57,8 +57,14 @@ from test_substitution_rfx301 import _HookPlaneCase
 # Every command here really does delete the target when bash runs it.  That was
 # measured, not argued: the rig in code-reports/dev-1--153-evidence/rfx329_rig.py
 # runs each form against a synthetic victim directory and checks the directory
-# on disk afterwards.  On origin/main 242c8814 six of these forms destroyed the
-# victim while the classifier called them reads or executes.
+# on disk afterwards.  Six of these forms destroyed the victim while the
+# classifier called them reads or executes -- measured twice, on two different
+# mains: 242c8814 (the base this branch was cut from, round dev-1--153) and
+# again on 0d9ef316 after RFX-321/322/323 landed (round dev-1--154).  The
+# second run is the one that matters: 0d9ef316 added a pre-tokenise size cap to
+# `_classify_bash`, and a cap that returned early for these lines would have
+# made this whole file a test of someone else's change.  It does not -- the
+# escape count on the rebased base is still 6.
 DESTRUCTIVE_GROUPS = [
     ("bare_group",          "(rm -rf /var/lib/pgsql)"),
     ("spaced_group",        "( rm -rf /var/lib/pgsql )"),
