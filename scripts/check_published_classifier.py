@@ -175,6 +175,27 @@ PUBLISHED_LAG: dict = {
     "destroy-subst-process-write":   "RFX-301",
     # The same shape on a system path: expect `deny`, published `allow`.
     "destroy-subst-systemic":        "RFX-301",
+    # RFX-329, the subshell group. Published 0.2.0 was uploaded 2026-09-16T06:29Z;
+    # the fix merged 2026-09-17T18:03Z (PR #164). Six of the seven group rows
+    # diverge -- measured by the three-arm differential in
+    # code-reports/qa--235--20260917-evidence/results.json, and confirmed through
+    # core's real pack (`opa eval`, reeflex-core/policy) in
+    # live_pack_results.json: on the wheel the index serves today,
+    # `(rm -rf /var/lib/pgsql)` comes back ALLOW under reeflex.policy/default_allow.
+    #
+    # `destroy-group-with-operator` is deliberately NOT here: it already decides
+    # correctly on 0.2.0 via the RFX-144 separator path, so declaring it would be
+    # a STALE entry and `audit` would fail it -- which is the mechanism working.
+    #
+    # Closes by REPUBLISHING reeflex-claude. That is a release action and
+    # therefore owner-gated: this component cannot close it and neither can the
+    # agent that wrote these lines.
+    "destroy-group-bare":            "RFX-329",
+    "destroy-group-spaced":          "RFX-329",
+    "destroy-group-in-substitution": "RFX-329",
+    "destroy-group-nested":          "RFX-329",
+    "destroy-group-piped":           "RFX-329",
+    "destroy-group-then-benign":     "RFX-329",
 }
 
 # --------------------------------------------------------------------------
