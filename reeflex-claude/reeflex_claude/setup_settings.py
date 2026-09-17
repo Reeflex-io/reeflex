@@ -57,6 +57,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict
 
+from .deadline import HOOK_TIMEOUT_ENV, RUNNER_TIMEOUT_SECONDS
+
 # ---------------------------------------------------------------------------
 # Canonical hook entry
 # ---------------------------------------------------------------------------
@@ -68,7 +70,14 @@ DEFAULT_MATCHER = "*"
 # Fallback command, and the ownership marker. hook_command_for_settings() prefers the
 # absolute path of the installed entry point.
 HOOK_COMMAND = "reeflex-claude hook"
-DEFAULT_TIMEOUT = 30
+
+# The hook timeout written into settings.json. It is an ALIAS of deadline.py's
+# RUNNER_TIMEOUT_SECONDS and not a second declaration of 30, because RFX-321
+# was two numbers in two files with no clamp between them: the installer wrote
+# 30 here, the adapter honoured any REEFLEX_CLAUDE_TIMEOUT an operator set, and
+# at 45 the runner killed the hook and `rm -rf` ran with no human. One constant,
+# imported by both, is the structural half of that fix.
+DEFAULT_TIMEOUT = int(RUNNER_TIMEOUT_SECONDS)
 
 # Substring used to identify "our" hook entry among possibly-foreign ones.
 _OWNERSHIP_MARKER = "reeflex-claude hook"
@@ -190,6 +199,91 @@ def wired_hook_command(settings: Dict[str, Any]):
         for item in block_hooks:
             if isinstance(item, dict) and is_ours(item.get("command")):
                 return item.get("command")
+    return None
+
+
+def wired_hook_timeout(settings: Dict[str, Any]):
+    """
+    Return the timeout (seconds) on our wired hook entry, or None.
+
+    This is the number that decides when Claude Code's runner KILLS the hook,
+    and therefore the number the adapter's internal deadline has to stay inside
+    (deadline.py).  `check` reads it so an installation whose two numbers have
+    drifted apart -- a hand-edited file, an upgrade over an older entry -- is
+    visible before it matters rather than after an `rm -rf`.
+    """
+    hooks_root = settings.get("hooks")
+    if not isinstance(hooks_root, dict):
+        return None
+    pretool = hooks_root.get("PreToolUse")
+    if not isinstance(pretool, list):
+        return None
+    for block in pretool:
+        if not isinstance(block, dict):
+            continue
+        block_hooks = block.get("hooks")
+        if not isinstance(block_hooks, list):
+            continue
+        for item in block_hooks:
+            if isinstance(item, dict) and is_ours(item.get("command")):
+                value = item.get("timeout")
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    return None
+                return float(value)
+    return None
+
+
+def deadline_mismatch(settings: Dict[str, Any]):
+    """
+    Describe how this installation's two timeout numbers disagree, or None.
+
+    There are two, and RFX-321 is what happens when nothing compares them:
+      * the hook entry's `timeout` -- when the runner kills us;
+      * `REEFLEX_CLAUDE_HOOK_TIMEOUT` in settings["env"] -- what the hook
+        believes that number is.
+    `setup` writes both from one value, so they agree on a fresh install.  They
+    can still drift by hand, and BOTH directions of drift are a real
+    installation:
+
+      * an env value LARGER than the entry's timeout claims more budget than
+        the runner will give.  deadline.py clamps it away regardless -- this is
+        the check that tells the operator rather than silently being right for
+        them.
+      * an entry timeout SMALLER than the built-in default with NO env value to
+        declare it.  This one is not cosmetic and the clamp does not save it:
+        the hook believes it has RUNNER_TIMEOUT_SECONDS, sets its deadline
+        inside THAT, and the runner kills it first -- which is RFX-321 again,
+        reached by hand-editing the entry down instead of the socket timeout
+        up.  The hook cannot detect this on its own: it is handed a payload on
+        stdin, not the path of the settings file that summoned it, and Claude
+        Code merges several of those.  So `check` is where it can be seen.
+    """
+    entry = wired_hook_timeout(settings)
+    if entry is None:
+        return None
+    env = settings.get("env")
+    if not isinstance(env, dict):
+        env = {}
+    raw = str(env.get(HOOK_TIMEOUT_ENV, "")).strip()
+    if not raw:
+        if entry < RUNNER_TIMEOUT_SECONDS:
+            return (f"the hook entry's timeout is {entry:.0f}s but nothing tells the "
+                    f"hook so, and it assumes its built-in "
+                    f"{RUNNER_TIMEOUT_SECONDS:.0f}s. The runner would kill the hook "
+                    f"before its own deadline, and Claude Code runs the tool when a "
+                    f"PreToolUse hook is killed. Re-run 'reeflex-claude setup', or set "
+                    f"{HOOK_TIMEOUT_ENV}={entry:.0f} in the settings env block.")
+        return None
+    try:
+        declared = float(raw)
+    except ValueError:
+        return (f"{HOOK_TIMEOUT_ENV}={raw!r} in settings env is not a number; "
+                f"the hook will use its built-in {RUNNER_TIMEOUT_SECONDS:.0f}s default.")
+    if declared > entry:
+        return (f"{HOOK_TIMEOUT_ENV}={declared:.0f} is LARGER than the hook entry's "
+                f"timeout of {entry:.0f}s. The runner kills the hook at {entry:.0f}s, "
+                f"so the larger number is not budget the hook can spend. Re-run "
+                f"'reeflex-claude setup' to write both from one value.")
     return None
 
 

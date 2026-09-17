@@ -11,6 +11,15 @@ FAIL-CLOSED INVARIANT (mirrors mock/adapter.py):
   This module never raises.  The hook's top-level try/except is a belt-and-
   suspenders backup; this layer handles all expected failure modes itself.
 
+  AND IT IS NOT ENOUGH ON ITS OWN (RFX-321).  "Deny on error" only helps while
+  this module still gets to return.  Claude Code's PreToolUse runner kills a
+  hook at the settings.json timeout and then RUNS THE TOOL, so a socket wait
+  longer than that timeout is not a late deny, it is no deny: measured, an
+  operator's `REEFLEX_CLAUDE_TIMEOUT=45` against a stalling engine put `rm -rf`
+  through with no human.  The request timeout is therefore CLAMPED under the
+  hook's deadline (deadline.py) -- an operator may ask for 45 s and will get
+  what is left of the budget.
+
 Decision mapping (SPEC §5 -> Claude Code permissionDecision):
   core "allow"            -> "allow"
   core "deny"             -> "deny"
@@ -22,7 +31,11 @@ Return tuple: (permission_decision, reason_text, rule, core_reachable, obligatio
 
 Env:
   REEFLEX_CORE_URL       -- default http://127.0.0.1:8080
-  REEFLEX_CLAUDE_TIMEOUT -- float seconds for HTTP request timeout; default 5.0
+  REEFLEX_CLAUDE_TIMEOUT -- float seconds for HTTP request timeout; default 5.0.
+                            An UPPER REQUEST, not a grant: clamped under the
+                            hook deadline (deadline.py).  Raising it above the
+                            PreToolUse hook timeout used to invert the gate to
+                            fail-OPEN; it now buys nothing past the deadline.
   REEFLEX_VERIFY_SSL     -- default TRUE (full TLS verification).
                             Falsy values (0, false, no, off, case-insensitive)
                             DISABLE certificate verification.  Use only for dev
@@ -63,6 +76,8 @@ import urllib.error
 import urllib.request
 from typing import List, Tuple
 
+from . import deadline
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -91,7 +106,20 @@ def call_core_and_map(envelope: dict) -> _Result:
     Never raises.
     """
     core_url = os.environ.get("REEFLEX_CORE_URL", _DEFAULT_CORE_URL).rstrip("/")
-    timeout  = _parse_timeout()
+
+    # RFX-321.  The operator's socket timeout is a REQUEST, not a grant.  It is
+    # clamped under what is left of the hook's deadline, because a socket
+    # timeout above the PreToolUse runner's timeout does not produce a late
+    # deny -- it produces no deny at all: the runner kills the hook and runs the
+    # tool.  Measured: `REEFLEX_CLAUDE_TIMEOUT=45` against a stalling engine put
+    # `rm -rf` through with no human (qa--221 Finding A).  See deadline.py.
+    requested = _parse_timeout()
+    timeout   = deadline.budget_for(requested)
+    if timeout <= 0:
+        return _fail_closed(
+            "no time left inside the hook deadline to ask the engine "
+            f"(deadline {deadline.deadline():.1f}s, elapsed {deadline.elapsed():.1f}s)"
+        )
 
     url  = f"{core_url}/v1/decide"
     body = json.dumps(envelope).encode("utf-8")
@@ -158,8 +186,14 @@ def call_core_and_map(envelope: dict) -> _Result:
             pass
         return _fail_closed(f"core HTTP {exc.code}: {_trunc(str(exc.reason))}")
     except Exception as exc:
-        # Connection refused, timeout, DNS failure, etc.
-        return _fail_closed(f"core unreachable: {_trunc(str(exc))}")
+        # Connection refused, timeout, DNS failure, etc.  The budget is named
+        # in the reason because "timed out" on its own does not say whether the
+        # operator's own timeout or the hook deadline ended the wait -- and
+        # after RFX-321 it is usually the deadline.
+        clamped = "" if timeout >= requested else f" (clamped from {requested:.1f}s)"
+        return _fail_closed(
+            f"core unreachable after {timeout:.1f}s{clamped}: {_trunc(str(exc))}"
+        )
 
     # Parse response body
     try:
