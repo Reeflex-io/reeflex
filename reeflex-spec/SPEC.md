@@ -817,7 +817,7 @@ axis substituted at a time, five canonical destructions in
 A correct fix to one axis therefore **measures as a no-op** and reads as not
 worth landing.
 
-Two obligations follow, and they are normative for this repository rather than
+Three obligations follow, and they are normative for this repository rather than
 for third-party adapters:
 
 1. An axis fix MUST be measured on the **decision**, not only on its own axis
@@ -827,6 +827,14 @@ for third-party adapters:
    Rows are `holds`, `open` or `no_rule`; an `open` row asserts that the gap is
    **still open**, so closing one fails the suite and forces the exclusion to be
    deleted rather than left behind.
+3. Where a finding is an **equivalence** — two phrasings of one effect that MUST
+   reach the same decision, the §4.2 "an adapter that cannot enumerate MUST NOT
+   emit `single`" family — the corpus SHOULD carry **both** arms, and the arm
+   that was already correct SHOULD say so on itself. A pair pinned on one side
+   only asserts the phrasing that happened to be wrong, and stays green while
+   the reference answer drifts the other way. Measured instance: RFX-165's
+   predicate arm was a row and its enumerated arm was in no vector file at any
+   layer (dev-3 round 069).
 
 The decision corpus is a **complement** to the per-axis files and not a
 replacement, and its own limit is stated where it lives: it scores what core

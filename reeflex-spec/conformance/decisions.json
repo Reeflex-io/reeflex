@@ -82,7 +82,7 @@
     "",
     "RE-RECORDED ON THE CLUSTER-B MERGE (dev-3 round 039, 7 Sep 2026). This file",
     "was authored against a tree where BOTH axis fixes were unmerged, so twelve of",
-    "its fourteen rows were `open` or `no_rule` — pinned gaps. #94 (RFX-131,",
+    "its then-fourteen rows were `open` or `no_rule` — pinned gaps. #94 (RFX-131,",
     "blast_radius) and #101 (RFX-164, reversibility) are now both in the adapter,",
     "and #118 (RFX-128, R7 authority) is in the canon. The runner reported SEVEN",
     "rows to promote and five closes_on failures, which is the RFX-158 convention",
@@ -116,7 +116,65 @@
     "adapter's axes reach. The R7 floor is noted on the row and pinned by",
     "reeflex-core/tests/test_authority_family_rfx128.py, not by this corpus: a",
     "decision corpus that asserted both would go red the moment either rule's",
-    "precedence changed, for no gain in coverage."
+    "precedence changed, for no gain in coverage.",
+    "",
+    "TWO ROWS ADDED AND ALL SIXTEEN RE-MEASURED (dev-3 round 069, 16 Sep 2026,",
+    "RFX-165). RFX-165 says the same 45 account deletions 'need a human when",
+    "enumerated and need nobody when selected by role'. Its own Status paragraph",
+    "declared it closed by #101 + #94 — an AXIS claim, written before either",
+    "merged, and this file's whole thesis is that an axis claim is not a decision.",
+    "So it was exercised as a decision, through the real normalizer into the",
+    "published v0.2.1 core (label revision 325cd16), four phrasings of one",
+    "destruction, production, no approval:",
+    "",
+    "  enumerated ids[3001..3045]   irreversible/broad  count 45  require_approval",
+    "  role=subscriber (predicate)  irreversible/broad  count  1  require_approval",
+    "  ids: [] (empty)              irreversible/broad  count  1  require_approval",
+    "  count: 45, no ids            irreversible/broad  count 45  require_approval",
+    "  CONTROL users/list (read)    reversible/broad    count  1  allow",
+    "",
+    "The same instrument on the PRE-fix adapter (f786caa, before #94/#101) into",
+    "the SAME core reproduces the ticket exactly — enumerated require_approval,",
+    "predicate allow/default_allow — so the reading above is not an instrument",
+    "that cannot fail. The decision equivalence RFX-165 asks for is delivered.",
+    "",
+    "`user/enumerated-bulk` and `user/selected-empty-enumeration` are the rows",
+    "that keep it delivered; the predicate arm was already here and its partner",
+    "was pinned nowhere, in this file or in either axis file. THE COUNT-ONLY",
+    "PHRASING IS DELIBERATELY NOT A ROW: it reaches `broad` by the same 'no ids",
+    "is not an enumeration' mechanism the empty-enumeration row already pins, so",
+    "a row for it would add a case and no coverage.",
+    "",
+    "WHAT THE EQUIVALENCE DOES NOT COVER, MEASURED THIS ROUND, and it is the",
+    "ticket's own shape one layer down: `magnitude.count` is still 45 on the",
+    "enumerated arm and 1 on the predicate arm. R5's budget no longer charges",
+    "that number raw — budgets.rego's count_floor (RFX-143) charges",
+    "max(count, floor[blast_radius]) = max(1, 10) for a predicate — but the",
+    "floor applies to the action being decided and NOT to the ledger's history,",
+    "which records the raw count. So the two arms still consume the deletions",
+    "budget at different rates. That is R5, this corpus scores R1-R4 by",
+    "construction (see rfx_isolate), and it is recorded here rather than",
+    "asserted by a row that would be scoring something the harness cannot see.",
+    "",
+    "CORRECTED WHEN THIS FILE LANDED (dev-2 round 064, 17 Sep 2026). The four",
+    "lines above describing the ledger were true when written and are not true",
+    "now: RFX-293 was an open filing then, and PR #151 merged as f743033 while",
+    "this change waited for the monorepo merge lock. ledger.py::append_entry",
+    "now takes a `charged_count` -- budgets.rego's own ledger_charge, carried",
+    "out of the same evaluation that produced the verdict -- so the ledger",
+    "records the POLICY's price and no longer the raw count. Read 'which",
+    "records the raw count' above as the state of the code on the SHA it was",
+    "measured against, which is this file's standing convention for a",
+    "historical measurement, and NOT as a current reading.",
+    "",
+    "WHAT STILL STANDS, and it is the part the two added rows actually rest",
+    "on: magnitude.count is still 45 on the enumerated arm and 1 on the",
+    "predicate arm, and count_floor.broad is 10, so the two arms are still not",
+    "charged alike and the R5 half of the equivalence is still not delivered.",
+    "The call number at which the predicate arm is held was NOT re-measured at",
+    "landing and is deliberately not restated: it is smaller than the 12",
+    "recorded above, and that is the whole of what can be said without walking",
+    "it again."
   ],
   "spec_section": "3",
   "ticket": "RFX-167",
@@ -127,7 +185,8 @@
     "environment": "production",
     "approval": "absent",
     "harness": "php reeflex-wordpress/tests/conformance-decisions.php <core-url>, one session and one nonce per POST",
-    "previous_recording": "core + adapter at origin/main 759b83f, axis fixes unmerged (5 open, 6 no_rule) — kept in git history, not here"
+    "previous_recording": "core + adapter at origin/main 759b83f, axis fixes unmerged (5 open, 6 no_rule) — kept in git history, not here",
+    "re_measured_2026_09_16": "all 16 rows, dev-3 round 069 (RFX-165): core = the PUBLISHED ghcr.io/reeflex-io/reeflex-core:v0.2.1 image, label org.opencontainers.image.revision=325cd16, run token-free on a scratch port with its own empty ledger (restored_sessions 0) — not a core anyone built for this measurement; adapter = reeflex-wordpress at main ecaa284. 14 rows as recorded, 2 added, exit 0. CONTROL: same core, adapter file replaced by its PRE-#94/#101 version (f786caa) — exit 1, 8 of the 12 `holds` rows fail, one of them being the added `user/selected-empty-enumeration`. The added `user/enumerated-bulk` passes there too, and that is stated on the row itself rather than presented as proof of anything"
   },
   "cases": [
     {
@@ -329,6 +388,60 @@
       },
       "closed_by": "#101 (RFX-164) + #94 (RFX-131): the affected set is a server-side predicate, and §4.2 forbids an adapter that cannot enumerate from saying `single`.",
       "measured_as_shipped": "require_approval / reeflex.policy/irreversible_broad_prod  (adapter axes irreversible/broad)"
+    },
+    {
+      "name": "user/enumerated-bulk",
+      "status": "holds",
+      "given": "the SAME 45 accounts as user/selected-server-side, enumerated instead of selected. RFX-165 is the claim that these two rows must agree; this is the arm it used as its reference answer, and until now it was pinned in no vector file at any layer.",
+      "required": {
+        "decision": "require_approval",
+        "rule": "irreversible_broad_prod",
+        "axes": {
+          "reversibility": "irreversible",
+          "blast_radius": "broad"
+        }
+      },
+      "axes_source": {
+        "reversibility": "reversibility.json::user/single",
+        "blast_radius": "blast-radius.json::enumerated/at-broad-min"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "users/delete",
+          "input": {
+            "ids": [3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 3009, 3010, 3011, 3012, 3013, 3014, 3015, 3016, 3017, 3018, 3019, 3020, 3021, 3022, 3023, 3024, 3025, 3026, 3027, 3028, 3029, 3030, 3031, 3032, 3033, 3034, 3035, 3036, 3037, 3038, 3039, 3040, 3041, 3042, 3043, 3044, 3045]
+          }
+        }
+      },
+      "note": "WHAT THIS ROW IS AND IS NOT. It is NOT a fix being proven: measured against the PRE-fix adapter (f786caa, before #94 and #101) into the same core, this arm ALREADY answered require_approval / irreversible_broad_prod. That is the point — it is the reference arm of an equivalence, so what it pins is that the honest answer cannot drift away while the predicate arm stays put. A pair asserted on one side only is not an equivalence. Held on two independent adapter grounds, and `required` records the one the shipped axes reach: `count >= 20 -> irreversible`, and separately users are not a TRASHABLE_SEGMENT (wp_delete_user has no trash). It also carries no `force_delete`, unlike post/hard-delete-bulk — the only other 45-entity row — so it does not lean on a hard-delete signal to reach `irreversible`.",
+      "measured_as_shipped": "require_approval / reeflex.policy/irreversible_broad_prod  (adapter axes irreversible/broad, magnitude.count 45)"
+    },
+    {
+      "name": "user/selected-empty-enumeration",
+      "status": "holds",
+      "given": "the same deletion phrased as an EMPTY ids array. WordPress handlers routinely read an empty selection as `everything`, and an agent that wants `single` would send exactly this.",
+      "required": {
+        "decision": "require_approval",
+        "rule": "irreversible_broad_prod",
+        "axes": {
+          "reversibility": "irreversible",
+          "blast_radius": "broad"
+        }
+      },
+      "axes_source": {
+        "reversibility": "reversibility.json::user/single",
+        "blast_radius": "blast-radius.json::predicate/empty-enumeration"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "users/delete",
+          "input": {
+            "ids": []
+          }
+        }
+      },
+      "closed_by": "#94 (RFX-131) treats an empty ids array as no enumeration rather than a small one, and #101 (RFX-164) makes a user delete irreversible. Measured on the PRE-fix adapter into the same core: allow / reeflex.policy/default_allow, axes recoverable/single — this row fails there, which is what makes it worth running.",
+      "measured_as_shipped": "require_approval / reeflex.policy/irreversible_broad_prod  (adapter axes irreversible/broad, magnitude.count 1)"
     },
     {
       "name": "trash/emptied",
