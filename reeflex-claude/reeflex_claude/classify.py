@@ -871,6 +871,15 @@ def _classify_bash(tool_input: dict) -> dict:
     sql_reachable = _sql_reachable(segments)
 
     results = [_classify_segment(seg, preview, sql_reachable) for seg in segments]
+
+    # A peeled redirection prefix ran a command AND emptied a file.  The peel
+    # reports what it emptied; price that as its own candidate so the severity
+    # comparison below sees both halves of the line.  `_peeled_truncations`
+    # returns None for every segment without a truncating prefix, which is
+    # almost all of them.
+    results += [t for t in (_peeled_truncations(seg, preview) for seg in segments)
+                if t is not None]
+
     return max(results, key=_severity)
 
 
@@ -903,7 +912,7 @@ def _sql_reachable(segments: list) -> bool:
     (`echo 'DROP TABLE t' | psql`) is not.
     """
     for seg in segments:
-        tokens, _ = _peel_wrappers(_safe_split(seg))
+        tokens, _, _ = _peel_wrappers(_safe_split(seg))
         if tokens and os.path.basename(tokens[0]).lower() in _DB_CLIENTS:
             return True
     return False
@@ -931,7 +940,7 @@ def _classify_segment(segment: str, preview: Optional[str],
     `sql_reachable` says whether a database client appears anywhere on the
     line; the SQL patterns are only consulted when it does (`_sql_reachable`).
     """
-    tokens, unbounded = _peel_wrappers(_safe_split(segment))
+    tokens, unbounded, _ = _peel_wrappers(_safe_split(segment))
     cmd0 = os.path.basename(tokens[0]).lower() if tokens else ""
     args = tokens[1:]
     low = [a.lower() for a in args]
@@ -1891,6 +1900,16 @@ def _split_on_operators(command: str) -> list:
             continue
 
         if ch in (";", "|", "\n"):
+            # `>|` is the clobber-override redirection, not a pipe.  Same
+            # exception the `&` branch above already makes for `2>&1` and
+            # `&>log`, for the same reason: splitting here cuts a redirection
+            # in half and the truncation it performs is never seen.  Measured:
+            # `>| P cmd` destroys P's contents in a real bash, and before this
+            # the line came apart into `>` and `P cmd`.
+            if ch == "|" and "".join(buf).rstrip()[-1:] == ">":
+                buf.append(ch)
+                i += 1
+                continue
             parts.append("".join(buf))
             buf = []
             i += 1
@@ -2233,7 +2252,7 @@ def _shell_segments(command: str, depth: int = 0,
         if not budget.charge(segment):
             return out
 
-        peeled, _ = _peel_wrappers(_safe_split(segment))
+        peeled, _, _ = _peel_wrappers(_safe_split(segment))
         inner = _shell_c_payload(peeled)
         if inner and _c_payload_quote(segment) != "'":
             # RFX-337.  The outer shell has consumed these backslashes before
@@ -2492,16 +2511,70 @@ def _to_backtick(text: str, start: int):
     return text[start:], n
 
 
+# The redirection operators that EMPTY their target before the command runs.
+# `>>` appends, `<`/`<<`/`<<<` read, `>&`/`<&` duplicate a descriptor: none of
+# them destroys what is already in the file, and that was checked against a real
+# shell rather than read off the grammar.  A leading fd number (`2>`) or `&`
+# (`&>`) does not change which of these it is.
+_TRUNCATING_OPERATORS = (">", ">|")
+
+# Writing here destroys nothing -- these are discards, not files.  Without this
+# the fix would price `>/dev/null echo hi`, one of the most common lines there
+# is, off the TERMINAL form of `> /dev/null`, which this classifier reads as a
+# systemic destruction (`rm_recursive_root`, because `/dev` is a system root).
+# That terminal over-classification predates this change and is left alone: it
+# is conservative, not fail-open, and it is not this ticket.
+_DISCARD_SINKS = ("/dev/null", "/dev/zero", "/dev/stdout", "/dev/stderr",
+                  "/dev/tty", "/dev/console")
+
+
+def _truncates(token: str, redirect) -> bool:
+    """Does this redirection operator empty its target?"""
+    operator = token[:redirect.end()].lstrip("0123456789&")
+    return operator in _TRUNCATING_OPERATORS
+
+
+def _is_discard_sink(target: str) -> bool:
+    return target in _DISCARD_SINKS or target.startswith("/dev/fd/")
+
+
+def _peeled_truncations(segment: str, preview: Optional[str]):
+    """
+    Price what a redirection prefix emptied, or None if it emptied nothing.
+
+    This is a SECOND candidate for the same segment rather than a branch inside
+    `_classify_segment`, because `> f rm -rf /srv` does two destructive things
+    and the line is worth the worse of them.  The caller already keeps the most
+    severe classification across segments, so this reuses that comparison
+    instead of inventing a second one.
+    """
+    _, _, truncated = _peel_wrappers(_safe_split(segment))
+    if not truncated:
+        return None
+    return _classify_path_delete(
+        truncated, recursive=False, unbounded=False,
+        signature="content_overwrite", preview=preview,
+    )
+
+
 def _peel_wrappers(tokens: list):
     """
     Strip prefixes that merely run another command and return
-    (remaining_tokens, unbounded).
+    (remaining_tokens, unbounded, truncated).
 
     `unbounded` is True when the peeled wrapper feeds the inner command a set
     of arguments that only exists at runtime (`xargs`, GNU `parallel`), which
     means no path list in the command string bounds the affected set.
+
+    `truncated` lists the paths a peeled redirection EMPTIES on its way past.
+    A redirection prefix is not only grammar: the shell applies it and then
+    runs the command, so `> f cmd` truncates `f` AND runs `cmd`.  Peeling it
+    without reporting the truncation is how a production database overwrite
+    came back benign (found by qa--237 reviewing this branch).  The caller
+    prices these alongside the inner command and keeps the worse of the two.
     """
     unbounded = False
+    truncated: list = []
     i = 0
     n = len(tokens)
 
@@ -2540,7 +2613,9 @@ def _peel_wrappers(tokens: list):
             # `2>` puts it in the next one, which is a filename and not a
             # command word either way.
             nxt = i + 1
+            target = tokens[i][redirect.end():]
             if redirect.end() == len(tokens[i]) and nxt < n:
+                target = tokens[nxt]
                 nxt += 1
             # A redirection with NOTHING after it is not a prefix -- it IS the
             # operation.  `> /srv/prod/db.sqlite` truncates that file and is a
@@ -2549,6 +2624,13 @@ def _peel_wrappers(tokens: list):
             # redirection that something else follows is a prefix.
             if nxt >= n:
                 break
+            # ...but a redirection that IS a prefix still truncated its target
+            # on the way past, and that half was being dropped.  Record it; the
+            # caller prices it next to the inner command.  Ground truth off
+            # disk: `> f cmd`, `>f cmd`, `1> f cmd` and `2> f cmd` all destroy
+            # `f`'s previous contents while `cmd` runs.
+            if _truncates(tokens[i], redirect) and not _is_discard_sink(target):
+                truncated.append(target)
             i = nxt
             continue
 
@@ -2576,7 +2658,7 @@ def _peel_wrappers(tokens: list):
 
         break
 
-    return tokens[i:], unbounded
+    return tokens[i:], unbounded, truncated
 
 
 def _positional_args(args: list, value_flags: tuple = ()) -> list:

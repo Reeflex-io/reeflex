@@ -147,6 +147,131 @@ class RedirectionPrefixTests(unittest.TestCase):
         self.assertNotEqual("delete", _verdict("echo hi > /tmp/out").get("verb"))
 
 
+class RedirectionPrefixTruncationTests(unittest.TestCase):
+    """
+    PEELING A REDIRECTION MUST NOT LOSE WHAT IT TRUNCATES.
+
+    Found by qa--237 reviewing this PR and confirmed by dev-2--072 on a separate
+    rig.  The first version of the RFX-337 arm peeled a redirection prefix
+    whenever anything followed it -- but bash applies the redirection AND runs
+    the command, so `> f cmd` truncates `f` and runs `cmd`.  Reading the line as
+    `cmd` alone priced a production database truncation `benign`, which is worse
+    than the escape the arm closes.
+
+    THE GUARD THAT LET IT THROUGH WAS A SPELLING, NOT A BEHAVIOUR.  The arm
+    guarded only the TERMINAL form (`if nxt >= n: break`), and every test above
+    aims its redirection at `/dev/null` -- which destroys nothing, so peeling it
+    loses nothing.  The hole was invisible to a suite that never pointed a
+    redirection at a real file.
+
+    GROUND TRUTH IS OFF THE FILESYSTEM (dev-2--072, synthetic canary in a temp
+    dir; the production-looking path below is classifier INPUT only and is never
+    executed).  All four spellings here destroy the canary's contents.  `>>` and
+    `<` leave it intact, which is why they are controls rather than more cases.
+
+    WHY EVERY ASSERTION IS ABOUT CONTENT AND NONE IS ABOUT SIZE.  `> f echo hi`
+    truncates `f` and then `echo` writes `hi` into it, so the file ends at three
+    bytes.  An "is the file empty" check calls three of these four shapes SAFE,
+    on a tree where they are broken.  Two agents and I all hit that instrument
+    before it was caught; it is written down here so the next one does not.
+    """
+
+    CONTAINER = "/srv/prod/db.sqlite"
+
+    # SIX spellings, not four.  qa--237's table listed four; qa--238's ground
+    # truth found that `>|` (clobber override) and `&>` (both streams) destroy
+    # the contents too, and a test that covers four leaves two live.  Every one
+    # of these was run against a real bash with a canary read back afterwards.
+    # Only the first prices destructive on main -- the other five are holes this
+    # closes rather than a regression it restores.
+    SPELLINGS = ("> %s echo hi", ">%s echo hi", "1> %s echo hi",
+                 "2> %s echo hi", ">| %s echo hi", "&> %s echo hi")
+
+    def test_a_truncating_prefix_over_a_data_container_is_still_a_delete(self):
+        for form in self.SPELLINGS:
+            command = form % self.CONTAINER
+            with self.subTest(command=command):
+                result = _verdict(command)
+                self.assertEqual("delete", result.get("verb"),
+                                 "the peel dropped the truncation of %r"
+                                 % self.CONTAINER)
+                self.assertEqual("broad", result.get("blast_radius"))
+                self.assertEqual("overwrite_container",
+                                 result.get("danger_signature"))
+
+    def test_the_prefix_form_prices_no_lower_than_the_terminal_form(self):
+        """
+        The rule in one line: `> P cmd` truncates P exactly as `> P` does, so it
+        cannot be priced below it whatever `cmd` is.  Asserted as a relation
+        rather than a constant so it keeps holding if the pricing of P moves.
+        """
+        terminal = _verdict("> %s" % self.CONTAINER)
+        for form in self.SPELLINGS:
+            with self.subTest(command=form % self.CONTAINER):
+                prefixed = _verdict(form % self.CONTAINER)
+                self.assertEqual(terminal.get("classification_tier"),
+                                 prefixed.get("classification_tier"))
+
+    def test_an_ordinary_path_is_priced_like_its_own_terminal_form_too(self):
+        """Not only the sensitive path -- the relation is not a path lookup."""
+        self.assertEqual(_verdict("> /tmp/out.log").get("classification_tier"),
+                         _verdict("> /tmp/out.log echo hi").get("classification_tier"))
+
+    # -- the controls: these must NOT tighten -------------------------------
+
+    def test_a_clobber_override_is_not_cut_in_half_by_the_pipe_split(self):
+        """
+        `>|` reached none of this until the splitter stopped treating its `|`
+        as a pipe: the line came apart into `>` and `P cmd`, so the truncation
+        was invisible however carefully the peel was written.  The same
+        exception `2>&1` and `&>log` already had.
+        """
+        line = ">| %s echo hi" % self.CONTAINER
+        self.assertEqual([line], _shell_segments(line))
+
+    def test_an_ordinary_pipe_still_splits(self):
+        """The control for the line above: `|` is still a pipe everywhere else."""
+        self.assertEqual(["echo a", "grep b"], _shell_segments("echo a | grep b"))
+        self.assertEqual(["ls > out", "head"], _shell_segments("ls > out | head"))
+
+    def test_an_appending_prefix_is_not_a_truncation(self):
+        """`>> f cmd` leaves the canary intact on a real shell."""
+        self.assertNotEqual("delete",
+                            _verdict(">> %s echo hi" % self.CONTAINER).get("verb"))
+
+    def test_an_input_redirection_is_not_a_truncation(self):
+        """`< f cat` reads it.  Nothing is destroyed."""
+        self.assertNotEqual("delete",
+                            _verdict("< %s cat" % self.CONTAINER).get("verb"))
+
+    def test_a_discard_sink_is_not_a_destruction(self):
+        """
+        `>/dev/null cmd` is the single most common redirection there is and it
+        destroys nothing.  Without this exclusion the fix would price it off the
+        terminal form of `> /dev/null`, which this tree already reads as
+        `rm_recursive_root` -- a systemic destruction, on a line that discards
+        output.  (That terminal over-classification predates this ticket and is
+        left alone: it is conservative, not fail-open.)
+        """
+        for sink in ("/dev/null", "/dev/stdout", "/dev/stderr"):
+            with self.subTest(sink=sink):
+                result = _verdict("> %s echo hi" % sink)
+                self.assertNotEqual("delete", result.get("verb"))
+                self.assertEqual("benign", result.get("classification_tier"))
+
+    def test_the_escape_this_arm_was_written_for_is_still_closed(self):
+        """RFX-337's original case.  A fix that gives it back nets out at zero."""
+        self.assertEqual("delete", _verdict(">/dev/null rm -rf %s" % V).get("verb"))
+        self.assertEqual("delete",
+                         _verdict("echo $(>/dev/null rm -rf %s)" % V).get("verb"))
+
+    def test_both_halves_of_a_doubly_destructive_line_are_seen(self):
+        """The truncation and the delete: the worse of the two wins, not the first."""
+        result = _verdict("> %s rm -rf %s" % (self.CONTAINER, V))
+        self.assertEqual("delete", result.get("verb"))
+        self.assertEqual("irreversible", result.get("reversibility"))
+
+
 class BenignLinesStayBenignTests(unittest.TestCase):
     """
     The half of the fix that keeps the gate usable.  Every line here SURVIVED
