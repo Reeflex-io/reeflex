@@ -26,14 +26,28 @@ irreversible production `overwrite` OUT of the deletions budget.  Two of the
 nine (`commit`, `install`) name no destruction, so they are deliberately still
 absent and their residual is pinned below rather than quietly closed.
 
-STABLE ACROSS THE RFX-304 ELECTION (PR #158, unmerged at the time of writing).
-Every assertion here holds both under origin/main's leading-word fallback and
-under the most-guarded-word election, so this module does not have to be
-rewritten when that lands.  The names whose reading DOES differ between the two
-(`get_reset_token_status` is a read on main and a delete under the election —
-the measured cost of the widening) are deliberately NOT asserted here; they are
-reported in dev-1--080's evidence, where the before/after is measured against
-a real core rather than modelled.
+THE RFX-304 ELECTION (PR #158) LANDED FIRST, AND TWO ASSERTIONS HERE DID NOT
+SURVIVE IT.  This module was written against a main where #158 was still
+unmerged, and its original body claimed every assertion held both under the
+leading-word fallback and under the most-guarded-word election.  Measured on
+the merge (dev-2--067), two did not:
+
+  * `check_rotation_schedule` resolves `execute`, not `read` — #158 elects
+    `schedule` (rank 1) over the leading `check` (rank 0).  NOT caused by
+    these seven words: `rotation` has no canon entry and the bare `rotate`
+    does not appear in the name.  Reverting `envelope.py` to main and keeping
+    only this file reproduces it, which is the control that assigns the cause.
+    Filed RFX-330.
+  * ability `db/get-vacuum-progress` escalates a declared `read` to `delete`.
+    That one IS caused by this widening, and it is the cost the design note
+    already prices for `show_vacuum_progress`.
+
+Both are asserted below in their measured form, under their own names, rather
+than removed — a wrong expectation deleted is a cost nothing measures.  The
+other names whose reading differs between fallback and election
+(`get_reset_token_status` is a read on main and a delete under the election)
+are still not asserted here; they are reported in dev-1--080's evidence, where
+the before/after is measured against a real core rather than modelled.
 
 NOTE ON STYLE: unittest.TestCase classes, not bare `def test_*` functions —
 gate.py runs this suite with `unittest discover`, where a module of plain
@@ -167,9 +181,29 @@ class TestAbilityCrossCheckSeesTheseWordsNow(unittest.TestCase):
         # which is the same reason "s3/list-deleted-objects" does not signal.
         for ability in ("db/expired-rows", "db/compaction-stats",
                         "iam/rotation-schedule", "pkg/installed-list",
-                        "s3/list-expired-objects", "db/get-vacuum-progress"):
+                        "s3/list-expired-objects"):
             with self.subTest(ability=ability):
                 self.assertEqual(_verb("read", ability=ability), "read")
+
+    def test_an_ability_carrying_the_BARE_word_escalates_even_when_it_reads(self):
+        """The cost of the widening, on the ability path, named not hidden.
+
+        `db/get-vacuum-progress` was written into the list above as a form
+        that "still does not false positive". It is not one, and the list's
+        own stated principle is why: that principle is *past-tense and noun
+        forms have no canon entry*, and this ability carries the BARE verb
+        `vacuum`, which after RFX-308 does. Measured, it escalates a declared
+        `read` to `delete`.
+
+        This is the acknowledged cost, not a surprise — the same escalation
+        the design note prices for `show_vacuum_progress`, one of the four
+        adversarial read-only names it counts. It costs a HOLD once the
+        operator's deletions budget is spent, it names its reason, and the
+        adapter removes it by declaring a canonical verb. Asserted here so the
+        cost is measured by the suite rather than described in a comment.
+        """
+        self.assertEqual(_verb("read", ability="db/get-vacuum-progress"),
+                         "delete")
 
     def test_the_cross_check_still_only_escalates(self):
         self.assertEqual(_verb("delete", ability="db/vacuum-rows"), "delete")
@@ -188,11 +222,41 @@ class TestReadOnlyNamesThatMerelyCONTAINTheseWords(unittest.TestCase):
 
     def test_noun_and_past_tense_compounds_stay_reads(self):
         for name in ("list_expired_sessions", "list_installed_packages",
-                     "get_compaction_stats", "check_rotation_schedule",
+                     "get_compaction_stats",
                      "list_commits", "describe_restoration_plan"):
             with self.subTest(verb=name):
                 self.assertEqual(_verb(name, reversibility="reversible"),
                                  "read")
+
+    def test_check_rotation_schedule_is_NOT_a_read_and_these_words_are_not_why(self):
+        """Measured on the merge, and it belongs to RFX-304, not to RFX-308.
+
+        `check_rotation_schedule` was written into the list above as a noun
+        form that stays a read. It does not: it resolves `execute`. The cause
+        is not this ticket's vocabulary — `rotation` has no canon entry, and
+        the bare `rotate` this PR adds does not appear in the name. It is the
+        RFX-304 election (#158, on main since `3e78749`) electing the most
+        guarded word it knows: `check` -> read (rank 0) and `schedule` ->
+        execute (rank 1), so `execute` wins.
+
+        So the claim in this module's original body — that every assertion
+        here holds both under the leading-word fallback and under the #158
+        election — is false for this one name, and it was false the moment
+        #158 landed, with or without these seven words. The control that
+        shows it: with `envelope.py` reverted to main and only this test file
+        applied, this name still resolves `execute`.
+
+        The behaviour is inside #158's declared escalation bias rather than
+        outside it, so this is an assertion correction and not a product
+        change. Filed as RFX-330 for the separate question of whether a
+        non-leading `schedule` should elect `execute` over a leading `check`.
+        """
+        self.assertEqual(_verb("check_rotation_schedule",
+                               reversibility="reversible"), "execute")
+        # And the reason, asserted so a later canon edit cannot make this
+        # test pass for a different reason than the one documented above.
+        self.assertNotIn("rotation", _VERB_CANON)
+        self.assertEqual(_VERB_CANON.get("schedule"), "execute")
 
 
 class TestTheDeletionsBudgetActuallyCharges(unittest.TestCase):

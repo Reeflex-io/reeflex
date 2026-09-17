@@ -145,21 +145,35 @@ class TestElectionIsMostGuardedNotFirst(unittest.TestCase):
         """RESIDUAL, pinned so it is a known gap and not a surprise.
 
         The election reads _VERB_CANON. A mutating word the canon has no entry
-        for is invisible to it, so `count_and_compact` — a real MCP tool name
-        — still resolves to `read` and still reaches R1. Measured against
-        reeflex-mcp's own `_MUTATING_STEMS`: 42 of its 51 stems are in this
-        canon and NONE of the 51 maps to `read`, so the election never
-        mistakes a known mutation for a read; the 9 that are absent are
-        `expire, reset, restore, rotate, overwrite, commit, compact, vacuum,
-        install`.
+        for is invisible to it, so it resolves to `read` and reaches R1.
+        Measured against reeflex-mcp's own `_MUTATING_STEMS`: 42 of its 51
+        stems were in this canon and NONE of the 51 maps to `read`, so the
+        election does not mistake a known mutation for a read; the 9 that were
+        absent were `expire, reset, restore, rotate, overwrite, commit,
+        compact, vacuum, install`.
 
-        Widening the vocabulary is a separate change with its own blast radius
-        (those words also arrive as SINGLE verbs, where they currently land on
-        the reversibility default), so it is filed rather than smuggled in
-        here. This test fails the day someone adds one, which is the moment to
-        move the expectation.
+        THE EXPECTATION MOVED, AND THIS IS THAT DAY (RFX-308, #160). The
+        version of this test that shipped with #158 said "this test fails the
+        day someone adds one, which is the moment to move the expectation",
+        and asserted `count_and_compact` -> `read`. RFX-308 added seven of the
+        nine — expire, reset, rotate, overwrite, compact, vacuum, restore —
+        all to `delete`, so `count_and_compact` now elects `compact` and is a
+        `delete`. That half of the residual is CLOSED, and it is asserted here
+        rather than deleted, so a later change that silently un-adds those
+        words reddens this test instead of passing it.
+
+        The residual itself SURVIVES, narrower: `commit` and `install` are
+        deliberately still absent (neither names a destruction — see the
+        WIDENING note in envelope.py), so a compound built from one of them
+        still elects the leading `count` and still reaches R1. That is the
+        arm that keeps this a known gap, and closing it wants a rule about
+        UNKNOWN words in the election, not more vocabulary.
         """
-        self.assertEqual(_verb("count_and_compact", ability=None), "read")
+        # Closed by RFX-308: the word is in the canon, so the election sees it.
+        self.assertEqual(_verb("count_and_compact", ability=None), "delete")
+        # Still open: the two words RFX-308 deliberately did not add.
+        self.assertEqual(_verb("count_and_install", ability=None), "read")
+        self.assertEqual(_verb("count_and_commit", ability=None), "read")
 
     def test_the_escape_is_not_only_about_delete(self):
         # Same defect, other verbs: on v0.2.1 both of these were recorded
@@ -238,29 +252,52 @@ class TestAReadIsOnlyElectedFromTheLEADINGWord(unittest.TestCase):
     other half of this assertion).
     """
 
-    # (name, what it must resolve to on an IRREVERSIBLE action)
+    # (name, IRREVERSIBLE expectation, REVERSIBLE expectation)
+    #
+    # The reversible column was a single hardcoded "update" until RFX-308
+    # (#160) put `compact` and `vacuum` in the canon. For those two the
+    # leading word is no longer unknown, so they no longer reach the
+    # reversibility default at all — they elect their own word and resolve
+    # `delete` on BOTH arms. That is the fix RFX-308 exists for (a reversible
+    # production vacuum was recorded an `update` and charged the deletions
+    # budget nothing), and it is strictly more guarded than the `update` this
+    # column used to assert, so the expectation moves rather than the code.
+    # The four rows whose leading word is still unknown are untouched, which
+    # is what keeps this table a measurement of the election and not of
+    # RFX-308's vocabulary.
     LEADING_WORD_UNKNOWN = [
-        ("compact_event_log", "delete"),
-        ("vacuum_audit_log", "delete"),
-        ("rebuild_search_index", "delete"),
-        ("refresh_materialized_status", "delete"),
-        ("frobnicate_and_list", "delete"),
-        ("zorp_query", "delete"),
+        ("compact_event_log", "delete", "delete"),
+        ("vacuum_audit_log", "delete", "delete"),
+        ("rebuild_search_index", "delete", "update"),
+        ("refresh_materialized_status", "delete", "update"),
+        ("frobnicate_and_list", "delete", "update"),
+        ("zorp_query", "delete", "update"),
     ]
 
     def test_an_incidental_read_noun_does_not_make_a_compound_a_read(self):
-        for raw, expected in self.LEADING_WORD_UNKNOWN:
+        for raw, expected, _ in self.LEADING_WORD_UNKNOWN:
             with self.subTest(verb=raw):
                 self.assertEqual(_verb(raw, ability=None), expected)
 
     def test_and_it_lands_on_the_inert_default_when_reversible(self):
-        # Never `read`: that is the one member that would hand out R1.
-        for raw, _ in self.LEADING_WORD_UNKNOWN:
+        for raw, _, expected in self.LEADING_WORD_UNKNOWN:
             with self.subTest(verb=raw):
                 self.assertEqual(
                     _verb(raw, ability=None, reversibility="reversible"),
-                    "update",
+                    expected,
                 )
+
+    def test_and_none_of_them_is_ever_a_read_on_either_arm(self):
+        # The invariant the row-by-row expectations above are an instance of,
+        # asserted separately so it cannot be weakened by editing a cell:
+        # `read` is the one member that would hand out R1.
+        for raw, _, _rev in self.LEADING_WORD_UNKNOWN:
+            for reversibility in ("irreversible", "reversible"):
+                with self.subTest(verb=raw, reversibility=reversibility):
+                    self.assertNotEqual(
+                        _verb(raw, ability=None, reversibility=reversibility),
+                        "read",
+                    )
 
     def test_a_leading_read_word_is_still_the_operation(self):
         # The verb-first names this election exists to serve, including the
