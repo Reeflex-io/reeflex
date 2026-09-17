@@ -1,0 +1,60 @@
+# LiteLLM proxy config for the CONNECTOR path -- nothing is installed into the
+# proxy container. This is the file the doc's "nothing in your image" path
+# tells a customer to write, and the one the round's measurements were taken
+# against, on the stock `ghcr.io/berriai/litellm:v1.101.0` image.
+#
+#   docker run ... ghcr.io/berriai/litellm:v1.101.0 --config /app/config.yaml
+#
+# The difference from `proxy/config.yaml` is the whole point: there, `guardrail:`
+# is a dotted import path and `reeflex_litellm` must be importable INSIDE this
+# container. Here it is the built-in `generic_guardrail_api`, and the decision
+# is taken in a process we ship, over HTTP.
+
+model_list:
+  - model_name: mock-tools
+    litellm_params:
+      model: openai/mock-tools
+      api_base: http://rfx-tmp-dev1-072-model:8080/v1
+      api_key: sk-mock-not-a-real-key
+
+  # The second deployment exists to measure SCOPE, not routing: it is the same
+  # mock model with the guardrail attached per-model instead of globally.
+  - model_name: mock-tools-governed
+    litellm_params:
+      model: openai/mock-tools
+      api_base: http://rfx-tmp-dev1-072-model:8080/v1
+      api_key: sk-mock-not-a-real-key
+      guardrails: ["reeflex"]
+
+  # ...and a third with no guardrail attached and default_on off, which is what
+  # "Reeflex is not attached to this provider" looks like from a caller's side.
+  - model_name: mock-tools-ungoverned
+    litellm_params:
+      model: openai/mock-tools
+      api_base: http://rfx-tmp-dev1-072-model:8080/v1
+      api_key: sk-mock-not-a-real-key
+
+guardrails:
+  - guardrail_name: reeflex
+    litellm_params:
+      guardrail: generic_guardrail_api
+      # post_call is the ONLY mode that can see an action: the pre-call hook
+      # sees the prompt and which tools EXIST, not which one the model chose.
+      mode: post_call
+      api_base: http://rfx-tmp-dev1-072-connector:8080
+      api_key: os.environ/REEFLEX_CONNECTOR_TOKEN
+      # The default. Named anyway: it is the difference between a connector
+      # outage refusing actions and a connector outage releasing them.
+      unreachable_fallback: fail_closed
+      default_on: false
+      # WITHOUT THIS the value of `x-reeflex-session` does not reach the
+      # connector: litellm forwards the VALUE of an inbound header only for its
+      # own allowlist and replaces every other value with the string
+      # "[present]". `extra_headers` is the allowlist extension.
+      extra_headers: ["x-reeflex-session"]
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

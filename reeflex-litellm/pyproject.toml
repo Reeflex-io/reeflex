@@ -108,6 +108,11 @@ Changelog = "https://github.com/Reeflex-io/reeflex/blob/main/CHANGELOG.md"
 
 [project.scripts]
 reeflex-litellm = "reeflex_litellm.cli:main"
+# The connector: the same decision, served over LiteLLM's Generic Guardrail API
+# so nothing has to be installed inside the customer's LiteLLM container. It is
+# a console script and not an extra because it needs NO dependency litellm
+# would bring -- the whole point is that this process is not a proxy.
+reeflex-connector = "reeflex_litellm.connector:main"
 
 [tool.setuptools.packages.find]
 include = ["reeflex_litellm*"]

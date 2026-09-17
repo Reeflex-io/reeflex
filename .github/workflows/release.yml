@@ -12,6 +12,12 @@
 #                        tag actually uploads — see "what a green PyPI job
 #                        means" below.
 #   - GHCR            <- ghcr.io/reeflex-io/reeflex-core  (ONLY if core changed)
+#   - GHCR            <- ghcr.io/reeflex-io/reeflex-connector (ONLY if
+#                        reeflex-litellm/ changed). Two images, two jobs,
+#                        two artefacts: core is the decision engine, the
+#                        connector is what lets a customer's STOCK LiteLLM
+#                        container reach it without installing anything
+#                        into that container.
 #
 # AND TWO JOBS THAT INVOKE THE ARTEFACTS RATHER THAN TRUSTING THE UPLOAD
 # (RFX-246). `verify-dist` installs the wheels THIS run built into clean venvs
@@ -115,6 +121,8 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       core_changed: ${{ steps.core.outputs.core_changed }}
       core_reason: ${{ steps.core.outputs.core_reason }}
+      connector_changed: ${{ steps.connector.outputs.connector_changed }}
+      connector_reason: ${{ steps.connector.outputs.connector_reason }}
       claude_version: ${{ steps.ver.outputs.claude_version }}
       holds_version: ${{ steps.ver.outputs.holds_version }}
       mcp_version: ${{ steps.ver.outputs.mcp_version }}
@@ -171,6 +179,34 @@ jobs:
             echo "core_changed=false" >> "$GITHUB_OUTPUT"
             echo "core_reason=no reeflex-core/ or Dockerfile change since ${PREV} — skipping GHCR" >> "$GITHUB_OUTPUT"
             echo "GHCR: no core change since ${PREV}, skipping."
+          fi
+
+      - name: Detect whether the connector image must be rebuilt
+        id: connector
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.resolve.outputs.tag }}"
+          # The connector image is built from reeflex-litellm/ (the package AND
+          # its Dockerfile), so the detection window is that directory.
+          if [ "${{ github.event.inputs.push_core }}" = "true" ]; then
+            echo "connector_changed=true" >> "$GITHUB_OUTPUT"
+            echo "connector_reason=forced via push_core input" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          if [ -z "$PREV" ]; then
+            echo "connector_changed=true" >> "$GITHUB_OUTPUT"
+            echo "connector_reason=no previous tag (first release) — building the connector" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$PREV" "$TAG" -- reeflex-litellm/ | grep -q .; then
+            echo "connector_changed=true" >> "$GITHUB_OUTPUT"
+            echo "connector_reason=reeflex-litellm/ changed since ${PREV}" >> "$GITHUB_OUTPUT"
+            echo "GHCR: connector changed since ${PREV}, will push."
+          else
+            echo "connector_changed=false" >> "$GITHUB_OUTPUT"
+            echo "connector_reason=no reeflex-litellm/ change since ${PREV} — skipping the connector image" >> "$GITHUB_OUTPUT"
+            echo "GHCR: no connector change since ${PREV}, skipping."
           fi
 
       - name: Extract per-package versions
@@ -543,6 +579,83 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
   # ---------------------------------------------------------------------------
+  # ghcr-connector: build + push ghcr.io/reeflex-io/reeflex-connector.
+  #
+  # WHY THIS IS A SECOND IMAGE AND NOT A SECOND TAG ON THE CORE ONE: it is a
+  # different artefact with a different job. The core image is the decision
+  # engine; this one is the adapter that lets a customer's STOCK LiteLLM
+  # container reach it without installing anything into that container
+  # (docs/guides/litellm-docker.md). A customer running the connector does not
+  # necessarily run core from this image, and vice versa.
+  #
+  # Built from reeflex-litellm/ with that directory as the context, so the
+  # image contains the package and nothing else in the monorepo.
+  # ---------------------------------------------------------------------------
+  ghcr-connector:
+    name: GHCR connector image
+    runs-on: ubuntu-latest
+    needs: [prepare, build, verify-dist]
+    if: needs.prepare.outputs.connector_changed == 'true'
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Checkout at the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/reeflex-io/reeflex-connector
+          tags: |
+            type=raw,value=${{ needs.prepare.outputs.tag }}
+            type=raw,value=latest
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./reeflex-litellm
+          file: ./reeflex-litellm/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: The image must SERVE the endpoint, not merely build
+        run: |
+          set -euo pipefail
+          TAG="$(echo '${{ steps.meta.outputs.tags }}' | head -n1)"
+          docker run -d --name rfx-connector-smoke -p 18099:8080 \
+            -e REEFLEX_CONNECTOR_TOKEN=smoke-token "$TAG"
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:18099/healthz >/dev/null && break
+            sleep 1
+          done
+          # Liveness, unauthenticated (what the container healthcheck reads).
+          curl -sf http://127.0.0.1:18099/healthz | tee /tmp/healthz.json
+          python3 -c "import json;d=json.load(open('/tmp/healthz.json'));assert d['service']=='reeflex-connector',d;assert d['endpoint']=='/beta/litellm_basic_guardrail_api',d;assert d['auth_required'] is True,d"
+          # A GOVERNED request with no token must be refused, not served: this
+          # is the negative control, and without it the smoke test passes on an
+          # image that answers everything.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' -d '{"input_type":"response"}' \
+            http://127.0.0.1:18099/beta/litellm_basic_guardrail_api)
+          test "$code" = "401" || { echo "expected 401 without a token, got $code"; exit 1; }
+          docker rm -f rfx-connector-smoke
+
+  # ---------------------------------------------------------------------------
   # verify-published: the ONLY job in this workflow whose green means a
   # customer's command works. It does not read the `pypi` job's result — it
   # goes to the index, installs the versions this tag NAMES, and invokes them.
@@ -638,7 +751,7 @@ jobs:
   summary:
     name: Channel checklist
     runs-on: ubuntu-latest
-    needs: [prepare, build, verify-dist, github-release, pypi, ghcr, verify-published]
+    needs: [prepare, build, verify-dist, github-release, pypi, ghcr, ghcr-connector, verify-published]
     if: always()
     steps:
       - name: Write channel checklist
@@ -651,9 +764,12 @@ jobs:
           GATE_V: ${{ needs.prepare.outputs.gate_version }}
           CORE_CHANGED: ${{ needs.prepare.outputs.core_changed }}
           CORE_REASON: ${{ needs.prepare.outputs.core_reason }}
+          CONNECTOR_CHANGED: ${{ needs.prepare.outputs.connector_changed }}
+          CONNECTOR_REASON: ${{ needs.prepare.outputs.connector_reason }}
           R_RELEASE: ${{ needs.github-release.result }}
           R_PYPI: ${{ needs.pypi.result }}
           R_GHCR: ${{ needs.ghcr.result }}
+          R_GHCR_CONNECTOR: ${{ needs['ghcr-connector'].result }}
           R_VERIFY_DIST: ${{ needs.verify-dist.result }}
           R_VERIFY_PUB: ${{ needs.verify-published.result }}
           REPO: ${{ github.repository }}
@@ -670,6 +786,7 @@ jobs:
           }
           # GHCR reports "pushed" or "skipped (no core change)" specifically.
           if [ "$CORE_CHANGED" = "true" ]; then GHCR_STATUS="$(mark "$R_GHCR")"; else GHCR_STATUS="⏭️ skipped (no core change)"; fi
+          if [ "$CONNECTOR_CHANGED" = "true" ]; then CONN_STATUS="$(mark "$R_GHCR_CONNECTOR")"; else CONN_STATUS="⏭️ skipped (no reeflex-litellm change)"; fi
 
           {
             echo "# Reeflex release ${TAG} — channel checklist"
@@ -682,8 +799,16 @@ jobs:
             echo "| PyPI | reeflex-mcp | ${MCP_V} | $(mark "$R_PYPI") | https://pypi.org/project/reeflex-mcp/${MCP_V}/ |"
             echo "| PyPI | reeflex-litellm | ${LITELLM_V} | $(mark "$R_PYPI") | https://pypi.org/project/reeflex-litellm/${LITELLM_V}/ |"
             echo "| GHCR | reeflex-core | ${TAG} + latest | ${GHCR_STATUS} | https://github.com/${REPO}/pkgs/container/reeflex-core |"
+            echo "| GHCR | reeflex-connector | ${TAG} + latest | ${CONN_STATUS} | https://github.com/${REPO}/pkgs/container/reeflex-connector |"
             echo ""
-            echo "GHCR decision: ${CORE_REASON}"
+            echo "GHCR decision (core): ${CORE_REASON}"
+            echo ""
+            echo "GHCR decision (connector): ${CONNECTOR_REASON}"
+            echo ""
+            echo "The connector image is what lets a customer govern a STOCK \`ghcr.io/berriai/litellm\`"
+            echo "container without installing anything into it — docs/guides/litellm-docker.md. Its"
+            echo "job does not stop at \`docker build\`: it runs the image and asserts /healthz names"
+            echo "the endpoint AND that a governed POST with no token is refused 401."
             echo ""
             echo "WordPress adapter (reeflex-gate) version in the attached zips: ${GATE_V}."
             echo ""

@@ -181,6 +181,40 @@ human.
 
 ---
 
+## If your LiteLLM runs in Docker, read this first
+
+`pip install` below assumes you can install into the environment your proxy
+runs in. **If you run `ghcr.io/berriai/litellm`, you cannot** — not without
+building a derived image, because a `guardrail:` dotted import path has to be
+importable INSIDE that container and this package is not in it. A customer who
+pastes the config below into the stock image gets an import error at proxy
+start.
+
+There are two ways out, both walked end to end on the stock image on
+2026-09-17 and both written up, with their measured differences, in
+**[docs/guides/litellm-docker.md](../docs/guides/litellm-docker.md)**:
+
+1. **Nothing in your image** — run `reeflex-connector` (this package, served
+   over LiteLLM's Generic Guardrail API) as its own container and point the
+   proxy at it. Your LiteLLM stays the image you pulled. Compose file:
+   [`deploy/docker-compose.connector.yml`](deploy/docker-compose.connector.yml).
+2. **Inside your image** — the derived image, which is **not** the two lines
+   every write-up gives. Measured: `RUN pip install …` fails with exit code
+   127, because the LiteLLM image is a Wolfi image with a `/app/.venv`
+   virtualenv and no `pip`, no `pip3` and no `uv`. What works:
+
+   ```dockerfile
+   FROM ghcr.io/berriai/litellm:v1.101.0
+   RUN python -m ensurepip \
+    && python -m pip install --no-cache-dir "reeflex-litellm==0.1.0"
+   ```
+
+   Compose file: [`deploy/docker-compose.in-image.yml`](deploy/docker-compose.in-image.yml).
+
+The guide is the place that says which to pick, what each one costs in latency,
+and the two things path 1 does differently (a refusal refuses the whole
+response; a streamed tool call reaches the client before the refusal does).
+
 ## Install
 
 ```bash
