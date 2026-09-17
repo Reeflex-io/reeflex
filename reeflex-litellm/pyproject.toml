@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reeflex-litellm"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reeflex governance seat for an LLM gateway: a LiteLLM post-call guardrail that rules on every tool call the models behind the proxy propose (allow/deny/require_approval), fail-closed -- one integration for every agent behind the gateway."
 readme = "README.md"
 license = "Apache-2.0"

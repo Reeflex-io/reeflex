@@ -220,7 +220,7 @@ The connector's own counters are the second witness, and they need the token:
 ```console
 $ curl -s -H "x-api-key: $REEFLEX_CONNECTOR_TOKEN" \
        http://reeflex-connector:8080/healthz
-{"status":"ok","service":"reeflex-connector","version":"0.1.0",
+{"status":"ok","service":"reeflex-connector","version":"0.2.0",
  "endpoint":"/beta/litellm_basic_guardrail_api","auth_required":true,
  "tenancy":{"loaded":true,"orgs":2},"core_url":"http://reeflex-core:8080",
  "hold_wait_seconds":30.0,
@@ -390,7 +390,10 @@ Two notes on that second line, both measured:
   `reeflex_litellm-0.1.0` and its one dependency `reeflex_claude-0.2.0` — and
   left LiteLLM untouched.
 * **Pin the version.** An unpinned install makes the image you ship today and
-  the image you ship next month two different governance builds.
+  the image you ship next month two different governance builds. `0.1.0` is
+  what is on PyPI as of 2026-09-17 and it is the build measured here; the tree
+  has since moved to `0.2.0`, so raise the pin once a release tag publishes it
+  ([Availability](#availability)).
 
 ### The compose file
 
@@ -674,7 +677,7 @@ absent.
 
 | | today (2026-09-17) |
 |---|---|
-| `reeflex-litellm` on PyPI | **0.1.0**, published 2026-09-16 — the in-process guardrail of path 2 |
+| `reeflex-litellm` on PyPI | **0.1.0**, published 2026-09-16 — the in-process guardrail of path 2. That is the version path 2's Dockerfile pins below, and it is the one measured here. The tree now declares **0.2.0** (the connector), which is **not yet on PyPI**; raise the pin to `0.2.0` once a release tag publishes it |
 | `reeflex-connector` image | **built from source in this repo**; published to `ghcr.io/reeflex-io/reeflex-connector` from the next release tag. Until that tag lands, path 1 needs `docker build -t reeflex-connector:local reeflex-litellm/` from a checkout, and the compose file's `image:` line pointed at it |
 | `reeflex-core` image | `ghcr.io/reeflex-io/reeflex-core:v0.2.1` |
 

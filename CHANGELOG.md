@@ -29,6 +29,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
   **What the evidence record loses on this transport, recorded as a gap rather than guessed:** the generic wire carries no `_hidden_params`, so `api_base_host`, `deployment_id` and `provider` are `null` and `placement` is `undeclared`. The ledger row says `"transport": "generic_guardrail_api"` so the two paths are never confused. Everything else — org, session, axes, rule, stage, approver — is identical.
 
+  **`reeflex-litellm` is bumped 0.1.0 → 0.2.0**, because RFX-300's own `pypi-content` gate caught this change first: `reeflex-litellm==0.1.0 published under a version string the tree still declares, with different content`. That is the component working exactly as designed, on the first change to reach it — a customer running `pip install -U` against an unbumped tree gets the old code while pip reports success. The guide's derived-image recipe still pins `0.1.0`, which is what is on PyPI today and what was measured here, and both the recipe and the availability table say to raise the pin when a release tag publishes 0.2.0.
+
   New: `reeflex_litellm/connector.py`, `reeflex-litellm/Dockerfile`, `reeflex-litellm/deploy/` (both compose files, both configs, the derived Dockerfile), `docs/guides/litellm-docker.md`, 34 tests in `tests/test_connector.py`, and a `ghcr-connector` job in `release.yml`.
 
 - **The release gate now fails when a published artefact's sources differ from this tree's under the SAME version string (RFX-300).**
