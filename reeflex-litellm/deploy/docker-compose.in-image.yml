@@ -1,0 +1,42 @@
+# PATH 2 -- "inside your image". The fallback path, and the only one that does
+# not depend on a BETA API. It costs a derived image, a rebuild on every
+# LiteLLM upgrade, and it buys two things the connector path cannot give:
+# a denied call is removed from an otherwise-delivered response, and a STREAMED
+# tool call is withheld until the decision is taken rather than refused after
+# the client already has the bytes.
+#
+#   cp .env.example .env && $EDITOR .env
+#   docker compose -f docker-compose.in-image.yml up -d --build
+services:
+  litellm:
+    build:
+      context: .
+      dockerfile: Dockerfile.litellm
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports: ["4000:4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set it in .env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set it in .env}
+      # On this path the Reeflex environment belongs to the PROXY container:
+      # the decision runs inside it.
+      REEFLEX_CORE_URL: http://reeflex-core:8080
+      REEFLEX_LITELLM_TENANCY_MAP_FILE: /etc/reeflex/tenancy.json
+      REEFLEX_LITELLM_HOLD_WAIT: "30"
+      REEFLEX_LITELLM_LEDGER_PATH: /var/lib/reeflex/decisions.jsonl
+    volumes:
+      - ./config-in-image.yaml:/app/config.yaml:ro
+      - ./tenancy.json:/etc/reeflex/tenancy.json:ro
+      - reeflex-ledger:/var/lib/reeflex
+    depends_on: [reeflex-core]
+
+  reeflex-core:
+    image: ghcr.io/reeflex-io/reeflex-core:v0.2.1
+    environment:
+      REEFLEX_RESOLVER_TOKENS: >-
+        {"${APPROVER_TOKEN:?set it in .env}":{"type":"human","id":"alice@example.com"}}
+    volumes:
+      - reeflex-state:/app/audit
+
+volumes:
+  reeflex-ledger:
+  reeflex-state:

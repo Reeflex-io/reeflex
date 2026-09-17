@@ -1,0 +1,19 @@
+# PATH 2 -- "inside your image".
+#
+# NOT the two lines every write-up gives. Measured 2026-09-17 on
+# ghcr.io/berriai/litellm:v1.101.0: `RUN pip install ...` fails with exit code
+# 127. The image is a Wolfi image whose Python is a virtualenv at /app/.venv
+# (3.13.15) and it ships no pip, no pip3 and no uv. `python -m pip` answers
+# "No module named pip". `python -m ensurepip` works.
+FROM ghcr.io/berriai/litellm:v1.101.0
+
+# `reeflex-litellm`, NOT `reeflex-litellm[proxy]`: the extra exists to bring
+# LiteLLM in, this image already has it, and asking for the extra invites pip
+# to resolve LiteLLM again inside an image that was built with uv. Measured,
+# this pulls exactly two wheels (reeflex_litellm, reeflex_claude) and leaves
+# LiteLLM untouched.
+#
+# Pinned on purpose: an unpinned install makes the image you ship today and the
+# image you ship next month two different governance builds.
+RUN python -m ensurepip \
+ && python -m pip install --no-cache-dir "reeflex-litellm==0.1.0"

@@ -374,6 +374,71 @@ def read_identity(user_api_key_dict) -> GatewayIdentity:
     )
 
 
+def read_identity_from_gateway_metadata(request_data) -> GatewayIdentity:
+    """The same identity, read off the Generic Guardrail API's metadata block.
+
+    THE WIRE, READ OFF litellm 1.101.0 RATHER THAN OFF THE DOCS.  An external
+    guardrail does not get `UserAPIKeyAuth`.  It gets
+    `GenericGuardrailAPIRequest.request_data`, a `GenericGuardrailAPIMetadata`
+    TypedDict with exactly eight optional keys, assembled by
+    `GenericGuardrailAPI._extract_user_api_key_metadata()` from the request's
+    resolved metadata bucket:
+
+        user_api_key_hash, user_api_key_alias, user_api_key_user_id,
+        user_api_key_user_email, user_api_key_team_id, user_api_key_team_alias,
+        user_api_key_end_user_id, user_api_key_org_id
+
+    `user_api_key_hash` is `UserAPIKeyAuth.api_key` under another name --
+    `LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key()` sets
+    `user_api_key_hash=user_api_key_dict.api_key` with the comment "just the
+    hashed token".  So the three dimensions this package binds on (`key_hash`,
+    `key_alias`, `team_id`) all have a field here, and which of them ARRIVE for
+    a given deployment is a measured question, not an assumed one -- see the
+    connector doc's tenancy section.
+
+    TWO DIFFERENCES FROM `read_identity()`, BOTH DELIBERATE.
+
+    1. `via_virtual_key` IS NOT ON THIS WIRE.  It is the unforgeability marker
+       `safe_key_hash()` requires before it will trust a key value, and litellm
+       excludes it from serialisation on purpose.  This function therefore
+       treats "the proxy put a value in `user_api_key_hash`" as the marker, and
+       keeps the SHAPE test (sha256 hex, or the master-key alias) unchanged.
+       What that buys and what it does not: the shape test still refuses to
+       record a raw `sk-...` credential that a `custom_auth` callback put
+       there, so no credential reaches a ledger; what it cannot do is tell a
+       proxy-authenticated hash from a custom-auth one that happens to be a
+       sha256 digest.  A deployment that authenticates with `custom_auth` and
+       wants that distinction should bind on `key_alias` or `team_id`, or use
+       the in-process guardrail, where the marker is present.
+
+    2. THE CONNECTOR IS A SEPARATE PROCESS, so this value crossed a network.
+       It is only as trustworthy as the link: anything that can POST to the
+       connector can claim any org in the map.  That is why the connector
+       requires a shared token on every request and why the doc puts it on an
+       internal network.  The in-process guardrail has no equivalent exposure,
+       and the doc says so rather than leaving a reader to assume the two paths
+       are identical in every respect.
+    """
+    if not isinstance(request_data, Mapping):
+        request_data = {}
+    raw_hash = _s(request_data.get("user_api_key_hash"))
+    key_hash, withheld = safe_key_hash(raw_hash, via_virtual_key=True)
+    return GatewayIdentity(
+        key_hash=key_hash,
+        key_alias=_s(request_data.get("user_api_key_alias")),
+        team_id=_s(request_data.get("user_api_key_team_id")),
+        team_alias=_s(request_data.get("user_api_key_team_alias")),
+        litellm_org_id=_s(request_data.get("user_api_key_org_id")),
+        litellm_org_alias=None,
+        user_id=_s(request_data.get("user_api_key_user_id")),
+        end_user_id=_s(request_data.get("user_api_key_end_user_id")),
+        # Not the proxy's own marker -- see (1) above.  Recorded as False so a
+        # ledger row never claims a guarantee this transport cannot make.
+        via_virtual_key=False,
+        key_material_withheld=withheld,
+    )
+
+
 # ---------------------------------------------------------------------------
 # The map
 # ---------------------------------------------------------------------------
@@ -626,7 +691,18 @@ def resolve(user_api_key_dict) -> Resolution:
     into a refusal.  There is no path through this function that returns a
     tenant for an identity the map does not name.
     """
-    identity = read_identity(user_api_key_dict)
+    return resolve_identity(read_identity(user_api_key_dict))
+
+
+def resolve_identity(identity: GatewayIdentity) -> Resolution:
+    """The map half of `resolve()`, for a caller that read the identity itself.
+
+    `connector.py` needs this: over LiteLLM's Generic Guardrail API there is no
+    `UserAPIKeyAuth` to read -- the proxy sends a small metadata block instead
+    (`read_identity_from_gateway_metadata`).  Splitting the function keeps ONE
+    map lookup, one precedence order and one unmapped reason across both
+    transports, rather than a second copy that can drift.
+    """
     try:
         mapping = load_map()
     except TenancyConfigError as exc:

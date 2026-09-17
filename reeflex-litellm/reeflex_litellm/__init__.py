@@ -10,6 +10,6 @@ version belongs here too, because it is the thing most easily overclaimed:
 a gateway sees a tool call PROPOSED, not EXECUTED.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = ["__version__"]

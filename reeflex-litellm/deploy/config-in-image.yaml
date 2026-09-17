@@ -1,0 +1,25 @@
+# LiteLLM config for PATH 2. `guardrail:` is a dotted import path, so
+# reeflex_litellm must be importable INSIDE this container -- which is what
+# Dockerfile.litellm is for.
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: reeflex
+    litellm_params:
+      guardrail: reeflex_litellm.guardrail.ReeflexActionGuardrail
+      mode: post_call
+      default_on: true
+      # Seconds a response may be withheld while a human decides.
+      # 0 = refuse at once and name the hold.
+      reeflex_hold_wait: 30
+      reeflex_session_header: x-reeflex-session
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

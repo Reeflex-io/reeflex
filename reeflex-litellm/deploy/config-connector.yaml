@@ -1,0 +1,37 @@
+# LiteLLM config for PATH 1. Nothing here requires reeflex_litellm to be
+# importable inside the proxy container.
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: reeflex
+    litellm_params:
+      guardrail: generic_guardrail_api
+      # post_call is the ONLY mode that can see an action: the pre-call hook
+      # sees the prompt and which tools EXIST, not which one the model chose.
+      # A proxy on `mode: pre_call` looks wired and governs nothing; the
+      # connector counts those requests and reports them on /healthz.
+      mode: post_call
+      api_base: http://reeflex-connector:8080
+      api_key: os.environ/REEFLEX_CONNECTOR_TOKEN
+      # The default, named anyway: it is the difference between a connector
+      # outage refusing actions and one releasing them. `fail_on_error: false`
+      # is the bigger switch and is NOT set here -- see the guide's failure
+      # table.
+      unreachable_fallback: fail_closed
+      # Runs even for a caller that passes an empty guardrails array. With
+      # `modify_guardrails: false` on each team, nobody can opt out.
+      default_on: true
+      # WITHOUT THIS the value of x-reeflex-session does not arrive: LiteLLM
+      # forwards header VALUES only for its own allowlist and replaces the
+      # rest with the literal string "[present]".
+      extra_headers: ["x-reeflex-session"]
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

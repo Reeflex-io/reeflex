@@ -1,0 +1,69 @@
+# PATH 1 -- "nothing in your image".
+#
+# The LiteLLM container is the STOCK published image: nothing is installed into
+# it and it does not have to be rebuilt when LiteLLM releases. The governance
+# decision is taken in `reeflex-connector`, which answers LiteLLM's Generic
+# Guardrail API over HTTP.
+#
+#   cp .env.example .env && $EDITOR .env
+#   docker compose -f docker-compose.connector.yml up -d
+#
+# Measured against this file on 2026-09-17; the numbers and the limits are in
+# docs/guides/litellm-docker.md. Read the streaming section before you put a
+# streaming agent behind it.
+services:
+  litellm:
+    # PINNED. The Generic Guardrail API is BETA on LiteLLM's side; a moving tag
+    # means the contract under your governance can change without you.
+    image: ghcr.io/berriai/litellm:v1.101.0
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports: ["4000:4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set it in .env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set it in .env}
+      # Presented to the connector as `x-api-key`; the same value the connector
+      # requires. By reference -- the value lives in .env.
+      REEFLEX_CONNECTOR_TOKEN: ${REEFLEX_CONNECTOR_TOKEN:?set it in .env}
+    volumes:
+      - ./config-connector.yaml:/app/config.yaml:ro
+    depends_on:
+      reeflex-connector:
+        condition: service_healthy
+
+  reeflex-connector:
+    # Until the next release tag publishes this image, build it from a
+    # checkout:  docker build -t reeflex-connector:local reeflex-litellm/
+    image: ghcr.io/reeflex-io/reeflex-connector:latest
+    environment:
+      REEFLEX_CONNECTOR_TOKEN: ${REEFLEX_CONNECTOR_TOKEN:?set it in .env}
+      REEFLEX_CORE_URL: http://reeflex-core:8080
+      REEFLEX_LITELLM_TENANCY_MAP_FILE: /etc/reeflex/tenancy.json
+      # Seconds a response may be withheld while a human decides a hold.
+      # Must stay below LiteLLM's own timeout on the guardrail call (600s by
+      # default, and proxy-wide REQUEST_TIMEOUT if you set one).
+      # 0 = never wait: refuse at once and name the hold so the caller can
+      # retry after a decision.
+      REEFLEX_LITELLM_HOLD_WAIT: "30"
+    volumes:
+      - ./tenancy.json:/etc/reeflex/tenancy.json:ro
+      # WITHOUT THIS the decision ledger is discarded when the container is
+      # recreated -- and a recreate is what an upgrade is.
+      - reeflex-ledger:/app/ledger
+    # Deliberately no `ports:`. Only the proxy needs to reach it, and anything
+    # that can reach it can propose actions for any org in the tenancy map.
+
+  reeflex-core:
+    image: ghcr.io/reeflex-io/reeflex-core:v0.2.1
+    environment:
+      # Binds each approver's bearer token to the principal it IS. Without it,
+      # core 0.2.0+ refuses every approval it cannot verify (403
+      # principal_not_verified) -- i.e. no hold can be resolved at all.
+      REEFLEX_RESOLVER_TOKENS: >-
+        {"${APPROVER_TOKEN:?set it in .env}":{"type":"human","id":"alice@example.com"}}
+    volumes:
+      # Same reason as the ledger above: core's holds and audit live here.
+      - reeflex-state:/app/audit
+
+volumes:
+  reeflex-ledger:
+  reeflex-state:
