@@ -93,7 +93,14 @@ WHAT IT CANNOT SEE, SAID OUT LOUD
   `tests/test_conformance_bash.py` excludes them.  A published wheel is not
   asked to close a gap the checkout has not closed.
 * A GREEN here means the published wheel agrees with the corpus THE TREE SHIPS
-  TODAY.  It is not a statement that the corpus is complete.
+  TODAY.  It is not a statement that the corpus is complete.  That sentence had
+  a measured price (RFX-341): from this component's first run until 2026-09-17
+  the corpus was 108 Bash rows and one Read row, so `Write`, `Edit`,
+  `MultiEdit` and `NotebookEdit` were not scored at all -- while RFX-338, a
+  defect on exactly that route, was open and then fixed on main. This arm's
+  green over that family meant "nothing asked", in either direction. If you
+  are about to trust a green here for a tool route, check the corpus contains a
+  row for it first: `Counter(c["tool"] for c in conformance.CASES)`.
 
 USAGE
     python scripts/check_published_classifier.py [REPO_ROOT]
@@ -131,9 +138,22 @@ RESTRAINT = {"allow": 0, "ask": 1, "deny": 2}
 # CASES — every one of those produces a clean zero. So the count of cases
 # actually SCORED is asserted against a floor, and the floor is printed in the
 # PASS line so the next person can see what it was measured against.
-# Today's corpus scores 96 (102 cases, 6 residual). Deliberately well below, so
-# retiring a case stays an ordinary change, and far above zero, so a walk that
-# stopped walking cannot pass for a clean tree.
+# RE-DERIVED 2026-09-17 (RFX-341), because the sentence here had gone stale
+# twice over: it said "96 (102 cases, 6 residual)" while the corpus was at 108,
+# and a number written into a comment rots on its own. Measured today, by
+# running this component: 120 cases, 7 residual -> 113 SCORED. Derive it with
+#   python3 -c "import sys; sys.path.insert(0,'reeflex-claude');
+#   from reeflex_claude import conformance as c;
+#   print(len([x for x in c.CASES if not x['residual']]))"
+# and note that the number moves every time anyone adds a row.
+#
+# THE FLOOR STAYS 40, AND THAT IS NOT LAZINESS ABOUT THE GAP BETWEEN 40 AND
+# 113. What this floor exists to catch is a walk that stopped walking -- an
+# empty driver result, a corpus that failed to import, a renamed CASES. It is
+# deliberately well below the census so that retiring a case stays an ordinary
+# change. A whole FAMILY going missing is caught by a different branch and
+# caught better: `audit` reports every corpus case with no row back as
+# "the published wheel was never asked" and fails, per case, by name.
 MIN_SCORED_CASES = 40
 
 # Divergences that are KNOWN and ACCEPTED until a republish carries the fix.
@@ -230,6 +250,28 @@ PUBLISHED_LAG: dict = {
     "destroy-redirect-mid-command":     "RFX-339",
     "destroy-redirect-second-target":   "RFX-339",
     "destroy-redirect-in-substitution": "RFX-339",
+    # The Write/Edit PATH CAP (the defect is RFX-338, closed on main in PR
+    # #169; the lag these two entries record is RFX-339, the republish -- the
+    # same distinction the block above draws, and for the same reason: RFX-338
+    # now reads "fixed", which is not what an entry in this table means).
+    #
+    # RFX-341 ADDED THE ROWS THAT MAKE THESE VISIBLE, AND THAT IS THE POINT.
+    # Until 2026-09-17 the corpus was 108 Bash rows + 1 Read row, so this
+    # component -- whose sensitivity IS the corpus -- could not see the
+    # Write/Edit/MultiEdit/NotebookEdit family in either direction. It was not
+    # green because the wheel was clean on that family; it was green because
+    # nothing asked. RFX-341 landed 11 rows: 1 is residual (RFX-342, excluded
+    # here as the suite excludes it), these 2 diverge, and the other 8 are
+    # deliberately NOT declared -- measured, the checkout and published 0.2.0
+    # agree on all 8, and an entry that does not diverge FAILS as stale.
+    #
+    # MEASURED on the wheel the index serves today, 2026-09-17: published
+    # `reeflex-claude 0.2.0` has no MAX_FILE_PATH_CHARS at all (the attribute
+    # is absent, not merely larger), so an 8 KiB `file_path` reaches
+    # `_SENSITIVE_PATH_RE` and comes back create|update/recoverable/single ->
+    # `allow`, where the checkout answers irreversible/systemic -> `deny`.
+    "ctrl-write-path-over-the-cap":   "RFX-339",
+    "ctrl-edit-path-over-the-cap":    "RFX-339",
 }
 
 # --------------------------------------------------------------------------
@@ -310,6 +352,15 @@ SEAT_PUBLISHED_LAG: dict = {
     "destroy-redirect-mid-command":     "RFX-339",
     "destroy-redirect-second-target":   "RFX-339",
     "destroy-redirect-in-substitution": "RFX-339",
+    # The path cap, reached one distribution further out. MEASURED on this arm
+    # rather than mirrored from the table above: `--seat` against
+    # reeflex-litellm==0.1.0 fails open on exactly these two of RFX-341's 10
+    # scored rows, through the seat's own normaliser, and on none of the other
+    # eight. Those eight are also the evidence that the OPERATOR MAP
+    # round-trips this family at all: a call the normaliser dropped onto the
+    # unknown path would come back as an ERROR here, not as a mispricing.
+    "ctrl-write-path-over-the-cap":   "RFX-339",
+    "ctrl-edit-path-over-the-cap":    "RFX-339",
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")

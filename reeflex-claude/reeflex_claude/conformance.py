@@ -25,6 +25,16 @@ It lives inside the installed package, not in tests/, because it is the
 adapter's own statement of what it claims to stop -- installable and readable
 from a `pip install reeflex-claude` with no repository checked out.
 
+NOT BASH-ONLY ANY MORE, AND THE ARTEFACT'S NAME IS HISTORICAL
+=============================================================
+The file and the spec artefact are both called "bash" because for a year that
+is all this was: 108 Bash rows and one Read row.  RFX-341 added the
+Write/Edit/MultiEdit/NotebookEdit family at the bottom, so `claude-adapter-
+bash.json` now carries rows that are not Bash.  The name is left alone
+deliberately -- it is a spec artefact path with consumers outside this package,
+and renaming it to make a comment unnecessary is a bigger change than the
+comment.  Read the `tool` field, never the file name.
+
 Cases carrying `check=True` are a small, named subset suitable for an
 INSTALL-TIME probe against the customer's own core.  Nothing in this PR
 consumes them: `reeflex-claude check` is RFX-147 and belongs to dev-1's
@@ -71,7 +81,18 @@ GAP_TICKET = "RFX-158"
 
 
 def _c(cid, command, effect, expect, family, tool="Bash", tool_input=None,
-       check=False, residual=None, verb=None, blast_radius=None):
+       check=False, residual=None, verb=None, blast_radius=None, ref=None):
+    """One corpus row.
+
+    `ref` (RFX-341) declares the `target_ref` the classification must carry --
+    WHICH resource the record names, not what was decided about it.  It is
+    optional because most Bash rows put the whole line in `command_preview` and
+    a per-row ref would be a second transcription of the same string; it is
+    asserted, when present, by
+    test_conformance_bash.TestRFX341TheRecordNamesTheResource.  RFX-206 added
+    `target_ref` because "a delete was held in production" is not something an
+    auditor can check; a row that declares its ref is the corpus half of that.
+    """
     return {
         "id": cid,
         "tool": tool,
@@ -83,6 +104,7 @@ def _c(cid, command, effect, expect, family, tool="Bash", tool_input=None,
         "residual": residual,
         "expect_verb": verb,
         "expect_blast_radius": blast_radius,
+        "expect_target_ref": ref,
     }
 
 
@@ -92,7 +114,8 @@ CASES = [
     # ------------------------------------------------------------------
     _c("ctrl-read-file", None, "a plain read", "allow", "control",
        tool="Read", tool_input={"file_path": "/srv/prod/README.md"},
-       verb="read", blast_radius="single"),
+       verb="read", blast_radius="single",
+       ref="/srv/prod/README.md"),
     _c("ctrl-rm-rf-root", "rm -rf /",
        "systemic delete", "deny", "control",
        check=True, verb="delete", blast_radius="systemic"),
@@ -648,6 +671,204 @@ CASES = [
        "psql -c 'SELECT 1' && grep -rn truncate src/",
        "a grep that only asks because a database client shares its line",
        "ask", "known-noisy", verb="delete", blast_radius="broad"),
+
+    # ==================================================================
+    # THE FILE-WRITING TOOLS -- Write / Edit / MultiEdit / NotebookEdit
+    # (RFX-341).
+    #
+    # WHY THESE ARRIVED SO LATE, because it explains what they are for.
+    # Until today this corpus was 108 Bash rows and one Read row, and since
+    # RFX-241/#167 the corpus IS `scripts/check_published_classifier.py`'s
+    # sensitivity: the `pypi-behaviour` and `pypi-litellm-seat` components
+    # score `pip install reeflex-claude` / `reeflex-litellm` against THIS
+    # list.  With no row for this family those components could not see it in
+    # either direction -- their green did not mean the published wheel was
+    # fine, it meant nothing had asked.  RFX-338 had just capped an uncapped
+    # `file_path` reachable from all four of these tools, and the ledger that
+    # exists to make a published-wheel lag visible was structurally unable to
+    # report on it.
+    #
+    # GROUND TRUTH FOR THIS FAMILY IS THE FILE, NOT THE STRING.  A Bash row's
+    # effect is a property of the command text.  Here it is a property of the
+    # PATH and of whether something is already there: `_classify_write` calls
+    # `os.path.exists`, so "overwrite" (prior contents permanently lost) and
+    # "create" (destroys nothing) are the same tool call against a different
+    # filesystem.  That is correct in production -- the hook runs on the box
+    # where the write will land -- but it means a row whose verdict depends on
+    # existence is only deterministic if the path exists EVERYWHERE the corpus
+    # is scored (this repo's CI, a customer's box, the throwaway venv the
+    # published-wheel component builds).  `/etc/hosts` is the one such path
+    # used below, and it is used for that reason and no other.  Rows about
+    # declared production state (`/srv/...`) deliberately do NOT depend on
+    # existence: on every box that scores this corpus they are creates, and
+    # that is what they are written to pin.
+    #
+    # EVERY PATH HERE IS CLASSIFIER INPUT.  Nothing in this corpus is ever
+    # executed by the offline or published-wheel planes, and the live plane
+    # sends envelopes to core.  No row causes a byte to be written anywhere.
+    # ==================================================================
+
+    # ---- everyday floor: the ordinary edits an agent makes all day.  A gate
+    # that asks on these gets switched off within a day, and this family had
+    # no floor at all before today.
+    _c("everyday-write-new-source-file", None,
+       "writes a file that does not exist: destroys nothing",
+       "allow", "everyday",
+       tool="Write",
+       tool_input={"file_path": "/home/dev/acme/src/new_module.py",
+                   "content": "def main():\n    return 0\n"},
+       verb="create", blast_radius="single",
+       ref="/home/dev/acme/src/new_module.py"),
+    # The sensitive-path pattern alone must not block a NEW file, or every
+    # `.env.example` an agent scaffolds reaches a human.  blast_radius IS
+    # broad here -- R2 does not fire because the write is recoverable, and
+    # that is the distinction the row exists to pin.
+    _c("everyday-write-new-file-with-a-sensitive-name", None,
+       "creates a NEW .env: broad by name, but destroys nothing",
+       "allow", "everyday",
+       tool="Write",
+       tool_input={"file_path": "/home/dev/acme/.env",
+                   "content": "ACME_API_BASE=http://localhost:8000\n"},
+       verb="create", blast_radius="broad",
+       ref="/home/dev/acme/.env"),
+    _c("everyday-edit-source-file", None,
+       "a targeted edit of a source file; the inverse edit is in the input",
+       "allow", "everyday",
+       tool="Edit",
+       tool_input={"file_path": "/home/dev/acme/src/app.py",
+                   "old_string": "timeout=5", "new_string": "timeout=30"},
+       verb="update", blast_radius="single",
+       ref="/home/dev/acme/src/app.py"),
+    _c("everyday-multiedit-source-file", None,
+       "several hunks in one source file, one tool call",
+       "allow", "everyday",
+       tool="MultiEdit",
+       tool_input={"file_path": "/home/dev/acme/src/app.py",
+                   "edits": [{"old_string": "a", "new_string": "b"},
+                             {"old_string": "c", "new_string": "d"}]},
+       verb="update", blast_radius="single",
+       ref="/home/dev/acme/src/app.py"),
+
+    # ---- destroy: the one shape in this family that reaches a human today.
+    # Write over an EXISTING file is irreversible by the classifier's own
+    # reading (prior contents permanently lost) and `/etc/` is broad, so R2
+    # holds it.  This is the family's only `ask` row, which is itself worth
+    # knowing.
+    _c("destroy-write-overwrites-system-config", None,
+       "overwrites an existing system config file: prior contents permanently "
+       "lost, and /etc/ is priced broad",
+       "ask", "destroy",
+       tool="Write",
+       tool_input={"file_path": "/etc/hosts",
+                   "content": "127.0.0.1 localhost\n"},
+       verb="create", blast_radius="broad",
+       ref="/etc/hosts"),
+
+    # ---- controls -- prove the harness discriminates, in the two directions
+    # this family can be got wrong.
+    #
+    # Same path as the row above, different tool: an Edit declares its own
+    # inverse (`old_string`), so it is recoverable and R2 does not fire.  If
+    # this row ever starts asking, the family's floor has moved and the
+    # everyday rows above will not tell you why; if the `destroy-` row above
+    # ever stops asking, this row is what proves the cause was the OVERWRITE
+    # and not the path.
+    _c("ctrl-edit-the-same-file-the-write-overwrites", None,
+       "the same sensitive path, edited rather than overwritten",
+       "allow", "control",
+       tool="Edit",
+       tool_input={"file_path": "/etc/hosts",
+                   "old_string": "127.0.0.1 localhost",
+                   "new_string": "127.0.0.1 localhost acme.local"},
+       verb="update", blast_radius="scoped",
+       ref="/etc/hosts"),
+    # A path longer than PATH_MAX cannot name a file at all (`open()` returns
+    # ENAMETOOLONG), so there is no write to price: the adapter refuses to
+    # classify the input instead (RFX-338), which `hook.py` turns into
+    # `adapter/path_too_long`.  These two rows pin the cap on both arms --
+    # `_classify_write` and the shared `_classify_edit` -- and they are the
+    # only rows in this block that DIVERGE on the published wheel: measured
+    # 2026-09-17, `reeflex-claude 0.2.0` from the index has no
+    # MAX_FILE_PATH_CHARS at all and prices both as recoverable/single ->
+    # allow.  Declared in check_published_classifier.PUBLISHED_LAG and
+    # SEAT_PUBLISHED_LAG against RFX-339, the republish.
+    #
+    # 8 KiB, not 1 MiB, on purpose: the pattern RFX-338 bounds is quadratic,
+    # and a row this corpus scores on every plane must not cost seconds on an
+    # unfixed wheel.  Measured on published 0.2.0: 0.0007 s.  The cap is what
+    # this row is about; the timing is RFX-322/RFX-338's own tests.
+    _c("ctrl-write-path-over-the-cap", None,
+       "a file_path longer than PATH_MAX is not a path but a payload wearing "
+       "the field's name: unclassifiable, so it must not proceed",
+       "deny", "control",
+       tool="Write",
+       tool_input={"file_path": "/srv/prod/" + ("a" * 8192), "content": "x"},
+       verb="create", blast_radius="systemic"),
+    _c("ctrl-edit-path-over-the-cap", None,
+       "the same cap on the arm Edit, MultiEdit and NotebookEdit share",
+       "deny", "control",
+       tool="Edit",
+       tool_input={"file_path": "/srv/prod/" + ("a" * 8192),
+                   "old_string": "a", "new_string": "b"},
+       verb="update", blast_radius="systemic"),
+
+    # ---- NotebookEdit -- RFX-342, filed from these rows.
+    #
+    # The real tool's key is `notebook_path`; `_classify_edit` reads only
+    # `file_path`, and the tool's schema is `additionalProperties: false`, so
+    # a real call CANNOT carry `file_path`.  Every NotebookEdit therefore
+    # classifies with no path: target_ref None, blast_radius single whatever
+    # the notebook is, and an audit record that does not name the file.
+    #
+    # The verdict is `allow` and that is HONEST for a replace: the new source
+    # is in the input, the old is in git for a checked-out notebook.  So this
+    # row is scored on its verdict like any other, and what it declares is the
+    # REF -- which is wrong today, and is declared in
+    # test_conformance_bash.REF_BLIND against RFX-342 rather than quietly
+    # left out.  The row below it is the control: the same call spelled the
+    # way the adapter reads, which no real caller can send.
+    _c("everyday-notebookedit-replace-a-cell", None,
+       "replaces one cell of a notebook in a working tree -- ordinary, and "
+       "the record should still say WHICH notebook (RFX-206)",
+       "allow", "everyday",
+       tool="NotebookEdit",
+       tool_input={"notebook_path": "/home/dev/acme/analysis.ipynb",
+                   "cell_id": "c1", "new_source": "df.head()",
+                   "edit_mode": "replace"},
+       verb="update", blast_radius="single",
+       ref="/home/dev/acme/analysis.ipynb"),
+    _c("ctrl-notebookedit-spelled-with-file-path", None,
+       "control for RFX-342: the same call under the key the adapter reads, "
+       "which the tool's schema does not permit a real caller to send",
+       "allow", "control",
+       tool="NotebookEdit",
+       tool_input={"file_path": "/home/dev/acme/analysis.ipynb",
+                   "cell_id": "c1", "new_source": "df.head()"},
+       verb="update", blast_radius="single",
+       ref="/home/dev/acme/analysis.ipynb"),
+    # `edit_mode="delete"` removes a cell and its source is in the tool input
+    # in NO form, so the Edit family's stated reason for pricing everything
+    # `recoverable` -- the inverse is in the call -- does not hold for it.
+    # Under a prefix protected.rego declares production state, ground truth is
+    # irreversible + protected ref, which R6 answers `ask`: exactly the
+    # verdict this corpus already pins for `rm /srv/app/truncate.log`
+    # (protected-rm-single-file-under-srv).  Measured today: `allow`,
+    # default_allow, while `rm` on that same notebook is held under R6.
+    #
+    # RESIDUAL, so this is DECLARED and excluded rather than either quietly
+    # absent or asserted-as-correct -- and `test_residuals_are_still_residual`
+    # reddens the moment RFX-342 lands, which is what makes the exclusion
+    # self-clearing rather than a way to keep the gate quiet.
+    _c("destroy-notebookedit-deletes-a-production-cell", None,
+       "deletes a cell of a notebook under declared production state: the "
+       "removed source is not in the tool input, so nothing can restore it",
+       "ask", "destroy",
+       tool="NotebookEdit",
+       tool_input={"notebook_path": "/srv/prod/etl/nightly.ipynb",
+                   "cell_id": "c1", "edit_mode": "delete"},
+       residual="RFX-342",
+       verb="update", blast_radius="single",
+       ref="/srv/prod/etl/nightly.ipynb"),
 ]
 
 

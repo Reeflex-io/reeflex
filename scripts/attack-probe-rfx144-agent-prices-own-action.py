@@ -231,6 +231,34 @@ def run_hook(case_id: str, tool: str, tool_input: dict, session: str = None,
         return {"decision": "ERROR", "reason": f"{type(exc).__name__}: {exc}"}
 
 
+def _subject(tool_input: dict) -> str:
+    """The one human-readable string that says WHAT a corpus row acts on.
+
+    RFX-341.  This used to be `input.get("command") or input.get("file_path")`,
+    inline, in two places, and three of the four sites that printed the result
+    sliced it without a None guard -- so a corpus row carrying neither key
+    would have crashed this probe with a TypeError at the moment it had
+    something to report, in the `gate.py` component (`claude-corpus-live`) that
+    exists to compare the live plane against the offline one.  Measured before
+    the fix: both `NotebookEdit` rows projected to None, because the tool's key
+    is `notebook_path` (see RFX-342, which is about the ADAPTER reading only
+    `file_path` -- this function is the instrument, and it must not have the
+    same blind spot as the code under test).
+
+    Returns a string, never None, so no call site needs a guard.  A row with no
+    recognised subject key says so in the transcript rather than printing an
+    empty column, because an empty column reads as "nothing was acted on".
+    """
+    for key in ("command", "file_path", "notebook_path", "pattern", "url",
+                "query"):
+        value = tool_input.get(key)
+        if value:
+            return str(value)
+    if not tool_input:
+        return "<empty tool_input>"
+    return "<no subject key in %s>" % ",".join(sorted(tool_input))
+
+
 def fingerprint() -> bool:
     """Two cheap probes that pin the core is alive and discriminating."""
     deny = run_hook("fp-deny", "Bash", {"command": "rm -rf /"})
@@ -272,7 +300,7 @@ def walk(cases, strict=False, label="default", baseline=None):
         oracle_verdict, oracle_rule = policy_oracle_rule(cls)
         rows.append({
             "set": label, "id": case["id"], "family": case["family"],
-            "command": case["input"].get("command") or case["input"].get("file_path"),
+            "command": _subject(case["input"]),
             "effect": case["effect"], "expect": case["expect"],
             "actual": r["decision"], "reason": r["reason"],
             "residual": case["residual"], "ok": ok,
@@ -288,7 +316,7 @@ def walk(cases, strict=False, label="default", baseline=None):
             mark = "ok  " if ok else ("RESID" if case["residual"] else "MISS")
             note = f'(want {case["expect"]:5})'
         print(f'  [{mark:5}] {r["decision"]:6} {note}  '
-              f'{str(case["input"].get("command") or case["input"].get("file_path"))[:64]}')
+              f'{_subject(case["input"])[:64]}')
         time.sleep(PACE)
     return rows
 
@@ -500,14 +528,14 @@ def main() -> int:
     print(f"GROUND-TRUTH PRODUCTION DESTRUCTIONS ALLOWED WITH NO HUMAN: "
           f"{len(allowed)}")
     for r in allowed:
-        print(f"    ALLOW  {r['id']:34} {r['command'][:52]}")
+        print(f"    ALLOW  {r['id']:34} {(r['command'] or '')[:52]}")
     if other_misses:
         print(f"destructions with an unexpected (non-allow) verdict: {len(other_misses)}")
         for r in other_misses:
             print(f"    {r['actual'].upper():6} {r['id']:34} want {r['expect']}")
     print(f"everyday commands blocked (false positives): {len(blocked_everyday)}")
     for r in blocked_everyday:
-        print(f"    {r['actual'].upper():6} {r['id']:34} {r['command'][:52]}")
+        print(f"    {r['actual'].upper():6} {r['id']:34} {(r['command'] or '')[:52]}")
     print(f"controls that misfired: {len(control_misses)}")
     # Every exclusion prints the ticket that tracks IT, not one ticket for the
     # whole block: the residuals span two different defects (RFX-153, the
