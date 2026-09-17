@@ -158,8 +158,23 @@ cannot be double-consumed). See the [hold lifecycle diagram](../architecture/dia
 ## Health
 
 ```
-GET /healthz   ->   {"status": "ok"}      # 200, always unauthenticated
+GET /healthz   ->   {"status": "ok", "ledger": {…}, "holds": {…}, "server": {…}}
+                                          # 200, always unauthenticated
 ```
+
+`/healthz` reports **capability, not only liveness** — a core can be up and
+still be unable to do the thing you are asking it about:
+
+| block | the question it answers |
+|---|---|
+| `ledger` | can this core **remember**? `durable` is false on an ephemeral ledger, so cumulative budgets reset on restart (RFX-197). |
+| `holds` | can this core accept an **approval**? `resolvable: false` means no credential in this deployment can resolve a hold, so every hold it raises expires unanswered — see [Verified approvers](configuration.md#verified-approvers) for the fields and for what `resolvable: true` does *not* promise (RFX-309). |
+| `server` | how many decisions can it serve at once, and how many has it refused for **load** rather than policy (RFX-198). |
+
+Both `ledger` and `holds` are **omitted** rather than guessed if they cannot be
+computed: this route is a liveness probe first and the image's `HEALTHCHECK`
+depends on it. An absent block means "not reported" — on an older core, it
+means that version predates the block.
 
 ## Errors
 
