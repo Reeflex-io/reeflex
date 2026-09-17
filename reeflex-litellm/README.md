@@ -437,8 +437,13 @@ echo '[{"id":"c1","type":"function","function":{"name":"acme_infra_runner",
 
 **The gateway tool name always reaches core**, mapped or not, as
 `action.ability` = `litellm/<your tool name>`. Two reasons, both verified:
-core's verb canon reads the ability's first token (so `litellm/delete_file`
-becomes `verb: delete` inside core, and lands on R5's deletion budget), and
+core's verb canon reads the ability's words against its own vocabulary — any
+one of them that names a delete escalates (so both `litellm/delete_file` and
+`litellm/findOneAndDelete` become `verb: delete` inside core and land on R5's
+deletion budget; before RFX-304 only the FIRST word was read, and the second
+of those did not). A word the canon has no entry for is invisible to it, so
+this is a signal and not a guarantee — a mapping is what makes a tool's
+classification certain. And
 core's audit line carries `action.ability` — so your tool name is what a human
 sees in the record.
 

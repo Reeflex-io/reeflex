@@ -383,6 +383,64 @@ _VERB_DEFAULT: str = "update"
 # alias entry covers every spelling of the same compound.
 _VERB_SEPARATORS = {ord(c): "_" for c in " -./:\\\t"}
 
+# ---------------------------------------------------------------------------
+# RFX-304: HOW A COMPOUND VERB ELECTS ITS WORD.
+#
+# THE DEFECT.  The last resort below used to take the LEADING word of a
+# compound, on the convention that operation names are verb-first.  Measured
+# on the deployed v0.2.1 (= this code): `findOneAndDelete` — MongoDB's own
+# operation name — splits to [find, one, and, delete], `find` hits the canon
+# first, and an irreversible PRODUCTION deletion is decided by
+# `reeflex.policy/read_only_internal`, written into the permanent audit line
+# as `verb: "read"`, and charged NOTHING by R5's deletions budget.  Twenty
+# lines above, the design note states the invariant the default already keeps:
+# "It is deliberately NOT `read`, which would hand out R1."  The alias lookup
+# did not keep it.
+#
+# WHY THE OLD DOCSTRING'S DEFENCE WAS WRONG.  It argued the last resort "cannot
+# create an evasion a caller did not already have — anything it resolves to a
+# non-delete verb was reachable by simply writing that verb".  That is true of
+# a deliberate attacker and false of the HONEST integration this canon exists
+# to serve: a customer's backend passes its own operation name through, means
+# every letter of it, and gets R1.
+#
+# THE RULE NOW: among the words of a compound that the canon knows, elect the
+# MOST-GUARDED one; ties go to the earliest, which preserves the verb-first
+# convention the last resort was added for (`DeleteObject`, `GetObject`,
+# `delete_backup_policy` all resolve exactly as before).
+#
+# THE RANK IS A READING OF THE SHIPPED PACK, NOT AN INVENTED RISK ORDER.
+# `grep -n 'action.verb' policy/*.rego` finds exactly three rules:
+#   2  delete   budgets.rego's `deletions` dimension charges `verb == "delete"`
+#               and nothing else — the only verb any budget prices.
+#   1  create / update / execute / transact / emit — read by NO rule in the
+#               pack.  Their order relative to each other is therefore a
+#               convention with no verdict consequence today; it decides only
+#               which word the audit line records, and earliest-wins keeps
+#               that the caller's own leading word wherever it can.
+#   0  read     R1 (`verb == "read"` + internal) is the only ALLOW any verb
+#               unlocks, and R7 exempts `verb != "read"`.  Strictly the least
+#               guarded value in the vocabulary.
+# If a future rule reads another verb, this table is where that changes.
+#
+# THE COST, MEASURED AND NOT ARGUED (dev-1--074 evidence, census arm).  The
+# election can ESCALATE a genuine read whose name embeds a destructive word:
+# `list_trash`, `check_delete_permission`, `describe_clear_policy` go read ->
+# delete.  Over the 39 real MCP tool names in reeflex-mcp's own test corpus
+# the escalation count is ZERO; over eight names built adversarially to carry
+# that shape it is five.  The bias is deliberate and is the same one RFX-175
+# took one layer up in reeflex-mcp's `_MUTATING_STEMS`: a wrong escalation
+# costs a HOLD once an operator's deletions budget is exceeded, is visible in
+# the reason string, and is fixed by the adapter declaring a canonical verb —
+# which costs one field.  A missed de-escalation costs a customer their data
+# with no human anywhere in it.
+# ---------------------------------------------------------------------------
+_VERB_GUARD_RANK: dict[str, int] = {
+    "read": 0,
+    "create": 1, "update": 1, "execute": 1, "transact": 1, "emit": 1,
+    "delete": 2,
+}
+
 
 def _split_words(raw: str) -> list[str]:
     """Split a raw identifier into lowercase words.
@@ -405,30 +463,86 @@ def _split_words(raw: str) -> list[str]:
 
 
 def _verb_key_variants(raw_verb: str):
-    """Yield the lookup keys to try for a raw verb, most specific first."""
-    token = _normalize_token(raw_verb)
-    yield token                        # "delete"      (already canonical)
+    """Yield the lookup keys for a verb the caller spelled WHOLE, most
+    specific first.
+
+    These three are recognitions, not guesses: each matches the caller's own
+    string end to end, modulo folding and separators.  The per-word election
+    that handles a compound the canon does not alias wholesale is deliberately
+    NOT here — it lives in `_verb_last_resort_key()` so that
+    `_verb_is_declared()` cannot silently inherit it again (RFX-304 §4.2).
+    """
+    yield _normalize_token(raw_verb)   # "delete"      (already canonical)
     words = _split_words(raw_verb)
     if not words:
         return
     yield "_".join(words)              # "hard delete" -> "hard_delete"
     yield "".join(words)               # "hard delete" -> "harddelete"
-    # LAST RESORT: the leading word of a compound. Operation names are
-    # conventionally verb-first ("DeleteObject", "delete_backup_policy",
-    # "GetObject"), so this recovers the operative verb from a compound we do
-    # not alias wholesale. It cannot create an evasion a caller did not
-    # already have -- anything it resolves to a non-delete verb was reachable
-    # by simply writing that verb -- but it does prevent a pile of wrong-DENYs
-    # for adapters that speak CamelCase API operation names.
-    if len(words) > 1:
-        yield words[0]
+
+
+def _verb_last_resort_key(raw_verb: str) -> str | None:
+    """LAST RESORT for a compound the canon does not alias wholesale: the
+    MOST-GUARDED word it contains, or None if it contains no known word.
+
+    Ties go to the earliest word, so the verb-first convention this was
+    originally added for is preserved exactly ("DeleteObject",
+    "delete_backup_policy", "GetObject", "PutObject" all resolve as before).
+    See the _VERB_GUARD_RANK block above for why the rank is what it is, and
+    for the escalation cost this trades a fail-open against (RFX-304).
+
+    This is a GUESS about a string the caller did not spell canonically, and
+    `_verb_is_declared()` reports it as one.
+    """
+    words = _split_words(raw_verb)
+    if len(words) < 2:
+        return None
+    best_rank, best_word = -1, None
+    for word in words:
+        canon = _VERB_CANON.get(word)
+        if canon is None:
+            continue
+        rank = _VERB_GUARD_RANK[canon]
+        if rank > best_rank:          # strict: first word of a rank wins
+            best_rank, best_word = rank, word
+    # A `read` MAY ONLY BE ELECTED FROM THE LEADING WORD (dev-1--080).
+    #
+    # Measured on a core running this file against one running origin/main's,
+    # same image, same policy, one file apart:
+    #
+    #   verb "compact_event_log"    irreversible -> origin/main: `delete`
+    #                                               this rule w/o the guard
+    #                                               below: `read` = R1
+    #   verb "rebuild_search_index"              -> same
+    #   verb "refresh_materialized_status"       -> same
+    #   verb "zorp_query"                        -> same
+    #
+    # The election is only as good as the word it elects.  When the operative
+    # verb is one the canon does NOT know, an incidental read NOUN later in
+    # the name ("log", "index", "status", "query") was the highest-ranked
+    # known word, so the compound resolved to `read` — strictly WEAKER than
+    # the fallback it replaced, which lands an unknown compound on the
+    # reversibility default (`delete` / `update`) and never on `read`.
+    #
+    # The convention this file already relies on settles it: operation names
+    # are VERB-FIRST.  A read word in the leading position IS the operation
+    # ("GetObject", "list_deleted_objects", "query_status" — all preserved);
+    # a read word after a leading word we do not recognize is an object, not
+    # the verb.  So when every known word is a read and none of them leads,
+    # this returns None and the caller falls through to the default that
+    # `_VERB_DEFAULT_IRREVERSIBLE`'s note above calls "deliberately NOT read,
+    # which would hand out R1".
+    if best_rank == 0 and best_word != words[0]:
+        return None
+    return best_word
 
 
 def _canonicalize_verb(raw_verb: str, canonical_reversibility: str) -> str:
     """Map a raw action verb to its canonical SPEC §3 member.
 
     Try the normalized verb as-is, then with separators/camel boundaries
-    folded, then its leading word.  Anything still unrecognized falls back on
+    folded, then — for a compound only — the most-guarded word it contains
+    (RFX-304; it used to be the leading word, which resolved
+    `findOneAndDelete` to `read`).  Anything still unrecognized falls back on
     the reversibility axis: irreversible -> "delete" (guarded), otherwise
     "update" (policy-inert).  Never "read", which would hand out R1.
 
@@ -439,6 +553,9 @@ def _canonicalize_verb(raw_verb: str, canonical_reversibility: str) -> str:
     for key in _verb_key_variants(raw_verb):
         if key in _VERB_CANON:
             return _VERB_CANON[key]
+    elected = _verb_last_resort_key(raw_verb)
+    if elected is not None:
+        return _VERB_CANON[elected]
     if canonical_reversibility == "irreversible":
         return _VERB_DEFAULT_IRREVERSIBLE
     return _VERB_DEFAULT
@@ -549,10 +666,24 @@ def _environment_is_declared(raw_env: Any) -> bool:
 
 
 def _verb_is_declared(raw_verb: Any) -> bool:
-    """True if `action.verb` matched the SPEC §3 verb set or an alias of it.
+    """True if `action.verb`, AS THE CALLER SPELLED IT, matched the SPEC §3
+    verb set or an alias of it.
 
-    Mirrors `_canonicalize_verb`'s own lookup exactly, so "declared" means the
-    same thing here as "did not fall back on the reversibility axis" there.
+    RFX-304 §4.2.  This used to mirror `_canonicalize_verb` exactly, last
+    resort included — so `action.verb` was recorded DECLARED *precisely* when
+    core had guessed it from one word of a compound, and `provenance` asserted
+    a declaration that never happened.  `action.verb` is a REQUIRED field (an
+    absent one is a 400 that reaches no rule), so undeclared here means "a
+    value core does not recognise" — and a compound the canon has no entry for
+    is exactly that, whatever core then elects out of it.
+
+    WHAT THIS DOES AND DOES NOT MOVE, because the obvious reading is wrong.
+    No verdict changes: `r0_classification_inputs` in reeflex.rego is
+    {axes.reversibility, axes.blast_radius, target.environment}, and the block
+    above it says why `action.verb` is excluded — R2/R3 do not read the verb,
+    so guessing it cannot be what produced the verdict R0 softens.  What moves
+    is the RECORD: the audit line now says core guessed the verb on a compound
+    instead of claiming the adapter declared it.
     """
     if not isinstance(raw_verb, str):
         return False
@@ -570,22 +701,26 @@ def _delete_signal_from_ability(ability: Any) -> bool:
     strong signal — and SPEC §7 says an ambiguous input resolves to the
     most-guarded reading.
 
-    DELIBERATELY NARROW, to keep this from inventing wrong-DENYs:
-      - only the LAST "/"-separated segment is considered (the operation, not
-        the namespace), and
-      - only its FIRST token, because backend ability ids are conventionally
-        `verb-object` ("delete-post", "list-objects").
-    So "wordpress/delete-post" signals a delete, while
-    "s3/list-deleted-objects" does NOT (its first token is "list") — the
-    past-tense/adjectival forms that would cause false positives are also
-    absent from _VERB_CANON on purpose.
+    Only the LAST "/"-separated segment is considered — the operation, not the
+    namespace, so a tenant called `purge-inc` cannot signal anything.
+
+    RFX-304 §4.1: THIS USED TO READ ONLY THE SEGMENT'S FIRST TOKEN, WHICH IS
+    THE SAME BLIND SPOT AS THE DEFECT IT DEFENDS AGAINST.  The one cross-check
+    written for "the verb says read but the ability says delete" was silent on
+    `mongodb/findOneAndDelete` — the most honest ability id an adapter could
+    send for that call — because the ability's first token is `find` too.  A
+    defence in depth that shares the failure mode of the thing it backs up is
+    not depth.  Any word of the segment now signals, the same election rule
+    `_verb_last_resort_key()` applies one layer down.
+
+    Still narrow where it matters: "s3/list-deleted-objects" does NOT signal,
+    because the past-tense/adjectival forms are absent from _VERB_CANON on
+    purpose, and this reads the canon rather than matching stem prefixes.
     """
     if not isinstance(ability, str) or not ability:
         return False
     words = _split_words(ability.rsplit("/", 1)[-1])
-    if not words:
-        return False
-    return _VERB_CANON.get(words[0]) == "delete"
+    return any(_VERB_CANON.get(word) == "delete" for word in words)
 
 # ---------------------------------------------------------------------------
 # F7: params.currency — the UNIT on the money budget (RFX-133).
