@@ -354,10 +354,18 @@ TREATMENTS: dict[str, Treatment] = {
                   "budgets.rego current_money_amount",
         unverifiable_assertion=True,
         approval_binding=BIND_VALUE,
-        note="FINITE number or HTTP 400; non-numeric contributes 0. abs() in "
-             "both the ledger and the policy: the budget measures exposure, "
-             "so a negative amount cannot subtract from cumulative spend. "
-             "The finiteness check is not pedantry — one NaN used to poison "
+        note="ABSENT or NULL (no money) or a finite number; anything else "
+             "present is HTTP 400. RFX-305: this note used to end "
+             "'non-numeric contributes 0', and that clause was the defect "
+             "written down — the guard tested isinstance(float) only, so "
+             "NaN was refused and '6000'/true/{...}/[...] were each read as "
+             "'no amount'. Measured on the deployed v0.2.1: 10 encodings, 10 "
+             "uncharged, EUR 160,000 through a EUR 5,000 session limit. The "
+             "condition is now the negation of is_money_amount() itself, so "
+             "the refusal and the charge cannot disagree. abs() in both the "
+             "ledger and the policy: the budget measures exposure, so a "
+             "negative amount cannot subtract from cumulative spend. The "
+             "finiteness check is not pedantry — one NaN used to poison "
              "amount_by_currency and disable the money budget for the whole "
              "session. Also bound to an approval by _validate_approval check "
              "7, since params is outside the envelope_hash projection.",
@@ -638,6 +646,28 @@ def unverifiable_assertions() -> set[str]:
 #    WHICH fields need a treatment. It did not tell us the treatment we wrote
 #    was sufficient — params.amount was already declared VALIDATE when it
 #    accepted a NaN. Enumerating is necessary and it is not sufficient.
+#
+# 0b. AND THE SAME FIELD PROVED IT AGAIN — RFX-305, 2026-09-16.  The refusal
+#    written above ("now a structural refusal; see is_money_amount()") was
+#    real and it was PARTIAL: the guard tested `isinstance(_amount, float)`,
+#    so it caught the NaN that prompted it and nothing else.  A quoted
+#    "6000", a bool, an object and an array were each read as "there is no
+#    amount here" — the invented zero the F7 comment in envelope.py says must
+#    never happen, three lines above the check that was doing it.  Measured on
+#    the DEPLOYED v0.2.1 artefact, not on a model of it: 10 encodings, 10
+#    uncharged, EUR 160,000 through a EUR 5,000 session limit, with the
+#    numeric control withheld at call 2.
+#
+#    WHAT WOULD HAVE CAUGHT IT EARLIER, stated so the next treatment is
+#    written this way: the guard and the predicate that decides whether the
+#    budget SEES the value were two separate expressions that were supposed
+#    to agree, and nothing compared them.  They are now one expression —
+#    `not is_money_amount(...)` — so the refusal cannot drift from the charge.
+#    A treatment whose condition is written out by hand alongside the
+#    predicate it is meant to mirror is an unchecked mirror (RFX-216), and
+#    this table cannot see one: it records THAT a field is VALIDATEd, not
+#    WHICH values survive.  That remains true of every other VALIDATE row
+#    here.
 #
 # 1. EVERY axis, the verb, the environment, the count and the amount remain
 #    ASSERTIONS.  Canonicalisation makes an honest adapter's near-miss safe

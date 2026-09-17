@@ -1036,16 +1036,49 @@ def validate_and_fill_defaults(raw: Any) -> dict:
     _params = envelope.get("params")
     if isinstance(_params, dict):
         _amount = _params.get("amount")
-        # A non-finite amount is REFUSED, not silently read as "no amount".
-        # Same treatment F2 gives an invalid magnitude.count, for the same
-        # reason: a decision-critical number that is not a number is a
-        # structural error, and reinterpreting it would hide a caller's real
-        # intent behind a zero.  See is_money_amount() for what a NaN did to
-        # the ledger before this existed.
-        if isinstance(_amount, float) and not math.isfinite(_amount):
+        # An amount that is PRESENT and is not a number is REFUSED, not
+        # silently read as "no amount".  Same treatment F2 gives an invalid
+        # magnitude.count, for the same reason: a decision-critical number
+        # that is not a number is a structural error, and reinterpreting it
+        # would hide a caller's real intent behind a zero.  See
+        # is_money_amount() for what a NaN did to the ledger before this
+        # existed.
+        #
+        # RFX-305 — THIS GUARD USED TO COVER ONE OF THE CASES ITS OWN COMMENT
+        # NAMED.  It tested `isinstance(_amount, float) and not isfinite`, so
+        # NaN/Infinity were refused and every other non-number was not: a
+        # quoted `"6000"`, `true`, `{"value": 6000}` and `[6000]` all fell
+        # through to `is_money_amount()` returning False, which meant "there
+        # is no amount here" — the zero the comment above says must never be
+        # invented.  Measured 2026-09-16 on the deployed v0.2.1: 10 encodings,
+        # 10 uncharged, and 40 calls of `"4000"` moved EUR 160,000 through a
+        # EUR 5,000 session limit without ever being withheld, while the
+        # numeric control was withheld at call 2.  The condition is now the
+        # negation of the predicate that decides whether the money budget sees
+        # the value at all, so the two cannot drift apart again.
+        #
+        # ABSENT AND NULL ARE STILL NOT AN ERROR, and that is deliberate:
+        # `params` is optional free-form adapter data (SPEC §2) and most
+        # actions carry no money.  "No amount" is a legitimate statement;
+        # "an amount that is not a number" is not.
+        #
+        # DIRECTION AND ITS COST, STATED: this is fail-closed and it is a
+        # widening — a caller that sends `{"amount": "6000"}` now gets HTTP
+        # 400 where it previously got `allow`.  No adapter in this repo does
+        # that (reeflex-claude coerces with float(), the n8n node declares the
+        # field as a number, and mcp/litellm/wordpress never populate it), but
+        # reeflex-spec declares no TYPE for params.amount, so a third-party
+        # adapter serialising money as a decimal string was not violating
+        # anything written down.  Coercing the string instead would be the
+        # permissive alternative and is rejected for the reason this comment
+        # already gives: parsing a caller's text into a number is a guess
+        # about intent, and a firewall that guesses has invented a fact.
+        if _amount is not None and not is_money_amount(_amount):
             raise ValidationError(
-                "params.amount must be a finite number, got %r "
-                "(NaN/Infinity are not valid JSON)" % (_amount,)
+                "params.amount must be a finite number if present, got %s %r "
+                "(a quoted or structured amount is not a quantity; "
+                "NaN/Infinity are not valid JSON)"
+                % (type(_amount).__name__, _amount)
             )
         if is_money_amount(_amount):
             _norm_params = dict(_params)

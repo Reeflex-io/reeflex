@@ -589,14 +589,61 @@ class TestA5MoneyBudgetUnits(_AttackCase):
             "6000 of something: %s" % verdicts,
         )
 
-    def test_a5_a_non_numeric_amount_contributes_nothing_and_does_not_crash(self):
-        s = self.session("a5g")
-        for junk in ("2000", None, True, [], {}):
+    def test_a5_a_non_numeric_amount_is_refused_not_read_as_zero(self):
+        """RFX-305 — THIS TEST USED TO ASSERT THE DEFECT.
+
+        It was called
+        `test_a5_a_non_numeric_amount_contributes_nothing_and_does_not_crash`
+        and its body was::
+
+            for junk in ("2000", None, True, [], {}):
+                decision, _ = _verdict(...)
+                self.assertIn(decision, ("allow", "require_approval"))
+
+        "Contributes nothing" is the invented zero that envelope.py's own F7
+        comment says must never happen, and asserting it made the silent
+        pass-through the documented contract.  That is why this suite was
+        green on the build where EUR 160,000 moved through a EUR 5,000
+        session limit: the test was not missing, it was pointed the wrong
+        way.  Naming a behaviour in a test is not the same as justifying it,
+        and `assertIn(decision, (...))` over a set that contains BOTH the
+        allow and the withhold could not have failed either way.
+
+        `None` has moved to the test below, because absent/null really is a
+        legitimate "there is no money here".
+        """
+        for junk in ("2000", "2000.00", "2,000.00", "EUR 2000", "2e3",
+                     True, [], {}, [2000], {"value": 2000},
+                     {"amount": 200000, "exponent": 2}):
             with self.subTest(amount=junk):
-                decision, _ = _verdict(_env(session_id=s, verb="transact",
+                status, resp = process(_env(session_id=self.session("a5g"),
+                                            verb="transact",
                                             params={"amount": junk,
                                                     "currency": "EUR"}))
-                self.assertIn(decision, ("allow", "require_approval"))
+                self.assertEqual(400, status,
+                                 "amount=%r was accepted" % (junk,))
+                self.assertEqual("invalid_envelope", resp.get("error"))
+
+    def test_a5_absent_or_null_money_is_still_not_an_error(self):
+        """The other half of RFX-305, and the one that bounds the fix.
+
+        "There is no amount" is a legitimate statement about an action;
+        "there is an amount and it is not a number" is not.  params is
+        optional free-form adapter data (SPEC §2) and most actions carry no
+        money at all, so these must stay ordinary allows.  If this test ever
+        goes red the refusal above has been widened past its warrant.
+        """
+        for params in ({"amount": None, "currency": "EUR"},
+                       {"currency": "EUR"},
+                       {},
+                       {"note": "no money here", "customer": "acme"},
+                       {"amount_due": "2000", "total": "99"}):
+            with self.subTest(params=params):
+                decision, rule = _verdict(_env(session_id=self.session("a5h"),
+                                               verb="transact", params=params))
+                self.assertEqual("allow", decision,
+                                 "honest money-free params were withheld by "
+                                 "%s: %r" % (rule, params))
 
 
 # ---------------------------------------------------------------------------
@@ -766,6 +813,165 @@ class TestBoundaryInvariants(_AttackCase):
             if treatment.closed_set:
                 self.assertIn(value, treatment.closed_set,
                               "%s = %r escaped its closed set" % (path, value))
+
+
+# ---------------------------------------------------------------------------
+# A7 — RFX-305: the guard covered one of the cases its own comment named
+# ---------------------------------------------------------------------------
+
+class TestA7QuotedAmountEvadesTheMoneyBudget(_AttackCase):
+    """`params.amount` as a JSON string charged ZERO to R5's money budget.
+
+    A5 closed the CURRENCY half of the money pair (RFX-133) and nobody swept
+    the other field.  F7's guard tested `isinstance(_amount, float) and not
+    isfinite`, so the NaN that prompted it was refused and every other
+    non-number was read as "there is no amount here" — the invented zero the
+    same comment block says must never happen.
+
+    MEASURED ON THE DEPLOYED ARTEFACT, not on a model of it: reeflex-core
+    v0.2.1, image sha256:2f18d19fce83…, the image api-dev.reeflex.io runs.
+    10 encodings, 10 uncharged; 40 calls of "4000" moved EUR 160,000 through
+    a EUR 5,000 session limit and were never withheld, while the numeric
+    control was withheld at call 2.
+
+    WHY IT OUTRANKED THE OTHER BUDGET EVASIONS: only `blast_radius: broad`+
+    is caught by R2, and a single payment is `single` by definition, so the
+    axes provide no backstop here the way they do for a broad delete.  The
+    money budget was the only guard on an irreversible outbound production
+    payment, and it charged nothing.
+    """
+
+    #: Every one of these returned `allow / default_allow` on v0.2.1 with an
+    #: amount 1.2x the session limit.  Sourced from the live sweep, not from
+    #: imagination — see code-reports/dev-3--070-evidence/.
+    UNCHARGED_ON_V021 = [
+        "6000", "6000.00", "6,000.00", "EUR 6000", "6e3", "  6000  ",
+        True, {"value": 6000}, {"amount": 600000, "exponent": 2}, [6000],
+    ]
+
+    def _money(self, session, amount):
+        return _env(session_id=session, verb="transact", ability="eval/pay",
+                    params={"amount": amount, "currency": "EUR"})
+
+    def test_a7_control_the_money_budget_really_does_withhold(self):
+        """Without this the whole class could pass on a broken budget."""
+        decision, rule = _verdict(self._money(self.session("a7ctl"), 6000))
+        self.assertEqual("require_approval", decision,
+                         "the numeric control did not fire, so there is no "
+                         "budget to evade and nothing below is evidence: %s"
+                         % rule)
+
+    def test_a7_control_a_money_free_action_is_an_ordinary_allow(self):
+        """And without THIS, a uniform refusal below would read as success."""
+        decision, rule = _verdict(_env(session_id=self.session("a7base"),
+                                       verb="transact", ability="eval/pay"))
+        self.assertEqual("allow", decision, rule)
+        self.assertTrue(rule.endswith("default_allow"),
+                        "another rule is deciding these envelopes: %s" % rule)
+
+    def test_a7_no_encoding_of_an_amount_is_read_as_no_amount(self):
+        for amount in self.UNCHARGED_ON_V021:
+            with self.subTest(amount=amount):
+                status, resp = process(self._money(self.session("a7"), amount))
+                self.assertEqual(
+                    400, status,
+                    "amount=%r was accepted; on v0.2.1 this was "
+                    "allow/default_allow and the money never entered the "
+                    "ledger" % (amount,))
+                self.assertEqual("invalid_envelope", resp.get("error"))
+
+    def test_a7_a_quoted_amount_cannot_accumulate_past_the_limit(self):
+        """The consequence, measured through the ledger rather than the parser.
+
+        The original reading was 40 calls x "4000" = EUR 160,000 with no
+        withhold.  Ten calls is enough to make the point deterministically:
+        under the EUR 5,000 limit a charged 4000 is withheld by call 2, so
+        anything that gets past call 2 is being read as zero.
+        """
+        s = self.session("a7acc")
+        outcomes = [process(self._money(s, "4000"))[0] for _ in range(10)]
+        self.assertEqual(
+            [400] * 10, outcomes,
+            "a quoted amount accumulated as zero: %s" % outcomes)
+
+        control = self.session("a7acc-ctl")
+        verdicts = [_verdict(self._money(control, 4000))[0] for _ in range(3)]
+        self.assertEqual(
+            ["allow", "require_approval", "require_approval"], verdicts,
+            "the numeric control did not accumulate, so the arm above "
+            "measures the harness and not the product: %s" % verdicts)
+
+    def test_a7_amount_and_count_now_refuse_the_same_values(self):
+        """THE ASYMMETRY THAT WAS THE ARGUMENT, pinned so it cannot reopen.
+
+        envelope.py's F7 comment justified its refusal by citing "the same
+        treatment F2 gives an invalid magnitude.count".  It was not the same
+        treatment: on v0.2.1 `"7"`, `true`, `{...}` and `[7]` were 400 on
+        magnitude.count and 200 allow on params.amount.  Only NaN agreed.
+
+        This asserts the two boundaries against each other rather than
+        against a hard-coded list, so a future change to either one that does
+        not change the other fails here.
+        """
+        for junk in ("7", True, {"value": 7}, [7], float("nan")):
+            with self.subTest(value=junk):
+                amount_status, _ = process(
+                    _env(session_id=self.session("a7sym-a"), verb="transact",
+                         ability="eval/pay",
+                         params={"amount": junk, "currency": "EUR"}))
+                count_status, _ = process(
+                    _env(session_id=self.session("a7sym-c"), verb="transact",
+                         ability="eval/pay", count=junk))
+                self.assertEqual(
+                    count_status, amount_status,
+                    "the two declared numeric decision inputs disagree on "
+                    "%r: magnitude.count -> %d, params.amount -> %d"
+                    % (junk, count_status, amount_status))
+                self.assertEqual(400, amount_status)
+
+    def test_a7_the_refusal_is_the_negation_of_the_charge(self):
+        """The structural half: one predicate, not two expressions that agree.
+
+        The defect was that the guard and the predicate deciding whether the
+        budget SEES the value were written out separately and drifted.  This
+        walks both over the same values and fails if they ever disagree,
+        which is the unchecked-mirror check the enumeration in
+        field_treatments.py cannot perform for itself (it records THAT a
+        field is validated, not WHICH values survive).
+        """
+        from app.envelope import ValidationError, is_money_amount
+        from app.envelope import validate_and_fill_defaults
+
+        values = [0, 1, -1, 5000, 6000.5, 10 ** 12, "6000", "", True, False,
+                  [], {}, [6000], {"value": 6000}, float("nan"),
+                  float("inf"), float("-inf")]
+        for value in values:
+            with self.subTest(value=value):
+                env = _env(session_id="s", verb="transact",
+                           params={"amount": value, "currency": "EUR"})
+                try:
+                    validate_and_fill_defaults(env)
+                    refused = False
+                except ValidationError:
+                    refused = True
+                self.assertEqual(
+                    not is_money_amount(value), refused,
+                    "is_money_amount(%r) is %s but the boundary %s it"
+                    % (value, is_money_amount(value),
+                       "refused" if refused else "accepted"))
+
+    def test_a7_null_and_absent_remain_the_one_accepted_non_number(self):
+        """The exemption, asserted explicitly so it is a decision, not a gap."""
+        from app.envelope import is_money_amount, validate_and_fill_defaults
+
+        self.assertFalse(is_money_amount(None),
+                         "None is not a quantity and must not be charged")
+        for params in ({"amount": None, "currency": "EUR"}, {"currency": "EUR"}):
+            with self.subTest(params=params):
+                out = validate_and_fill_defaults(
+                    _env(session_id="s", verb="transact", params=params))
+                self.assertEqual(params.get("amount"),
+                                 out["params"].get("amount"))
 
 
 if __name__ == "__main__":
