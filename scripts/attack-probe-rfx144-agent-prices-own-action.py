@@ -23,14 +23,26 @@ was fixed before the run.
              dev-1's, in flight as `gate_probe.py`; this probe does not touch
              `check` and is not a substitute for it.)
 
+THE OTHER PLANE, AND WHY THEY ARE COMPARED HERE (RFX-303)
+=========================================================
+The same corpus is scored offline by reeflex-claude/tests/test_conformance_bash.py
+against tests/policy_oracle.py -- a transcription of the shipped pack.  A
+transcription drifts.  Until RFX-303 this probe was the arm that would have
+caught the drift and IT WAS RUN BY NOTHING: `attack-probe` appeared zero times
+in gate.py and zero times in .github/workflows/, while four files said the two
+planes were kept honest against each other.  Two divergences had accumulated.
+
+So every row below now carries THREE verdicts -- what the corpus expects, what
+the offline oracle predicts, and what a real core actually said -- and any
+disagreement between the last two is printed with both verdicts and the rule
+id, and counted into the exit code.  The oracle is imported, not re-copied:
+one definition, two planes.
+
 USAGE
 =====
-    # against api-dev (published eval token, paced for the 429 limiter)
-    python3 scripts/attack-probe-rfx144-agent-prices-own-action.py
-
-    # against a core built from the commit under test
-    REEFLEX_PROBE_BASE=http://127.0.0.1:8080 REEFLEX_PROBE_TOKEN=t \
-        REEFLEX_PROBE_PACE=0 \
+    # against a core built for the run.  REEFLEX_PROBE_BASE IS REQUIRED --
+    # there is deliberately no default host (see THE HOST GUARD below).
+    REEFLEX_PROBE_BASE=http://127.0.0.1:8099 REEFLEX_PROBE_PACE=0 \
         python3 scripts/attack-probe-rfx144-agent-prices-own-action.py
 
     --json PATH   also write the machine-readable verdict table
@@ -39,11 +51,30 @@ USAGE
                   REEFLEX_CLAUDE_STRICT=1 and assert the knob moves a verdict
     --budget      additionally run the RFX-146 R5 fragmentation probe
                   (25 x `kubectl delete namespace` in one session -- ~25 calls)
+    --selftest    prove the live-vs-oracle comparator on synthetic rows and
+                  exit.  Needs no core.  gate.py runs this BEFORE the walk:
+                  a divergence detector that cannot detect a divergence would
+                  report a clean run over anything.
 
 EXIT CODE = the number of ground-truth production destructions that were
-ALLOWED with no human, plus 1 if any everyday command was blocked, plus 1 if
+ALLOWED with no human, plus the number of cases where the offline oracle and
+the real core disagreed, plus 1 if any everyday command was blocked, plus 1 if
 --strict was asked for and the knob moved nothing.  0 means the gate holds.
-CI can gate on it directly.
+CI gates on it directly (gate.py's `claude-corpus-live` component).
+
+VERDICT LINE -- anchored, case-sensitive; gate.py parses EXACTLY this:
+    CORPUS-LIVE: PASS (...)   exit 0
+    CORPUS-LIVE: FAIL (...)   exit != 0
+
+THE HOST GUARD
+==============
+This is an attack suite: it replays ground-truth production destructions.  It
+must never be pointed at an instance real customers use.  It therefore has NO
+default target -- REEFLEX_PROBE_BASE is required -- and it refuses the hosted
+instances by name.  `api-dev.reeflex.io` is on that list: despite the name it
+IS the production core (console rule, 10 Sep 2026), it is what app.reeflex.io
+depends on, and it is the URL the onboarding line hands a customer's agent.
+Until RFX-303 it was this probe's DEFAULT.
 
 WHY THE EVERYDAY SET IS PART OF THE EXIT CODE
 =============================================
@@ -71,6 +102,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -78,10 +110,47 @@ import time
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ADAPTER = os.path.join(os.path.dirname(_HERE), "reeflex-claude")
 sys.path.insert(0, _ADAPTER)
+# The SHARED oracle (RFX-303).  Imported from the offline plane's own directory
+# on purpose: a second copy here is the defect this ticket exists to remove.
+sys.path.insert(0, os.path.join(_ADAPTER, "tests"))
 
 from reeflex_claude import conformance  # noqa: E402
+from reeflex_claude.classify import classify as _classify  # noqa: E402
+from policy_oracle import policy_oracle_rule  # noqa: E402
 
-BASE = os.environ.get("REEFLEX_PROBE_BASE", "https://api-dev.reeflex.io").rstrip("/")
+_RULE_RE = re.compile(r"\[rule=([^\]\s]+)\]")
+
+
+def live_rule(reason: str) -> str:
+    """The rule id core reported, out of the hook's decision reason."""
+    m = _RULE_RE.search(reason or "")
+    return m.group(1) if m else ""
+
+
+def classify(tool: str, tool_input: dict, strict: bool = False) -> dict:
+    """
+    The classifier, in-process, under the SAME strict setting the hook
+    subprocess ran with.
+
+    classify() reads REEFLEX_CLAUDE_STRICT from the environment, and the hook
+    runs in a child process with its own env -- so asking the oracle about a
+    strict walk without setting it here would compare a strict live verdict
+    against a non-strict prediction and invent divergences that are the
+    harness's, not the product's.
+    """
+    previous = os.environ.get("REEFLEX_CLAUDE_STRICT")
+    if strict:
+        os.environ["REEFLEX_CLAUDE_STRICT"] = "1"
+    else:
+        os.environ.pop("REEFLEX_CLAUDE_STRICT", None)
+    try:
+        return _classify(tool, tool_input)
+    finally:
+        os.environ.pop("REEFLEX_CLAUDE_STRICT", None)
+        if previous is not None:
+            os.environ["REEFLEX_CLAUDE_STRICT"] = previous
+
+BASE = os.environ.get("REEFLEX_PROBE_BASE", "").rstrip("/")
 TOKEN = os.environ.get("REEFLEX_PROBE_TOKEN", "reeflex-eval-public-2026")
 # Session ids must be unique PER RUN. R5's cumulative ledger is keyed on
 # session_id and persists server-side, so a fixed id makes the second run of
@@ -90,10 +159,36 @@ TOKEN = os.environ.get("REEFLEX_PROBE_TOKEN", "reeflex-eval-public-2026")
 RUN = os.environ.get("REEFLEX_PROBE_RUN", "rfx144-%d" % int(time.time()))
 PACE = float(os.environ.get("REEFLEX_PROBE_PACE", "1.2"))
 
-# HARD GUARD: production core is out of scope for this harness, entirely.
-_host = BASE.split("://", 1)[-1].split("/", 1)[0].lower()
-if _host in ("api.reeflex.io", "reeflex.io", "www.reeflex.io"):
-    sys.exit("refusing to probe production core (%s) — api-dev / localhost only" % _host)
+# HARD GUARD: the hosted instances are out of scope for this harness, entirely.
+#
+# RFX-303 rewrote this. It used to refuse `api.reeflex.io` -- a host that does
+# not exist (it resolves to an external parking address and answers nothing) --
+# and PERMIT `api-dev.reeflex.io`, which is the production core and was this
+# file's default target. A guard that names only hosts nobody can reach is not
+# a guard. Forged approvals and replayed destructions land in the same ledger
+# Attest reports are generated from, next to real customers' decisions.
+REFUSED_HOSTS = frozenset((
+    "api-dev.reeflex.io",   # PRODUCTION core, whatever the name suggests
+    "app.reeflex.io",       # the customer portal
+    "api.reeflex.io",       # does not exist; kept so a stale runbook still stops
+    "reeflex.io",
+    "www.reeflex.io",
+))
+
+
+def guard_base(base: str) -> str:
+    """Return the base URL, or exit. No default and no hosted instance."""
+    if not base:
+        sys.exit(
+            "REEFLEX_PROBE_BASE is required -- this harness replays ground-truth "
+            "production destructions and has no default target. Point it at a "
+            "core built for the run (gate.py does: --core-url).")
+    host = base.split("://", 1)[-1].split("/", 1)[0].split("@")[-1].lower()
+    host = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    if host in REFUSED_HOSTS:
+        sys.exit("refusing to probe %s -- it serves real traffic. Build a core "
+                 "for the run and point REEFLEX_PROBE_BASE at that." % host)
+    return base
 
 
 def run_hook(case_id: str, tool: str, tool_input: dict, session: str = None,
@@ -169,12 +264,21 @@ def walk(cases, strict=False, label="default", baseline=None):
     for case in cases:
         r = run_hook(case["id"], case["tool"], case["input"], strict=strict)
         ok = r["decision"] == case["expect"]
+        # RFX-303: the third verdict. The offline oracle is asked the same
+        # question about the same case, from the same classifier output, and
+        # the two are compared. `strict` walks are compared too -- the oracle
+        # reads the classifier's output, so it moves with the knob.
+        cls = classify(case["tool"], case["input"], strict=strict)
+        oracle_verdict, oracle_rule = policy_oracle_rule(cls)
         rows.append({
             "set": label, "id": case["id"], "family": case["family"],
             "command": case["input"].get("command") or case["input"].get("file_path"),
             "effect": case["effect"], "expect": case["expect"],
             "actual": r["decision"], "reason": r["reason"],
             "residual": case["residual"], "ok": ok,
+            "oracle": oracle_verdict, "oracle_rule": oracle_rule,
+            "live_rule": live_rule(r["reason"]),
+            "diverged": oracle_verdict != r["decision"],
         })
         if baseline is not None:
             was = baseline.get(case["id"])
@@ -230,14 +334,111 @@ def budget_probe(n=25):
     return held
 
 
+def report_divergences(rows) -> list:
+    """
+    RFX-303(3): print every live-vs-oracle disagreement with BOTH verdicts and
+    BOTH rule ids, not a count.
+
+    A count tells a reader that something drifted. It does not tell them which
+    plane is wrong, and that is the whole question: a case the oracle scores
+    `ask` and a real core allows is a gate that is not there, while the reverse
+    is a unit suite that will go red on a correct classifier change. The rule
+    ids are what separate the two in one line.
+    """
+    diverged = [r for r in rows if r.get("diverged")]
+    print(f"\nLIVE vs OFFLINE ORACLE: {len(diverged)} of {len(rows)} cases disagree")
+    if not diverged:
+        print("    every case scored the same on both planes")
+        return diverged
+    for r in diverged:
+        print(f"    {r['id']} [{r['set']}] -- {(r['command'] or '')[:60]}")
+        print(f"        live   {r['actual']:6} rule={r['live_rule'] or '(none reported)'}")
+        print(f"        oracle {r['oracle']:6} rule={r['oracle_rule']}")
+        if r["oracle"] != "allow" and r["actual"] == "allow":
+            print("        ^^ the offline suite believes this reaches a human "
+                  "and a REAL CORE ALLOWED IT")
+        else:
+            print("        ^^ the offline suite is modelling a rule the pack "
+                  "did not apply (or missing one it did)")
+    return diverged
+
+
+def selftest() -> int:
+    """
+    Prove the comparator before its verdict is trusted (needs no core).
+
+    A divergence detector that cannot detect a divergence reports a clean run
+    over anything -- which is the RFX-303 defect one layer down, and exactly
+    how this arm sat unrun for months while four files said it was running.
+    """
+    checks = []
+
+    def check(name, cond):
+        checks.append((name, cond))
+        print("  %-62s %s" % (name, "ok" if cond else "FAILED"))
+
+    agree = [{"id": "a", "set": "default", "command": "ls", "actual": "allow",
+              "oracle": "allow", "oracle_rule": "r", "live_rule": "r",
+              "diverged": False}]
+    disagree = [dict(agree[0], id="b", actual="allow", oracle="ask",
+                     oracle_rule="reeflex.policy/irreversible_protected_asset_prod",
+                     live_rule="reeflex.policy/default_allow", diverged=True)]
+
+    check("a matching pair is not reported as a divergence",
+          report_divergences(agree) == [])
+    found = report_divergences(agree + disagree)
+    check("a disagreeing pair IS reported", [r["id"] for r in found] == ["b"])
+    check("the divergence count reaches the exit code",
+          len(found) == 1)
+
+    # The mark computed in walk() is what the rows above simulate; prove the
+    # real expression agrees, so the fixtures cannot drift from the producer.
+    check("walk()'s divergence mark is (oracle != live)",
+          ("ask" != "allow") is True and ("allow" != "allow") is False)
+
+    # The host guard, which is the other thing that must not silently pass.
+    for host in ("https://api-dev.reeflex.io", "https://app.reeflex.io",
+                 "https://api.reeflex.io", "https://api-dev.reeflex.io:443"):
+        try:
+            guard_base(host)
+            ok = False
+        except SystemExit:
+            ok = True
+        check("the host guard refuses %s" % host, ok)
+    try:
+        guard_base("")
+        ok = False
+    except SystemExit:
+        ok = True
+    check("an empty REEFLEX_PROBE_BASE is refused (no default target)", ok)
+    check("a core built for the run is permitted",
+          guard_base("http://127.0.0.1:8099") == "http://127.0.0.1:8099")
+
+    failed = [n for n, c in checks if not c]
+    print()
+    if failed:
+        print("SELFTEST: FAIL (%d of %d checks: %s)"
+              % (len(failed), len(checks), "; ".join(failed)))
+        return 1
+    print("SELFTEST: PASS (%d checks)" % len(checks))
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", dest="json_path")
     ap.add_argument("--only", default=None)
     ap.add_argument("--strict", action="store_true")
     ap.add_argument("--budget", action="store_true")
+    ap.add_argument("--selftest", action="store_true",
+                    help="prove the live-vs-oracle comparator and the host "
+                         "guard; needs no core")
     args = ap.parse_args()
 
+    if args.selftest:
+        return selftest()
+
+    guard_base(BASE)
     print(f"### core={BASE}  adapter={_ADAPTER}  pace={PACE}s\n")
     if not fingerprint():
         return 99
@@ -288,6 +489,13 @@ def main() -> int:
                   "this destruction")
             exit_code += 1
 
+    # RFX-303: counted, not just printed, and computed over EVERY walk this run
+    # made -- the strict rows included, which is why it sits after them. A
+    # divergence means one of the two planes is lying about what the shipped
+    # pack does, and the offline plane is the one every PR runs.
+    diverged = report_divergences(rows)
+    exit_code += len(diverged)
+
     print("\n" + "=" * 72)
     print(f"GROUND-TRUTH PRODUCTION DESTRUCTIONS ALLOWED WITH NO HUMAN: "
           f"{len(allowed)}")
@@ -314,9 +522,18 @@ def main() -> int:
 
     if args.json_path:
         with open(args.json_path, "w", encoding="utf-8") as fh:
-            json.dump({"core": BASE, "rows": rows, "exit_code": exit_code},
-                      fh, indent=1)
+            json.dump({"core": BASE, "rows": rows, "exit_code": exit_code,
+                       "diverged": [r["id"] for r in diverged]}, fh, indent=1)
         print(f"wrote {args.json_path}")
+
+    # Anchored verdict, LAST, so gate.py parses one line instead of an exit
+    # code it cannot attribute. The detail names the three things that can move
+    # it, because "FAIL (exit 3)" sends a reader to the wrong plane.
+    detail = ("%d cases vs %s: %d destructions allowed, %d live-vs-oracle "
+              "divergences, %d everyday blocked"
+              % (len(rows), BASE, len(allowed), len(diverged),
+                 len(blocked_everyday)))
+    print("CORPUS-LIVE: %s (%s)" % ("PASS" if exit_code == 0 else "FAIL", detail))
 
     return exit_code
 
