@@ -87,6 +87,9 @@ DEADLINE_RULE = "reeflex.core/deadline_exceeded"
 
 # The rule id for a command too large to classify (RFX-322, classify.py's cap).
 OVERSIZE_RULE = "adapter/command_too_large"
+# RFX-338: the Write/Edit counterpart.  Its own id, so a ledger can tell the two
+# refusals apart -- they have different causes and different operator fixes.
+OVERSIZE_PATH_RULE = "adapter/path_too_long"
 
 # ---------------------------------------------------------------------------
 # Single emission
@@ -408,6 +411,31 @@ def _run_pipeline() -> None:
             f"Reeflex: Bash command is longer than the {max_bash_command_chars()} "
             f"character limit this gate will classify -- refusing rather than "
             f"deciding on a command it has not read [rule={OVERSIZE_RULE}]"
+        )
+
+    # ------------------------------------------------------------------
+    # Step 5c: OVERSIZE PATH REFUSAL (RFX-338)
+    # The same refusal for the same reason on the Write/Edit family, whose
+    # `file_path` reached `_SENSITIVE_PATH_RE` uncapped until RFX-338.  It is a
+    # SEPARATE branch and not a widened `oversize_command` test because the two
+    # say different things to the human reading the denial -- one names a command
+    # limit, the other a path limit -- and because a single test that matched
+    # both would report a Write under a rule id called `command_too_large`.
+    #
+    # Note what is NOT claimed: the deadline watchdog does not make this
+    # redundant.  It cannot interrupt a regex (see classify.MAX_FILE_PATH_CHARS),
+    # which is why the bound is on the input and the refusal is here.
+    # ------------------------------------------------------------------
+    if (envelope.get("context") or {}).get("danger_signature") == "oversize_path" \
+            and permission_decision != "deny":
+        from .classify import MAX_FILE_PATH_CHARS
+
+        permission_decision = "deny"
+        rule = OVERSIZE_PATH_RULE
+        reason_text = (
+            f"Reeflex: file path is longer than the {MAX_FILE_PATH_CHARS} "
+            f"character limit this gate will classify -- refusing rather than "
+            f"deciding on a path it has not read [rule={OVERSIZE_PATH_RULE}]"
         )
 
     # Determine operating mode AFTER computing the would-be verdict above.

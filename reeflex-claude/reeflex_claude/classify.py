@@ -146,6 +146,13 @@ Edit / MultiEdit / NotebookEdit (update):
   blast_radius:  single (or scoped if sensitive path)
   externality:   internal
 
+Write / Edit / MultiEdit / NotebookEdit, PATH CAP (RFX-338):
+  A `file_path` longer than MAX_FILE_PATH_CHARS is not classified at all.  It
+  gets the safe-conservative reading (irreversible / systemic, `oversize_path`)
+  and hook.py refuses it under `adapter/path_too_long`.  The sensitive-path
+  pattern is quadratic on a long subject and the RFX-321 watchdog cannot
+  interrupt a regex, so the input is bounded instead.  See MAX_FILE_PATH_CHARS.
+
 Read / Glob / Grep / LS (read):
   reversibility: reversible
   blast_radius:  single
@@ -407,6 +414,39 @@ def _is_glob(path: str) -> bool:
 # bound a customer can set bigger is the defect, not the fix (see deadline.py).
 MAX_BASH_COMMAND_CHARS = 65536
 _MAX_COMMAND_CHARS_ENV = "REEFLEX_CLAUDE_MAX_COMMAND_CHARS"
+
+# RFX-338.  The same bound, for the same reason, on the OTHER input that reaches
+# a backtracking pattern: `file_path`.
+#
+# RFX-322 capped the Bash path and stopped there, because that is where the
+# 700 KB command was.  It left `_classify_write` / `_classify_edit` running
+# `_SENSITIVE_PATH_RE` on an UNCAPPED `file_path` -- and that pattern contains
+# `docker-compose.*\.ya?ml$`, a `.*` in front of an anchored suffix, which is
+# quadratic on a long subject that never satisfies the anchor.  Measured on the
+# shipped tree (qa--233, reproduced here): 64 KB 0.22 s, 256 KB 3.36 s, 1 MB
+# 50.6 s -- ~3.9x per doubling, in ONE `re.search`.
+#
+# WHY A CAP AND NOT THE WATCHDOG.  RFX-321's deadline is a `threading.Timer`,
+# and CPython's `sre` engine does not release the GIL for the duration of a
+# match, so the watchdog thread cannot run until the match returns.  qa--233
+# measured the timer firing at +0.01 s against a pure-Python loop and at
+# work-end -- independent of the budget -- against a regex.  The deadline
+# therefore bounds a slow Python loop and does NOT bound a slow regex: the hook
+# is killed by the 30 s PreToolUse runner, and a killed hook means the tool RUNS,
+# ungated and with no audit line.  So the bound goes on the INPUT: the watchdog
+# cannot be made to cover this by tuning its budget, because the timer thread
+# does not get the GIL back until the C-level match returns -- which is what
+# qa--233's budget-independence arm measured.
+#
+# WHY 4096, AND WHY THERE IS NO ENV KNOB.  This is not a judgement call like the
+# 64 KiB command cap, so it does not get the command cap's lowering knob: 4096 is
+# Linux `PATH_MAX` (including the NUL), the length past which no path can name a
+# file at all -- `open()` returns ENAMETOOLONG.  macOS is 1024 and Windows'
+# extended limit is 32767 per COMPONENT but 260 unprefixed, so 4096 covers every
+# path a real caller can use on any of them.  A `file_path` longer than this is
+# not a path; it is a payload wearing the field's name.  Classifying it costs
+# ~0.001 s, so nothing is traded away to hold this bound.
+MAX_FILE_PATH_CHARS = 4096
 
 
 def max_bash_command_chars() -> int:
@@ -1377,6 +1417,44 @@ def _classify_bash_execute(command: str, preview: Optional[str]) -> dict:
     )
 
 
+def _oversize_path(verb: str, file_path_str: str) -> dict:
+    """
+    RFX-338.  The SPEC §2 safe-conservative reading of a `file_path` we refused
+    to read, for the Write and Edit families alike.
+
+    ONE function for both call sites on purpose: the failure this closes was two
+    copies of the same uncapped `_SENSITIVE_PATH_RE.search` line, and two copies
+    of the cap would be free to drift back apart the same way.
+
+    The verb is the caller's, because we DO know it -- the tool name told us, and
+    only the target is unreadable.  Everything the path would have told us is
+    pinned at the worst case we cannot rule out: we could not run `os.path.exists`
+    to see whether this overwrites (it answers False for an overlong path, which
+    is precisely the under-classification), and we could not test it for a
+    sensitive location.
+
+    `file_path` and `target_ref` are dropped and only a 200-char preview is kept.
+    That is not tidiness: `envelope.py` puts `file_path` on the wire and into the
+    audit line verbatim, so passing the megabyte through would trade a hung
+    classifier for a megabyte POST to core and a megabyte audit record.  hook.py's
+    oversize refusal states "the envelope is small" as its premise; this keeps it
+    true on the path branch too.
+    """
+    return _make(
+        verb=verb,
+        reversibility="irreversible",
+        blast_radius="systemic",
+        externality="internal",
+        magnitude_count=1,
+        target_kind="file",
+        target_ref=None,
+        danger_signature="oversize_path",
+        classification_tier="destructive_systemic",
+        command_preview=file_path_str[:200],
+        file_path=None,
+    )
+
+
 def _classify_write(tool_input: dict) -> dict:
     """Classification for a Write tool call."""
     # Use file_path only -- NOT file_text (which is the file CONTENT, not the
@@ -1385,6 +1463,13 @@ def _classify_write(tool_input: dict) -> dict:
     file_path = tool_input.get("file_path") or ""
     file_path_str = str(file_path) if file_path else ""
     preview = None
+
+    # RFX-338.  BEFORE `os.path.exists` and BEFORE `_SENSITIVE_PATH_RE` -- the
+    # regex is the uninterruptible one, and the stat call cannot answer for a
+    # path this long either.  See MAX_FILE_PATH_CHARS for why the watchdog is
+    # not an alternative here.
+    if len(file_path_str) > MAX_FILE_PATH_CHARS:
+        return _oversize_path("create", file_path_str)
 
     # Overwrite vs. new file
     if file_path_str and os.path.exists(file_path_str):
@@ -1422,6 +1507,12 @@ def _classify_edit(tool_input: dict) -> dict:
     """Classification for Edit / MultiEdit / NotebookEdit."""
     file_path = (tool_input.get("file_path") or "")
     file_path_str = str(file_path) if file_path else ""
+
+    # RFX-338.  Same cap, same reason, before the same pattern.  This arm serves
+    # Edit, MultiEdit AND NotebookEdit, so it is three of the four reachable
+    # routes; Write is the fourth.
+    if len(file_path_str) > MAX_FILE_PATH_CHARS:
+        return _oversize_path("update", file_path_str)
 
     # Targeted edit: generally recoverable (git-revertable)
     # Sensitive path -> scoped blast_radius as a flag
