@@ -131,7 +131,7 @@ RESTRAINT = {"allow": 0, "ask": 1, "deny": 2}
 # CASES — every one of those produces a clean zero. So the count of cases
 # actually SCORED is asserted against a floor, and the floor is printed in the
 # PASS line so the next person can see what it was measured against.
-# Today's corpus scores 78 (84 cases, 6 residual). Deliberately well below, so
+# Today's corpus scores 96 (102 cases, 6 residual). Deliberately well below, so
 # retiring a case stays an ordinary change, and far above zero, so a walk that
 # stopped walking cannot pass for a clean tree.
 MIN_SCORED_CASES = 40
@@ -141,11 +141,41 @@ MIN_SCORED_CASES = 40
 # is shipping something, not a way to make the component quiet: it must name a
 # ticket, and it FAILS once the published wheel stops diverging on that case.
 #
-# EMPTY ON PURPOSE, and empty is a measurement, not an absence: on 2026-09-16
-# published 0.2.0 scored 0 divergences over 78 cases against this tree
-# (38bdd31). The floor above is what stops an empty ledger from meaning
-# "nothing ran".
-PUBLISHED_LAG: dict = {}
+# IT WAS EMPTY WHEN THIS COMPONENT WAS WRITTEN, AND THE CORPUS MOVED UNDER IT.
+# On 2026-09-16 published 0.2.0 scored 0 divergences over 78 cases (38bdd31).
+# On 2026-09-17 RFX-301 landed on main (PR #155) and added the ten
+# `destroy-subst-*` cases below: a destructive command reached through a command
+# or process substitution, which published 0.2.0 (uploaded 2026-09-16T06:29Z,
+# i.e. BEFORE that fix) prices as `read/reversible/single` and lets through.
+#
+# These ten are the component doing its job on its first real run. They are a
+# LAG, not a gap, and that distinction was measured rather than assumed: this
+# tree's own classifier + tests/policy_oracle.py answer all ten correctly
+# (`ask` x9 via irreversible_broad_prod, `deny` x1 via irreversible_systemic_prod).
+# The fix exists; the artefact a customer installs does not carry it yet.
+#
+# RFX-301 is the ticket, and it closes these by REPUBLISHING reeflex-claude --
+# which is a release action and therefore owner-gated, not something this
+# component or the agent that landed it can do. The entries are not a way to
+# make the gate quiet: `audit` FAILS each one as STALE the moment the published
+# wheel stops diverging, so the republish deletes this block by reddening the
+# gate until someone does.
+PUBLISHED_LAG: dict = {
+    # Command substitution -- the delete runs inside $( ) / ` `, and the
+    # published classifier reads only the outer command word.
+    "destroy-subst-dollar-paren":    "RFX-301",
+    "destroy-subst-backticks":       "RFX-301",
+    "destroy-subst-bare":            "RFX-301",
+    "destroy-subst-double-quoted":   "RFX-301",
+    "destroy-subst-nested":          "RFX-301",
+    "destroy-subst-after-separator": "RFX-301",
+    "destroy-subst-in-argument":     "RFX-301",
+    # Process substitution -- both directions.
+    "destroy-subst-process":         "RFX-301",
+    "destroy-subst-process-write":   "RFX-301",
+    # The same shape on a system path: expect `deny`, published `allow`.
+    "destroy-subst-systemic":        "RFX-301",
+}
 
 TICKET_RE = re.compile(r"RFX-\d+")
 

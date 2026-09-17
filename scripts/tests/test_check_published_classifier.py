@@ -34,7 +34,10 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(REPO_ROOT, "reeflex-claude"))
 sys.path.insert(0, REPO_ROOT)
 
+sys.path.insert(0, os.path.join(REPO_ROOT, "reeflex-claude", "tests"))
+
 from reeflex_claude import conformance  # noqa: E402
+from policy_oracle import policy_oracle as tree_oracle  # noqa: E402 -- SHARED (RFX-303)
 import gate  # noqa: E402
 
 
@@ -94,28 +97,69 @@ class TestTheFloorIsMeaningfulAgainstTheRealCorpus(unittest.TestCase):
 
 
 class TestTheOracleIsNotTranscribedTwice(unittest.TestCase):
-    """The published wheel must be scored with THIS tree's verdict function."""
+    """The published wheel must be scored with THIS tree's verdict function --
+    and there must be exactly ONE of those (RFX-303), reached by all three
+    planes: the offline unit suite, the live attack probe, and this script.
+    """
 
-    def test_the_conformance_suite_uses_the_corpus_oracle(self):
-        sys.path.insert(0, os.path.join(REPO_ROOT, "reeflex-claude", "tests"))
+    def test_the_conformance_suite_uses_the_same_oracle_object(self):
         import test_conformance_bash as suite
         self.assertIs(
-            suite.policy_oracle, conformance.policy_oracle,
+            suite.policy_oracle, tree_oracle,
             "the unit suite and the published-wheel check must apply the SAME "
-            "R1-R4 transcription; two copies drift and the drift shows up as a "
+            "transcription; two copies drift and the drift shows up as a "
             "disagreement about a published artefact")
 
+    def test_the_adapter_package_carries_no_oracle_of_its_own(self):
+        """RFX-327, the regression this pins.
+
+        An earlier revision of this component put an R1-R4 copy of the oracle in
+        `reeflex_claude.conformance` so the script could import it from the
+        package. That copy was missing R6 and ranked R1 first -- the two
+        divergences RFX-303 had just removed -- and it scored the CORRECT
+        published wheel 0.2.0 FAIL on `protected-rm-single-file-under-srv`.
+        policy_oracle.py's own docstring is the rule: the adapter "does not
+        import this module and must not", because the adapter classifies and
+        core decides.
+        """
+        self.assertFalse(
+            hasattr(conformance, "policy_oracle"),
+            "reeflex_claude.conformance has grown a policy_oracle again — the "
+            "oracle belongs in reeflex-claude/tests/policy_oracle.py, which is "
+            "deliberately NOT shipped in the package (RFX-303/RFX-327)")
+
     def test_the_oracle_routes_a_broad_irreversible_production_action_to_a_human(self):
-        verdict = conformance.policy_oracle(
+        verdict = tree_oracle(
             {"verb": "delete", "reversibility": "irreversible",
              "blast_radius": "broad", "externality": "internal"})
         self.assertEqual("ask", verdict)
 
     def test_the_oracle_allows_an_ordinary_read(self):
-        verdict = conformance.policy_oracle(
+        verdict = tree_oracle(
             {"verb": "read", "reversibility": "reversible",
              "blast_radius": "single", "externality": "internal"})
         self.assertEqual("allow", verdict)
+
+    def test_the_oracle_holds_a_protected_single_file_delete(self):
+        """R6 -- the rule the replaced copy could not see. Reads the ref only."""
+        verdict = tree_oracle(
+            {"verb": "delete", "reversibility": "irreversible",
+             "blast_radius": "single", "externality": "internal",
+             "target_ref": "/srv/app/truncate.log"})
+        self.assertEqual("ask", verdict)
+
+    def test_the_driver_projects_every_axis_the_oracle_reads(self):
+        """The projection in DRIVER is what the oracle actually gets.
+
+        R6 reads `target_ref` and nothing else. A projection that drops it does
+        not fail loudly -- it silently scores every wheel as ref-less, which is
+        under no protected prefix, so R6 can never fire. Dropping a key here is
+        indistinguishable from a clean run.
+        """
+        for axis in ("verb", "reversibility", "blast_radius", "externality",
+                     "target_ref"):
+            self.assertIn('"%s"' % axis, cpc.DRIVER,
+                          "DRIVER stopped projecting %r, which the oracle reads" % axis)
 
 
 class TestTheLineAndTheParserAgree(unittest.TestCase):
@@ -163,7 +207,7 @@ class TestTheAuditOnTheRealCorpusShape(unittest.TestCase):
         rows = {c["id"]: {"cls": classify(c["tool"], c["input"])}
                 for c in conformance.CASES}
         ok, lines, stats = cpc.audit(rows, conformance.CASES,
-                                     conformance.policy_oracle, lag={})
+                                     tree_oracle, lag={})
         self.assertTrue(ok, "\n".join(lines))
         self.assertEqual(0, stats["fail_open"])
         self.assertGreaterEqual(stats["scored"], cpc.MIN_SCORED_CASES)
@@ -179,7 +223,7 @@ class TestTheAuditOnTheRealCorpusShape(unittest.TestCase):
                                       "blast_radius": "single",
                                       "externality": "internal"}}
         ok, lines, stats = cpc.audit(rows, conformance.CASES,
-                                     conformance.policy_oracle, lag={})
+                                     tree_oracle, lag={})
         self.assertFalse(ok)
         self.assertEqual(1, stats["fail_open"])
         self.assertTrue(any(target["id"] in line and "FAIL-OPEN" in line
