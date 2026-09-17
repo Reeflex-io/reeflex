@@ -1794,8 +1794,17 @@ def _paren_balance(text: str) -> int:
     nothing about groups, so the close of `(cd /tmp && ls)` is left stranded on
     the last segment (`ls)`, balance -1) while the close of
     `echo $(rm -rf V)` sits in a segment that is balanced (0).  Only the
-    stranded one may be stripped; taking the other would leave
-    `echo $(rm -rf V` and blind `_substitution_bodies`, undoing RFX-301.
+    stranded one is taken.
+
+    Stated at its measured strength, because the obvious stronger claim is
+    wrong: stripping the balanced one as well does NOT currently undo RFX-301.
+    `_balanced_paren` returns the remainder on an unterminated substitution, so
+    `echo $(rm -rf V` still yields the body, and the whole guard suite stays
+    green with this check removed (break W3, round dev-1--153).  It is kept
+    because `_peel_group` has no business editing text it does not own, and
+    because that degradation in `_balanced_paren` is a property nothing else
+    promises to preserve -- not because a measurement shows it changing a
+    verdict today.
     """
     depth = 0
     quote = None

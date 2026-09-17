@@ -118,14 +118,20 @@ class TestASubshellGroupReachesAHuman(_HookPlaneCase):
 
     def test_the_command_word_is_the_command_not_the_paren(self):
         """
-        The precise defect.  Before the fix the target_ref was mangled to
-        `/var/lib/pgsql)` -- with the paren -- which is why R6 could not
-        rescue the line either.
+        The precise defect, asserted POSITIVELY.
+
+        The first version of this test asserted `")" not in ref`, on the
+        ticket's description of a mangled ref.  It passed on the broken tree:
+        the default Bash EXECUTE arm sets `target_kind="command"` and
+        `target_ref=None`, so there was no ref for a paren to leak into and
+        the assertion was vacuous.  Asserting the ref IS the path is what
+        makes this fail on origin/main -- measured, W1 in the break rig.
         """
         _, envelope = self.hook("(rm -rf /var/lib/pgsql)")
-        ref = (envelope.get("target") or {}).get("ref") or ""
-        self.assertNotIn(")", ref,
-                         "the closing paren leaked into the target ref: %r" % ref)
+        target = envelope.get("target") or {}
+        self.assertEqual(
+            "/var/lib/pgsql", target.get("ref"),
+            "the group's target never reached the wire: %r" % (target,))
 
     def test_the_brace_group_control_still_refuses(self):
         """
@@ -171,8 +177,16 @@ class TestClassifyPlaneInvariants(unittest.TestCase):
 
     def test_rfx301_substitution_is_not_undone(self):
         """
-        The peel must not strip the `)` that terminates a `$(...)`, which
-        would leave `echo $(rm -rf V` and blind `_substitution_bodies`.
+        A regression guard on the neighbouring fix: whatever `_peel_group`
+        does, `echo $(rm -rf V)` must still be read as a delete.
+
+        Honest note on its strength.  Removing the balance check -- letting a
+        trailing `)` be stripped unconditionally -- does NOT make this fail
+        (break W3, measured: 10/10 still green).  `_balanced_paren` returns
+        the remainder on an unterminated substitution, so losing the final
+        `)` costs nothing today.  The balance check is therefore defensive
+        rather than load-bearing, and this test is falsified only by a peel
+        that removes parens it does not own (break W5).
         """
         result = classify("Bash", {"command": "echo $(rm -rf /var/lib/pgsql)"})
         self.assertEqual("delete", result.get("verb"))
