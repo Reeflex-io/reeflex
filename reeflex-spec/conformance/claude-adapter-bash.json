@@ -824,6 +824,104 @@
       "expect_blast_radius": "systemic"
     },
     {
+      "id": "destroy-group-bare",
+      "tool": "Bash",
+      "input": {
+        "command": "(rm -rf /var/lib/pgsql)"
+      },
+      "effect": "a subshell group; bash runs the rm inside it",
+      "expect": "deny",
+      "family": "destroy",
+      "check": true,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic"
+    },
+    {
+      "id": "destroy-group-spaced",
+      "tool": "Bash",
+      "input": {
+        "command": "( rm -rf /var/lib/pgsql )"
+      },
+      "effect": "the same group, spaced -- the token is `(` on its own",
+      "expect": "deny",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic"
+    },
+    {
+      "id": "destroy-group-in-substitution",
+      "tool": "Bash",
+      "input": {
+        "command": "echo $( (rm -rf /var/lib/pgsql) )"
+      },
+      "effect": "a group inside a command substitution",
+      "expect": "deny",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic"
+    },
+    {
+      "id": "destroy-group-nested",
+      "tool": "Bash",
+      "input": {
+        "command": "( (rm -rf /var/lib/pgsql) )"
+      },
+      "effect": "a group inside a group",
+      "expect": "deny",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic"
+    },
+    {
+      "id": "destroy-group-piped",
+      "tool": "Bash",
+      "input": {
+        "command": "(rm -rf /var/lib/pgsql) | cat"
+      },
+      "effect": "the group's output is piped; the delete still runs",
+      "expect": "deny",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic"
+    },
+    {
+      "id": "destroy-group-then-benign",
+      "tool": "Bash",
+      "input": {
+        "command": "(rm -rf /var/lib/pgsql); echo done"
+      },
+      "effect": "a group followed by a benign command",
+      "expect": "deny",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic"
+    },
+    {
+      "id": "destroy-group-with-operator",
+      "tool": "Bash",
+      "input": {
+        "command": "(cd /srv && rm -rf /var/lib/pgsql)"
+      },
+      "effect": "the delete is the second word of an && inside the group",
+      "expect": "deny",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic"
+    },
+    {
       "id": "gap-program-on-stdin",
       "tool": "Bash",
       "input": {

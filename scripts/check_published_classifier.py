@@ -175,6 +175,31 @@ PUBLISHED_LAG: dict = {
     "destroy-subst-process-write":   "RFX-301",
     # The same shape on a system path: expect `deny`, published `allow`.
     "destroy-subst-systemic":        "RFX-301",
+    # The subshell group (the defect is RFX-329; the lag these entries record is
+    # RFX-339). Published 0.2.0 was uploaded 2026-09-16T06:29Z; the fix merged
+    # 2026-09-17T18:03Z in PR #164. Six of the seven group rows diverge --
+    # measured by the three-arm differential in
+    # code-reports/qa--235--20260917-evidence/results.json, and confirmed through
+    # core's real pack (`opa eval`, reeflex-core/policy) in
+    # live_pack_results.json: on the wheel the index serves today,
+    # `(rm -rf /var/lib/pgsql)` comes back ALLOW under reeflex.policy/default_allow.
+    #
+    # THE TICKET IS RFX-339, NOT RFX-329, AND THE DIFFERENCE MATTERS TO WHOEVER
+    # READS THIS NEXT. RFX-329 is the classifier defect and it is CLOSED on main;
+    # following it lands you on a ticket that says "fixed", which is not what an
+    # entry in this table means. RFX-339 is the republish -- the action that makes
+    # these entries stale -- and it is owner-gated, so neither this component nor
+    # the agent that wrote these lines can close it.
+    #
+    # `destroy-group-with-operator` is deliberately NOT here: it already decides
+    # correctly on 0.2.0 via the RFX-144 separator path, so declaring it would be
+    # a STALE entry and `audit` would fail it -- which is the mechanism working.
+    "destroy-group-bare":            "RFX-339",
+    "destroy-group-spaced":          "RFX-339",
+    "destroy-group-in-substitution": "RFX-339",
+    "destroy-group-nested":          "RFX-339",
+    "destroy-group-piped":           "RFX-339",
+    "destroy-group-then-benign":     "RFX-339",
 }
 
 # --------------------------------------------------------------------------
@@ -206,7 +231,7 @@ SEAT_ANCHOR = "PUBLISHED-LITELLM-SEAT"
 # behaviour: each entry names the ticket that closes it, an entry that stops
 # diverging FAILS as STALE, and a declaration naming no ticket FAILS.
 #
-# These are the SAME ten cases as PUBLISHED_LAG, reached one distribution
+# These are the same cases as PUBLISHED_LAG, reached one distribution
 # further out, and they close the same way: a republish. They are listed
 # separately rather than aliased because the two resolves are independent --
 # `reeflex-litellm`'s floor is its own declaration and a future edit to it can
@@ -222,6 +247,21 @@ SEAT_PUBLISHED_LAG: dict = {
     "destroy-subst-process":         "RFX-326",
     "destroy-subst-process-write":   "RFX-326",
     "destroy-subst-systemic":        "RFX-326",
+    # The subshell group, reached one distribution further out. MEASURED, not
+    # mirrored from the table above: `--seat` on python3.12 against
+    # reeflex-litellm==0.1.0 fails open on exactly these six, through the seat's
+    # own normaliser, and NOT on `destroy-group-with-operator`. The exposure is
+    # two published packages, not one -- which is why this table exists separately
+    # rather than aliasing PUBLISHED_LAG.
+    #
+    # The seat's floor admits whatever reeflex-claude it admits, so this clears
+    # when that republish happens: RFX-339.
+    "destroy-group-bare":            "RFX-339",
+    "destroy-group-spaced":          "RFX-339",
+    "destroy-group-in-substitution": "RFX-339",
+    "destroy-group-nested":          "RFX-339",
+    "destroy-group-piped":           "RFX-339",
+    "destroy-group-then-benign":     "RFX-339",
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")

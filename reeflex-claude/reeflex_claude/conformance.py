@@ -337,6 +337,50 @@ CASES = [
        "merely 'not benign'", "deny", "destroy", check=True,
        verb="delete", blast_radius="systemic"),
 
+    # RFX-329 -- a SUBSHELL GROUP.  `(rm -rf /var/lib/pgsql)` really does
+    # delete: bash runs the group's contents in a child shell.  Until PR #164
+    # the command word was the literal token `(rm`, which matched no verb, so
+    # the line was not classified at all and reached core as
+    # read/reversible/single.
+    #
+    # THE FIX LANDED WITH A UNIT SUITE AND NO CORPUS ROW, AND THAT IS WHY THESE
+    # EXIST (qa--235).  tests/test_subshell_group_rfx329.py scores the
+    # CHECKOUT, and the checkout is not what a customer installs.  The corpus is
+    # what scripts/check_published_classifier.py asks the PUBLISHED wheel, so a
+    # shape absent from here is a shape no instrument ever puts to the artefact:
+    # the component stayed GREEN on published 0.2.0 for the whole hour after the
+    # fix merged.  Measured three-arm (published 0.2.0 / main before #164 / main
+    # tip) and again through core's real pack via `opa eval`:
+    # code-reports/qa--235--20260917-evidence/.
+    #
+    # `deny` not `ask`, unlike the destroy-subst-* block above: the path is
+    # /var/lib/pgsql, which is systemic, exactly as `destroy-subst-systemic` is.
+    _c("destroy-group-bare", "(rm -rf /var/lib/pgsql)",
+       "a subshell group; bash runs the rm inside it", "deny", "destroy",
+       check=True, verb="delete", blast_radius="systemic"),
+    _c("destroy-group-spaced", "( rm -rf /var/lib/pgsql )",
+       "the same group, spaced -- the token is `(` on its own", "deny",
+       "destroy", verb="delete", blast_radius="systemic"),
+    _c("destroy-group-in-substitution", "echo $( (rm -rf /var/lib/pgsql) )",
+       "a group inside a command substitution", "deny", "destroy",
+       verb="delete", blast_radius="systemic"),
+    _c("destroy-group-nested", "( (rm -rf /var/lib/pgsql) )",
+       "a group inside a group", "deny", "destroy",
+       verb="delete", blast_radius="systemic"),
+    _c("destroy-group-piped", "(rm -rf /var/lib/pgsql) | cat",
+       "the group's output is piped; the delete still runs", "deny", "destroy",
+       verb="delete", blast_radius="systemic"),
+    _c("destroy-group-then-benign", "(rm -rf /var/lib/pgsql); echo done",
+       "a group followed by a benign command", "deny", "destroy",
+       verb="delete", blast_radius="systemic"),
+    # Already closed before #164 by the RFX-144 separator path, and kept so the
+    # row that did NOT move stays visible beside the six that did -- it is the
+    # reason the gap survived review: the shape everyone reaches for when
+    # checking "are groups handled" is the one that was already handled.
+    _c("destroy-group-with-operator", "(cd /srv && rm -rf /var/lib/pgsql)",
+       "the delete is the second word of an && inside the group", "deny",
+       "destroy", verb="delete", blast_radius="systemic"),
+
     # ------------------------------------------------------------------
     # gap -- the destruction is NOT IN the command string, so no string
     # classifier can price it. Excluded from the gate's count and named, so
