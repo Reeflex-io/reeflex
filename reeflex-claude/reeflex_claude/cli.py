@@ -46,6 +46,16 @@ from typing import List, Optional, Tuple
 from .connect import AGENTS as CONNECT_AGENTS
 from .connect import DEFAULT_PORTAL_URL as CONNECT_DEFAULT_PORTAL
 from .enforce import _DEFAULT_CORE_URL as DEFAULT_CORE_URL
+from .posture import (
+    MATCHER_STAMP_ENV,
+    RULE_NARROWED,
+    RULE_UNVERIFIED,
+    STATE_FULL,
+    STATE_NARROWED,
+    STATE_UNVERIFIED,
+    assess,
+    widen_command,
+)
 from .setup_settings import (
     DEFAULT_MATCHER,
     DEFAULT_TIMEOUT,
@@ -184,6 +194,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_target_flags(p_check)
 
+    p_status = sub.add_parser(
+        "status",
+        help="Say, in plain words, WHICH tools reach this gate -- and name the exact "
+             "command that widens it if the answer is 'not all of them'.",
+    )
+    p_status.add_argument(
+        "--strict", action="store_true",
+        help="Exit 1 when coverage is narrowed or unverified, so CI can gate on it. "
+             "Without it status always exits 0: upgrading is not a failure and a "
+             "narrowing may be deliberate (RFX-325, owner decision 2026-09-17).",
+    )
+    p_status.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Emit the assessment as one JSON object instead of prose.",
+    )
+
     return parser
 
 
@@ -197,6 +223,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_setup(args)
     if args.command == "check":
         return cmd_check(args)
+    if args.command == "status":
+        return cmd_status(args)
     if args.command == "connect":
         from .connect import cmd_connect
         return cmd_connect(args)
@@ -303,6 +331,16 @@ def cmd_setup(args: argparse.Namespace) -> int:
             "REEFLEX_MODE": mode,
             "REEFLEX_CLAUDE_ENVIRONMENT": environment,
             "REEFLEX_VERIFY_SSL": verify_ssl,
+            # RFX-325.  The matcher we just wired, stamped where the HOOK can
+            # read it: Claude Code exports a loaded settings file's `env` block
+            # into the hook's environment (measured on 2.1.268), while nothing
+            # tells the hook WHICH settings file was loaded. For a launch of
+            # the form `claude --settings <path>` that stamp is the only way
+            # the hook can know its own coverage. It is the FALLBACK, never the
+            # primary evidence -- posture.py reads the file first, because a
+            # stamp goes stale the moment someone hand-edits the matcher and a
+            # stale `*` is the one wrong answer that must not happen.
+            MATCHER_STAMP_ENV: DEFAULT_MATCHER,
         }
         if token:
             env_updates["REEFLEX_CORE_TOKEN"] = token
@@ -533,13 +571,23 @@ def cmd_check(args: argparse.Namespace) -> int:
                     )
                 matcher = _wired_matcher(settings)
                 if matcher is not None and matcher != DEFAULT_MATCHER:
+                    # Still a WARNING and not a FAIL: the owner's decision on
+                    # RFX-325 is warn and run, and `check`'s verdict line is a
+                    # claim about the fail-closed path, which a narrowing does
+                    # not weaken -- it bypasses it. What a narrowing needs is
+                    # to be SEEN, which is `status`, and to leave a record,
+                    # which the hook now does once a session.
                     notes.append(
                         f"[reeflex-claude] WARNING: hook matcher is {matcher!r}, not "
                         f"{DEFAULT_MATCHER!r}. Claude Code treats the matcher as an "
                         "allowlist: any tool whose name does not match -- every 'mcp__*' "
                         "tool, Task, SlashCommand, Skill, and every tool added to Claude "
                         "Code later -- reaches no gate at all. Re-run "
-                        "'reeflex-claude setup' unless this narrowing is deliberate."
+                        "'reeflex-claude setup' unless this narrowing is deliberate. "
+                        "Run 'reeflex-claude status' for which tools this matcher does "
+                        "not select and the exact command that widens it; "
+                        "'reeflex-claude status --strict' exits 1 on it, which is the "
+                        "hook to hang CI on -- this PASS/FAIL line will not move."
                     )
             else:
                 notes.append(
@@ -559,6 +607,150 @@ def cmd_check(args: argparse.Namespace) -> int:
         print(line)
 
     return 0 if passed else 1
+
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+
+def _posture_sessions() -> Tuple[int, int, str]:
+    """
+    (narrowed_sessions, unverified_sessions, audit_log_path) read back out of
+    the audit stream.
+
+    Counts DISTINCT session ids, not lines: posture.py writes one record per
+    session, but a crash between writing the record and writing the session
+    marker repeats it deliberately (a duplicate an operator can see beats a
+    record that was lost), so lines can over-count and sessions cannot.
+    """
+    from .audit import _audit_log_path
+    path = _audit_log_path()
+    narrowed, unverified = set(), set()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                sid = rec.get("session_id")
+                if rec.get("rule") == RULE_NARROWED:
+                    narrowed.add(sid)
+                elif rec.get("rule") == RULE_UNVERIFIED:
+                    unverified.add(sid)
+    except OSError:
+        pass
+    return len(narrowed), len(unverified), path
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """
+    The diagnostic RFX-325 asks for: which tools reach this gate, and -- when
+    the answer is "not all of them" -- the exact command that widens it.
+
+    `check` answers a question about the PACKAGE (can the wired hook be
+    spawned, and does it fail closed).  This answers a question about the
+    INSTALLATION: of the tools Claude Code has, which ones are routed here at
+    all.  qa--222 measured `check` printing "PASS -- fail-closed verified" over
+    an installation where every `mcp__*` tool ran ungated, which is why the two
+    are separate commands and not one.
+    """
+    assessment = assess()
+    narrowed_sessions, unverified_sessions, audit_path = _posture_sessions()
+
+    if args.as_json:
+        print(json.dumps({
+            "assessment": assessment,
+            "remediation": widen_command(assessment),
+            "sessions": {
+                "narrowed": narrowed_sessions,
+                "unverified": unverified_sessions,
+                "audit_log": audit_path,
+            },
+            "version": _adapter_version(),
+        }, indent=2))
+        return 1 if (args.strict and assessment["state"] != STATE_FULL) else 0
+
+    print("=" * 70)
+    if assessment["state"] == STATE_FULL:
+        headline = "COVERAGE: every tool reaches the gate"
+    elif assessment["state"] == STATE_NARROWED:
+        headline = "COVERAGE: NARROWED -- some tools reach no gate at all"
+    else:
+        headline = "COVERAGE: UNVERIFIED -- cannot tell which tools reach the gate"
+    print(headline)
+    print("=" * 70)
+    print(f"[reeflex-claude] version: {_adapter_version()}")
+    print(f"[reeflex-claude] matcher this version installs: {assessment['shipped']!r}")
+
+    if assessment["wired"]:
+        print("[reeflex-claude] matcher(s) this installation is wired with:")
+        for wired in assessment["wired"]:
+            shown = "<absent -- matches every tool>" if wired["matcher"] is None else repr(wired["matcher"])
+            mark = "covers every tool" if wired["covers_all"] else "DOES NOT cover every tool"
+            print(f"[reeflex-claude]   {shown}  ({mark})")
+            print(f"[reeflex-claude]     from: {wired['source']}")
+    else:
+        print("[reeflex-claude] no settings file at a fixed location wires this hook.")
+
+    if assessment["scanned"]:
+        print("[reeflex-claude] settings files read: " + ", ".join(assessment["scanned"]))
+    else:
+        print("[reeflex-claude] settings files read: none existed at the fixed locations.")
+
+    if assessment["state"] == STATE_NARROWED:
+        print("")
+        print("[reeflex-claude] Claude Code treats the matcher as an allowlist and matches")
+        print("[reeflex-claude] a tool name against it in full. A tool it does not select")
+        print("[reeflex-claude] never reaches this hook: it runs, no decision is made, no")
+        print("[reeflex-claude] record is written and your engine is not asked. Examples")
+        print("[reeflex-claude] your matcher does not select:")
+        for name in assessment["uncovered_examples"]:
+            print(f"[reeflex-claude]   {name}")
+        print("[reeflex-claude] ...and every tool added to Claude Code after your matcher")
+        print("[reeflex-claude] was written, which is the case a list cannot be kept ahead of.")
+        print("")
+        print("[reeflex-claude] Widen it by running, in the same place you ran setup:")
+        print(f"[reeflex-claude]   {widen_command(assessment)}")
+        print("[reeflex-claude] Upgrading the package does NOT do this for you: pip rewrites")
+        print("[reeflex-claude] the code, never settings.json (RFX-325).")
+        print("[reeflex-claude] If the narrowing is deliberate, nothing here blocks you --")
+        print("[reeflex-claude] the hook still runs; it records the narrowing once a session.")
+    elif assessment["state"] == STATE_UNVERIFIED:
+        print("")
+        print("[reeflex-claude] The most common cause is launching with")
+        print("[reeflex-claude]   claude --settings <path>")
+        print("[reeflex-claude] A hook is told its session, its cwd and its tool call, and")
+        print("[reeflex-claude] nothing about which settings file was loaded, so it cannot")
+        print("[reeflex-claude] read that file back. Re-running setup writes a")
+        print(f"[reeflex-claude] {MATCHER_STAMP_ENV} stamp into the settings 'env' block,")
+        print("[reeflex-claude] which does travel to the hook and closes this case:")
+        print(f"[reeflex-claude]   {widen_command(assessment)}")
+        print("[reeflex-claude] Coverage here may be complete or may not be. This says only")
+        print("[reeflex-claude] that it is not known -- which is not the same as 'fine'.")
+
+    print("")
+    print(f"[reeflex-claude] adapter audit stream: {audit_path}")
+    print(f"[reeflex-claude]   sessions recorded under {RULE_NARROWED}: {narrowed_sessions}")
+    print(f"[reeflex-claude]   sessions recorded under {RULE_UNVERIFIED}: {unverified_sessions}")
+    print("[reeflex-claude] Note: these are the ADAPTER's own records, on this machine.")
+    print("[reeflex-claude] They do not reach an Attest report -- the evidence connector")
+    print("[reeflex-claude] tails reeflex-core's decisions.jsonl, and a tool that never")
+    print("[reeflex-claude] reached this hook produced no core decision to tail (RFX-325).")
+
+    if args.strict and assessment["state"] != STATE_FULL:
+        return 1
+    return 0
+
+
+def _adapter_version() -> str:
+    from . import __version__
+    return __version__
 
 
 if __name__ == "__main__":

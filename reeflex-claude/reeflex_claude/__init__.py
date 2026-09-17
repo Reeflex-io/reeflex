@@ -8,8 +8,14 @@ Implements the four Reeflex adapter responsibilities (SPEC §6):
   AUDIT      -- audit.py appends one JSONL record per decision
 
 Entry points:
-  `reeflex-claude hook|setup|check`  (console script, after `pip install reeflex-claude`)
+  `reeflex-claude hook|setup|connect|check|status`
+                                     (console script, after `pip install reeflex-claude`)
   `python -m reeflex_claude`         (back-compat: runs the hook directly)
+
+`check` answers a question about the PACKAGE: can the wired hook be spawned,
+and does it fail closed.  `status` answers a question about the INSTALLATION:
+of the tools Claude Code has, which ones are routed to the hook at all -- see
+posture.py (RFX-325).
 """
 
 from __future__ import annotations

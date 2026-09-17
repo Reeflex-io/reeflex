@@ -195,6 +195,31 @@ def _run_pipeline() -> None:
         return
 
     # ------------------------------------------------------------------
+    # Step 2b: ADAPTER POSTURE (RFX-325) -- once per session, before anything
+    # that can fail.
+    #
+    # An installation set up before 0.2.0 still carries 0.1.7's narrow matcher,
+    # because `pip install -U` does not rewrite settings.json.  qa--222
+    # measured what that looks like from outside: the ungated tool runs, the
+    # adapter writes nothing, core is asked nothing -- byte for byte what an
+    # installation with NO Reeflex hook produces.  The owner's decision is warn
+    # and RUN (a narrowing may be deliberate and this hook cannot tell
+    # deliberate from stale), so this call changes no decision; it only makes
+    # the two states distinguishable by leaving one record per session.
+    #
+    # Placed here on purpose: it runs before classify/envelope/core, so a
+    # session whose every call fails at one of those still says, once, which
+    # tools were reaching this hook at all.  It cannot raise (posture.py
+    # swallows its own exceptions) and after the first call of a session it
+    # costs one stat.
+    # ------------------------------------------------------------------
+    try:
+        from .posture import note_once
+        note_once(session_id, mode=_mode())
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ------------------------------------------------------------------
     # Step 3: NORMALIZE -- classify + build envelope
     # ------------------------------------------------------------------
     from .classify import classify

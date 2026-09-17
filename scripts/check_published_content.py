@@ -153,13 +153,13 @@ WAIVED_COLLISIONS = {
                "them. Closing it means publishing a HIGHER version, which is a "
                "release decision.",
     },
-    "reeflex-claude": {
-        "version": "0.2.0",
-        "ticket": "RFX-299",
-        "why": "#147 moved SETUP_DOC_SHA256 without moving the version, so the "
-               "published 0.2.0 prints a digest the tree no longer has. Tracked "
-               "with its own remedy (bump to 0.2.1) as a release-sequencing call.",
-    },
+    # reeflex-claude / RFX-299 was waived here at 0.2.0 ("#147 moved
+    # SETUP_DOC_SHA256 without moving the version, so the published 0.2.0
+    # prints a digest the tree no longer has"), with its own remedy written
+    # into the waiver: bump to 0.2.1. RFX-325 did that bump, so the collision
+    # the waiver excused no longer exists and the entry now hides nothing --
+    # which this component detects and fails on by design. Removed rather
+    # than left to rot into a waiver nobody can attribute.
 }
 
 
