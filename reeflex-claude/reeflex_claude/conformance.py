@@ -182,6 +182,65 @@ CASES = [
        "empties the production database with a bare redirect", "ask",
        "destroy", verb="delete", blast_radius="broad"),
 
+    # RFX-340 (dev-1 round 159).  A redirection is not a command, and until
+    # this round the target was only read off the COMMAND WORD -- so the one
+    # spelling nobody writes (`> P cmd`) was priced and the spelling everyone
+    # writes (`cmd > P`) was priced benign/read.  Ground truth for every row
+    # below is a real /bin/bash against a synthetic canary, predicate "are the
+    # ORIGINAL CONTENTS gone" (an emptiness check reports these as surviving,
+    # because `> P echo hi` truncates and THEN writes three bytes).
+    #
+    # These rows ARE the published-wheel guard's sensitivity: since #167,
+    # `scripts/check_published_classifier.py` can only see what the corpus
+    # asks about, so a classifier fix that adds no row silently narrows it.
+    _c("destroy-redirect-trailing", "echo hi > /srv/prod/db.sqlite",
+       "the idiomatic spelling empties the production database", "ask",
+       "destroy", verb="delete", blast_radius="broad"),
+    _c("destroy-redirect-trailing-fd", "echo hi 1> /srv/prod/db.sqlite",
+       "an explicit fd number redirects and truncates the same file", "ask",
+       "destroy", verb="delete", blast_radius="broad"),
+    _c("destroy-redirect-trailing-both", "echo hi &> /srv/prod/db.sqlite",
+       "&> truncates the target as well", "ask",
+       "destroy", verb="delete", blast_radius="broad"),
+    _c("destroy-redirect-varfd", "echo hi {fd}> /srv/prod/db.sqlite",
+       "bash's {name}> allocates a descriptor and truncates the target", "ask",
+       "destroy", verb="delete", blast_radius="broad"),
+    _c("destroy-redirect-nospace", ">/srv/prod/db.sqlite echo hi",
+       "removing the space after > is not a different command", "ask",
+       "destroy", verb="delete", blast_radius="broad"),
+    _c("destroy-redirect-mid-command", "echo > /srv/prod/db.sqlite hi",
+       "a redirection between the command word and its arguments", "ask",
+       "destroy", verb="delete", blast_radius="broad"),
+    # In `cmd > A > B` only B receives the output, but BOTH files are OPENED,
+    # and opening for truncation is what destroys the prior contents.  A rig
+    # that checks only the last target reports this one safe.
+    _c("destroy-redirect-second-target",
+       "echo hi > /srv/prod/wal.sqlite > /srv/prod/db.sqlite",
+       "every target on the line is opened and truncated, not just the last",
+       "ask", "destroy", verb="delete", blast_radius="broad"),
+    _c("destroy-redirect-in-substitution",
+       "echo $(echo hi > /srv/prod/db.sqlite)",
+       "a redirection buried in a command substitution still truncates",
+       "ask", "destroy", verb="delete", blast_radius="broad"),
+
+    # The other side of RFX-340, and the reason the fix is scoped by TARGET
+    # rather than by the presence of a redirection.  These four must stay
+    # `allow`: pricing routine build output as a delete would charge R5's
+    # cumulative budget for no gain -- a cost NO single-decision probe can see,
+    # because every such probe starts from an empty ledger.
+    _c("everyday-redirect-build-log", "pytest -q > out.log",
+       "an ordinary file left of a > stays with the command that wrote it",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-redirect-discard", "echo hi > /dev/null",
+       "a discard sink is not a destruction", "allow", "everyday",
+       verb="read", blast_radius="single"),
+    _c("everyday-redirect-append-prod", "echo hi >> /srv/prod/db.sqlite",
+       "an append does not destroy the prior contents (canary survives)",
+       "allow", "everyday", verb="read", blast_radius="single"),
+    _c("everyday-redirect-fd-dup", "echo hi 2>&1",
+       "2>&1 duplicates a descriptor; there is no file to truncate",
+       "allow", "everyday", verb="read", blast_radius="single"),
+
     # NEW rows (dev-1 round 054).  The corpus had `destroy-env-rm`
     # (`env FOO=1 rm ...`) but no BARE assignment row and no nested `sh -c`
     # row, so both gaps were invisible to it.  Neither of these was caught by
