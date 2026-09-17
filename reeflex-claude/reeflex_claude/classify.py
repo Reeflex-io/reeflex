@@ -380,6 +380,49 @@ def _is_glob(path: str) -> bool:
     return bool(_GLOB_RE.search(path))
 
 # ---------------------------------------------------------------------------
+# The cost cap on Bash classification (RFX-322)
+# ---------------------------------------------------------------------------
+#
+# `classify()` is super-linear in Bash command LENGTH -- the cost is shlex
+# tokenisation plus one pass of the segment patterns per segment.  Measured on
+# this tree (`echo <n chars>`, CPython 3.9): 10k 0.03s, 50k 0.23s, 100k 0.61s,
+# 200k 1.90s, 400k 6.54s; qa--221 measured 700k at 34.15s and 800k at 52.72s
+# against the published 0.2.0 wheel.  Past ~700 KB the classifier alone
+# overruns the 30 s PreToolUse hook timeout, the runner kills the hook, and the
+# tool RUNS (qa--221 Finding B).  A gate that spends 30 s deciding a 700 KB
+# command has already lost, whatever it eventually decides.
+#
+# So the classifier is bounded: past the cap it does not tokenise at all.  It
+# returns the SPEC §2 safe-conservative reading of a command it has not read --
+# irreversible / systemic, `oversize_command` -- and hook.py refuses the action
+# under `adapter/command_too_large` whatever the engine says about it.
+#
+# WHY 64 KiB.  It is ~180x the longest command in this repo's Bash conformance
+# corpus, it costs ~0.3 s to classify, and it is half of Linux's MAX_ARG_STRLEN
+# (128 KiB), the point past which a single argument cannot be exec'd at all.
+# A command that does not fit in it is not a command anyone wrote by hand.
+#
+# REEFLEX_CLAUDE_MAX_COMMAND_CHARS may LOWER the cap and may not raise it, for
+# the same reason REEFLEX_CLAUDE_HOOK_TIMEOUT may only lower the deadline: a
+# bound a customer can set bigger is the defect, not the fix (see deadline.py).
+MAX_BASH_COMMAND_CHARS = 65536
+_MAX_COMMAND_CHARS_ENV = "REEFLEX_CLAUDE_MAX_COMMAND_CHARS"
+
+
+def max_bash_command_chars() -> int:
+    """The effective Bash-command cap: the built-in ceiling, lowerable by env."""
+    raw = os.environ.get(_MAX_COMMAND_CHARS_ENV, "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except (ValueError, TypeError):
+            value = 0
+        if value > 0:
+            return min(value, MAX_BASH_COMMAND_CHARS)
+    return MAX_BASH_COMMAND_CHARS
+
+
+# ---------------------------------------------------------------------------
 # Fork-bomb pattern
 # ---------------------------------------------------------------------------
 
@@ -709,6 +752,29 @@ def _classify_bash(tool_input: dict) -> dict:
     command = tool_input.get("command") or tool_input.get("cmd") or ""
     command_str = str(command)
     preview = command_str[:200] if command_str else None
+
+    # RFX-322.  BEFORE any tokenising and before any pattern -- including the
+    # fork-bomb regex, whose `.*` is itself unbounded work over a long line.
+    # Past the cap we do not read the command, and we say so rather than
+    # pricing it from a preview we have not parsed: SPEC §2's safe-conservative
+    # axes, and a danger_signature that names the reason.  hook.py refuses the
+    # action outright on this signature; see deadline.py for why "decide fast"
+    # and "decide correctly" are the same requirement here.
+    cap = max_bash_command_chars()
+    if len(command_str) > cap:
+        return _make(
+            verb="execute",
+            reversibility="irreversible",
+            blast_radius="systemic",
+            externality="internal",
+            magnitude_count=1,
+            target_kind="command",
+            target_ref=None,
+            danger_signature="oversize_command",
+            classification_tier="destructive_systemic",
+            command_preview=preview,
+            file_path=None,
+        )
 
     # Fork-bomb is a property of the whole line, not of any one segment.
     if _FORK_BOMB_RE.search(command_str):

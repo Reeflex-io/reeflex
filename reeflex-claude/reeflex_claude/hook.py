@@ -31,6 +31,22 @@ FAIL-CLOSED CRITICAL INVARIANT (enforce mode, the default):
   * Every stdout print is wrapped in try/except Exception to handle BrokenPipe
     (which would otherwise propagate and cause a non-zero exit -> silent allow).
 
+AND A DEADLINE, BECAUSE "DENY ON ERROR" IS NOT ENOUGH (RFX-321/322)
+  A hook that DIES is not an error the hook gets to handle.  Measured by
+  qa--221 on `claude` 2.1.268: when a PreToolUse hook exceeds its settings.json
+  timeout the runner kills it and RUNS THE TOOL -- so every guarantee above is
+  conditional on returning first, and two customer-reachable conditions broke
+  that (a socket timeout set above the hook timeout; a Bash command large
+  enough that classify() alone overran it).  Both put `rm -rf` through with no
+  human.  So main() arms a watchdog that writes a real answer and terminates
+  the process strictly INSIDE the runner's timeout (deadline.py), and every
+  stdout write in this module goes through _emit_once(), so the watchdog and
+  the pipeline can never both answer.
+
+  In observe mode the deadline answer is ALLOW, not deny: observe must never
+  block the user (HIL-DESIGN §8), and a watchdog that denied would turn the
+  non-blocking mode into the blocking one at 24 s.
+
 When REEFLEX_MODE=observe, the hook records the would-be verdict but always
 emits allow, and fails OPEN on error (never blocks) -- HIL-DESIGN §8.
 
@@ -54,12 +70,37 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
+
+from . import audit, deadline
 
 # Obligations we can honor by construction.
 # audit:full is satisfied because we always write a complete JSONL audit record.
 SUPPORTED_OBLIGATIONS = frozenset({"audit:full"})
 
 _MAX_ERR_LEN = 300  # max chars of exception text embedded in reason strings
+
+# The rule id a deadline answer is recorded under.  It is its own id and not
+# reeflex.core/fail_closed, because "the engine said nothing" and "we ran out
+# of time to listen" are different operator problems with different fixes.
+DEADLINE_RULE = "reeflex.core/deadline_exceeded"
+
+# The rule id for a command too large to classify (RFX-322, classify.py's cap).
+OVERSIZE_RULE = "adapter/command_too_large"
+
+# ---------------------------------------------------------------------------
+# Single emission
+# ---------------------------------------------------------------------------
+# Two threads can reach stdout: the pipeline, and the deadline watchdog.  Two
+# JSON lines on a PreToolUse hook's stdout is an undefined verdict -- qa--221
+# arm E measured what Claude Code does with stdout it cannot parse, and the
+# answer is "runs the tool".  So exactly one of them writes, ever.
+_emit_lock = threading.Lock()
+_emitted = False
+
+# The last envelope the pipeline built, so that a deadline answer can still be
+# audited as the action it was about rather than as an anonymous timeout.
+_envelope_seen: dict = {}
 
 
 def _trunc_err(text: str) -> str:
@@ -92,18 +133,91 @@ def _output(permission_decision: str, reason: str) -> str:
     return json.dumps(payload, separators=(",", ":"))
 
 
-def _safe_print(msg: str) -> None:
+def _safe_print(msg: str) -> bool:
     """
-    Print msg to stdout, swallowing BrokenPipeError and any other I/O error.
-    This is critical: an uncaught BrokenPipeError from the final print would
-    propagate to main()'s outer handler, whose own print could also raise,
-    causing Python to exit non-zero -- which makes Claude Code CONTINUE the
-    tool anyway (silent allow).
+    Emit msg as THE answer, at most once per process.
+
+    Swallows BrokenPipeError and any other I/O error.  This is critical: an
+    uncaught BrokenPipeError from the final print would propagate to main()'s
+    outer handler, whose own print could also raise, causing Python to exit
+    non-zero -- which makes Claude Code CONTINUE the tool anyway (silent allow).
+
+    At most once, because the deadline watchdog answers from another thread:
+    whoever gets here first is the verdict, and the loser writes nothing.
+    Returns True if this call was the one that wrote.
     """
+    return _emit_once(msg)
+
+
+def _emit_once(msg: str, lock_timeout: float = -1) -> bool:
+    """
+    Write msg to stdout iff nothing has been written yet.  Returns whether this
+    call wrote.
+
+    lock_timeout: how long to wait for the emit lock.  The watchdog passes a
+    short one so that a pipeline thread stuck mid-write cannot also stop the
+    process from exiting before the runner kills it -- losing the answer is
+    bad, losing the answer AND the exit is the fail-open.
+    """
+    global _emitted
+    if not _emit_lock.acquire(True, lock_timeout):
+        return False
     try:
-        print(msg, flush=True)
-    except Exception:  # noqa: BLE001
-        pass
+        if _emitted:
+            return False
+        _emitted = True
+        try:
+            sys.stdout.write(msg + "\n")
+            sys.stdout.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+    finally:
+        _emit_lock.release()
+
+
+def _on_deadline(deadline_s: float) -> None:
+    """
+    The watchdog.  Answer, record, and TERMINATE -- in that order.
+
+    Printing on its own is not the fix.  A hook that prints at 24 s and is then
+    killed at 30 s has still been killed, and arm G of qa--221's matrix is what
+    the runner does with a killed hook: it runs the tool.  So this ends with
+    os._exit(0), which is also why it does not run atexit handlers or flush
+    anything the pipeline may have buffered -- there is nothing else to flush,
+    every answer this module produces goes through _emit_once().
+
+    The audit line is written AFTER stdout and BEFORE the exit: the answer is
+    the safety property and the record is the evidence, so the record never
+    goes first.  At the shipped 30 s timeout there are ~6 s of margin left at
+    this point and appending one JSONL line costs well under a millisecond.
+    """
+    reason = (
+        f"Reeflex: no decision within {deadline_s:.1f}s -- failing closed at the hook "
+        f"deadline, before Claude Code's PreToolUse runner "
+        f"({deadline.runner_timeout():.0f}s) kills this hook and runs the tool "
+        f"anyway [rule={DEADLINE_RULE}]"
+    )
+    wrote = _emit_once(_fail_output(reason), lock_timeout=0.5)
+    if wrote:
+        try:
+            audit.emit(
+                envelope=_envelope_seen.get("envelope") or {},
+                permission_decision="deny",
+                rule=DEADLINE_RULE,
+                reason=reason,
+                core_reachable=False,
+                obligations=[],
+                mode=_mode(),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            print(f"[reeflex-claude] ERROR: hook deadline {deadline_s:.1f}s reached; "
+                  f"answered without the engine", file=sys.stderr)
+        except Exception:  # noqa: BLE001
+            pass
+    os._exit(0)
 
 
 def _mode() -> str:
@@ -133,7 +247,13 @@ def main() -> None:
     The outer try/except is the absolute last-resort fail-closed net.
     All inner modules also defend themselves, but we never trust that.
     sys.exit(0) is guaranteed to run via the finally block.
+
+    The watchdog is armed BEFORE the pipeline runs and is never disarmed: it is
+    a daemon thread, so it cannot hold the process open, and _emit_once() makes
+    a late firing a no-op.  Disarming it would be one more ordering to get
+    right on a path whose whole point is that the ordering can fail.
     """
+    deadline.arm(_on_deadline)
     try:
         _run_pipeline()
     except Exception as exc:  # noqa: BLE001
@@ -231,6 +351,9 @@ def _run_pipeline() -> None:
     try:
         cls      = classify(tool_name, tool_input)
         envelope = build_envelope(hook_payload, cls)
+        # Hand the envelope to the watchdog: if the deadline fires during the
+        # engine call, the audit line still says WHICH action was refused.
+        _envelope_seen["envelope"] = envelope
     except Exception as exc:
         _safe_print(_fail_output(
             f"Reeflex: envelope build failed -- failing closed: "
@@ -265,6 +388,28 @@ def _run_pipeline() -> None:
                 f"[rule=adapter/unsupported_obligation]"
             )
 
+    # ------------------------------------------------------------------
+    # Step 5b: OVERSIZE REFUSAL (RFX-322)
+    # classify.py refuses to tokenize a Bash command past its cap and marks it
+    # `oversize_command`.  The engine still SEES the action -- the envelope is
+    # small (a 200-char preview), the round trip is inside the deadline, and an
+    # operator who cannot see these events in their ledger cannot raise the cap
+    # for the job that needs it.  But the adapter's own answer is deny, whatever
+    # comes back: `ask` on a command no one can read is a dialog, not a
+    # decision, and `allow` is the fail-open this ticket exists to close.
+    # ------------------------------------------------------------------
+    if (envelope.get("context") or {}).get("danger_signature") == "oversize_command" \
+            and permission_decision != "deny":
+        from .classify import max_bash_command_chars
+
+        permission_decision = "deny"
+        rule = OVERSIZE_RULE
+        reason_text = (
+            f"Reeflex: Bash command is longer than the {max_bash_command_chars()} "
+            f"character limit this gate will classify -- refusing rather than "
+            f"deciding on a command it has not read [rule={OVERSIZE_RULE}]"
+        )
+
     # Determine operating mode AFTER computing the would-be verdict above.
     mode = _mode()
 
@@ -273,9 +418,8 @@ def _run_pipeline() -> None:
     # We pass the WOULD-BE permission_decision so the audit trail always
     # reflects what enforcement would have done (HIL-DESIGN §8).
     # ------------------------------------------------------------------
-    from .audit import emit as audit_emit
     try:
-        audit_emit(
+        audit.emit(
             envelope=envelope,
             permission_decision=permission_decision,
             rule=rule,

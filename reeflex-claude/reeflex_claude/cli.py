@@ -46,6 +46,7 @@ from typing import List, Optional, Tuple
 from .connect import AGENTS as CONNECT_AGENTS
 from .connect import DEFAULT_PORTAL_URL as CONNECT_DEFAULT_PORTAL
 from .enforce import _DEFAULT_CORE_URL as DEFAULT_CORE_URL
+from .deadline import HOOK_TIMEOUT_ENV
 from .posture import (
     MATCHER_STAMP_ENV,
     RULE_NARROWED,
@@ -61,6 +62,7 @@ from .setup_settings import (
     DEFAULT_TIMEOUT,
     HOOK_COMMAND,
     SettingsError,
+    deadline_mismatch,
     has_hook_entry,
     hook_command_for_settings,
     is_ours,
@@ -341,6 +343,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
             # stamp goes stale the moment someone hand-edits the matcher and a
             # stale `*` is the one wrong answer that must not happen.
             MATCHER_STAMP_ENV: DEFAULT_MATCHER,
+            # RFX-321: the hook has to answer before the runner kills it, so it
+            # has to know when that is. Written here, from the same value as the
+            # entry's own timeout above, so the two cannot be set independently
+            # by anyone who only runs `setup`.
+            HOOK_TIMEOUT_ENV: str(DEFAULT_TIMEOUT),
         }
         if token:
             env_updates["REEFLEX_CORE_TOKEN"] = token
@@ -569,6 +576,9 @@ def cmd_check(args: argparse.Namespace) -> int:
                         "TOOL ANYWAY -- a silent allow with no audit record. Re-run "
                         "'reeflex-claude setup' to wire the absolute path."
                     )
+                drift = deadline_mismatch(settings)
+                if drift:
+                    notes.append(f"[reeflex-claude] WARNING: {drift}")
                 matcher = _wired_matcher(settings)
                 if matcher is not None and matcher != DEFAULT_MATCHER:
                     # Still a WARNING and not a FAIL: the owner's decision on
