@@ -2574,6 +2574,21 @@
       "expect_target_ref": "/srv/prod/data"
     },
     {
+      "id": "destroy-rm-recursive-uppercase-unprotected-path",
+      "tool": "Bash",
+      "input": {
+        "command": "rm -R /home/app/uploads"
+      },
+      "effect": "a recursive tree delete outside the protected prefixes, where nothing else rescues the misclassification: allowed outright before RFX-353",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/home/app/uploads"
+    },
+    {
       "id": "destroy-git-push-plus-refspec",
       "tool": "Bash",
       "input": {

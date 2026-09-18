@@ -1149,6 +1149,19 @@ CASES = [
        "and in the other order, which the letter test also missed",
        "ask", "destroy", verb="delete", blast_radius="broad",
        ref="/srv/prod/data"),
+    # The row that actually demonstrates the escape at DECISION level, and the
+    # reason it is spelled with a path outside /srv/prod. On a protected path
+    # R6 holds the call whatever the blast radius says, so the three rows above
+    # come out `ask` on the broken classifier too -- they pin the AXES, not the
+    # decision. Measured through core's real pack: `rm -R /home/app/uploads`
+    # was ALLOWED before RFX-353 and is `require_approval` after, while
+    # `rm -R /srv/prod/data` was `require_approval` both times.
+    _c("destroy-rm-recursive-uppercase-unprotected-path",
+       "rm -R /home/app/uploads",
+       "a recursive tree delete outside the protected prefixes, where nothing "
+       "else rescues the misclassification: allowed outright before RFX-353",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/home/app/uploads"),
     _c("destroy-git-push-plus-refspec", "git push origin +main:main",
        "`+` on a refspec IS the force spelling -- git printed '(forced "
        "update)' for the push it had just rejected as non-fast-forward",
