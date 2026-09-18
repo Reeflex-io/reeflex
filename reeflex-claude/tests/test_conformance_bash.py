@@ -177,15 +177,20 @@ class TestBashConformanceCorpus(unittest.TestCase):
 #   * an entry that STOPS diverging fails as STALE, so the fix deletes the
 #     entry by reddening the suite until someone does
 #
-# There is one, and it is the whole NotebookEdit route: the tool's key is
-# `notebook_path`, `_classify_edit` reads only `file_path`, and the tool's
-# schema is additionalProperties:false -- so this is 100% of real calls, not an
-# edge. See RFX-342 for the measurement and the second leg (delete-mode).
+# EMPTY, and that is a result rather than an oversight. It held the whole
+# NotebookEdit route against RFX-342 -- the tool's key is `notebook_path`,
+# `_classify_edit` read only `file_path`, and the tool's schema is
+# additionalProperties:false, so that was 100% of real notebook calls. RFX-342
+# landed both legs and the table emptied the way it was built to: the entries
+# did not get deleted because someone remembered, they got deleted because
+# `test_every_ref_blind_entry_still_diverges` went red and would not go green
+# again until they were.
+#
+# Keep the table and its rules. The next ref the classifier cannot carry has a
+# declared home, and an empty table is the only honest reading of "there is no
+# such row today".
 # --------------------------------------------------------------------------
-REF_BLIND = {
-    "everyday-notebookedit-replace-a-cell": "RFX-342",
-    "destroy-notebookedit-deletes-a-production-cell": "RFX-342",
-}
+REF_BLIND = {}
 
 
 class TestRFX341TheRecordNamesTheResource(unittest.TestCase):
@@ -255,26 +260,72 @@ class TestRFX341TheRecordNamesTheResource(unittest.TestCase):
                     f"REF_BLIND entry ({ticket})")
         self.assertEqual([], fixed, "\n".join(fixed))
 
-    def test_the_notebook_route_is_blind_because_of_the_key_name(self):
+    def test_the_notebook_route_carries_its_ref_under_the_key_a_caller_sends(self):
         """
-        The mechanism, not just the symptom -- so a future fix that happens to
-        make the row pass for another reason does not read as this one closing.
-        RFX-342's control: the same call under the key the adapter reads.
+        RFX-342, first leg, asserted on the MECHANISM and not on a row id.
+
+        This replaces the blindness test that RFX-342 closed by reddening. It
+        is spelled the way the tool is: `notebook_path`, because the tool's
+        schema is additionalProperties:false and `file_path` is a shape no real
+        caller can send. The test this grew out of fed `file_path` -- the key
+        the CODE reads -- and so could not have detected the mismatch in either
+        direction. That is the instrument defect, and asserting on the real key
+        is the fix for it.
         """
         real = classify("NotebookEdit", {
             "notebook_path": "/srv/prod/etl/nightly.ipynb",
             "cell_id": "c1", "new_source": "x", "edit_mode": "replace"})
+        self.assertEqual(
+            "/srv/prod/etl/nightly.ipynb", real["target_ref"],
+            "a real NotebookEdit call has stopped naming its notebook -- the "
+            "audit record RFX-206 added cannot answer WHICH notebook, and R6 "
+            "has nothing to match")
+
+        # The other spelling must keep working: the seat maps gateway tools
+        # onto this classifier by argument shape, and it emits `file_path`.
         control = classify("NotebookEdit", {
             "file_path": "/srv/prod/etl/nightly.ipynb",
             "cell_id": "c1", "new_source": "x"})
-        self.assertEqual("/srv/prod/etl/nightly.ipynb", control["target_ref"],
-                         "the control lost its ref too -- this test no longer "
-                         "isolates the key name")
-        self.assertIsNone(
-            real["target_ref"],
-            "RFX-342 appears to be fixed: a real NotebookEdit call now carries "
-            "its path. Delete REF_BLIND's entry, this test, and the residual "
-            "on destroy-notebookedit-deletes-a-production-cell.")
+        self.assertEqual("/srv/prod/etl/nightly.ipynb", control["target_ref"])
+
+    def test_deleting_a_notebook_cell_under_production_state_is_held(self):
+        """
+        RFX-342, second leg -- and the leg that actually makes R6 reachable.
+
+        MEASURED, on the shipped tree, before the fix: a NotebookEdit spelled
+        with `file_path` carried a correct, protected ref and STILL scored
+        allow/default_allow, because R6 reads `irreversible` first. So the key
+        name alone was never going to close this; a fix that stopped there
+        would have corrected the record and left the hold unreachable. The
+        control below is the one the corpus already pins for `rm`.
+        """
+        nb = "/srv/prod/etl/nightly.ipynb"
+        deleted = classify("NotebookEdit", {
+            "notebook_path": nb, "cell_id": "c1", "edit_mode": "delete"})
+        self.assertEqual("irreversible", deleted["reversibility"],
+                         "the removed cell's source is in the tool input in no "
+                         "form, so the Edit family's `recoverable` reason does "
+                         "not hold for delete-mode")
+        self.assertEqual(
+            ("ask", "reeflex.policy/irreversible_protected_asset_prod"),
+            policy_oracle_rule(deleted, "production"))
+
+        # Control: `rm` on that same notebook, which this corpus already holds.
+        # If this stops being `ask`, the assertion above is measuring the
+        # posture and not the fix.
+        removed = classify("Bash", {"command": "rm " + nb})
+        self.assertEqual(
+            ("ask", "reeflex.policy/irreversible_protected_asset_prod"),
+            policy_oracle_rule(removed, "production"))
+
+        # Control the OTHER way: `Edit` carries `old_string`, so the inverse of
+        # the change IS in the call and it stays recoverable. This is what
+        # keeps the delete-mode change scoped to delete-mode instead of
+        # quietly repricing the whole Edit family.
+        edited = classify("Edit", {"file_path": nb,
+                                   "old_string": "a", "new_string": "b"})
+        self.assertEqual("recoverable", edited["reversibility"])
+        self.assertEqual("allow", policy_oracle_rule(edited, "production")[0])
 
 
 class TestRFX303TheOracleTracksTheShippedPack(unittest.TestCase):

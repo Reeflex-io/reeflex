@@ -812,21 +812,20 @@ CASES = [
                    "old_string": "a", "new_string": "b"},
        verb="update", blast_radius="systemic"),
 
-    # ---- NotebookEdit -- RFX-342, filed from these rows.
+    # ---- NotebookEdit -- RFX-342, filed from these rows and CLOSED by them.
     #
-    # The real tool's key is `notebook_path`; `_classify_edit` reads only
+    # The real tool's key is `notebook_path`; `_classify_edit` read only
     # `file_path`, and the tool's schema is `additionalProperties: false`, so
     # a real call CANNOT carry `file_path`.  Every NotebookEdit therefore
-    # classifies with no path: target_ref None, blast_radius single whatever
-    # the notebook is, and an audit record that does not name the file.
+    # classified with no path: target_ref None, blast_radius single whatever
+    # the notebook was, and an audit record that did not name the file.
+    # `_classify_edit` now reads both keys.
     #
     # The verdict is `allow` and that is HONEST for a replace: the new source
     # is in the input, the old is in git for a checked-out notebook.  So this
     # row is scored on its verdict like any other, and what it declares is the
-    # REF -- which is wrong today, and is declared in
-    # test_conformance_bash.REF_BLIND against RFX-342 rather than quietly
-    # left out.  The row below it is the control: the same call spelled the
-    # way the adapter reads, which no real caller can send.
+    # REF.  The row below it is the control: the same call spelled the way the
+    # seat emits it, which no real Claude Code caller can send.
     _c("everyday-notebookedit-replace-a-cell", None,
        "replaces one cell of a notebook in a working tree -- ordinary, and "
        "the record should still say WHICH notebook (RFX-206)",
@@ -852,13 +851,18 @@ CASES = [
     # Under a prefix protected.rego declares production state, ground truth is
     # irreversible + protected ref, which R6 answers `ask`: exactly the
     # verdict this corpus already pins for `rm /srv/app/truncate.log`
-    # (protected-rm-single-file-under-srv).  Measured today: `allow`,
-    # default_allow, while `rm` on that same notebook is held under R6.
+    # (protected-rm-single-file-under-srv).
     #
-    # RESIDUAL, so this is DECLARED and excluded rather than either quietly
-    # absent or asserted-as-correct -- and `test_residuals_are_still_residual`
-    # reddens the moment RFX-342 lands, which is what makes the exclusion
-    # self-clearing rather than a way to keep the gate quiet.
+    # THIS ROW WAS A RESIDUAL AND IS NOT ONE ANY MORE.  It scored `allow`,
+    # default_allow while `rm` on that same notebook was held under R6, and
+    # `test_residuals_are_still_residual` reddened the moment RFX-342's second
+    # leg landed -- which is what made the exclusion self-clearing rather than
+    # a way to keep the gate quiet.  It is now scored like every other row.
+    #
+    # THE REF WAS NOT THE REASON THIS WAS OPEN, and the distinction is worth
+    # keeping: measured before the fix, the same call spelled `file_path`
+    # carried a correct protected ref and STILL scored allow/default_allow,
+    # because R6 reads `irreversible` first.  Both legs were load-bearing.
     _c("destroy-notebookedit-deletes-a-production-cell", None,
        "deletes a cell of a notebook under declared production state: the "
        "removed source is not in the tool input, so nothing can restore it",
@@ -866,7 +870,6 @@ CASES = [
        tool="NotebookEdit",
        tool_input={"notebook_path": "/srv/prod/etl/nightly.ipynb",
                    "cell_id": "c1", "edit_mode": "delete"},
-       residual="RFX-342",
        verb="update", blast_radius="single",
        ref="/srv/prod/etl/nightly.ipynb"),
 ]

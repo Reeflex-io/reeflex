@@ -2013,7 +2013,7 @@
       "expect": "ask",
       "family": "destroy",
       "check": false,
-      "residual": "RFX-342",
+      "residual": null,
       "expect_verb": "update",
       "expect_blast_radius": "single",
       "expect_target_ref": "/srv/prod/etl/nightly.ipynb"

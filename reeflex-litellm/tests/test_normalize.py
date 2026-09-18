@@ -64,6 +64,40 @@ def test_the_projected_keys_are_the_ones_the_classifier_reads():
     assert c.tool_input["path"] == "/etc/passwd"
 
 
+def test_a_notebook_editor_projects_its_path_and_the_record_names_it():
+    """
+    RFX-342, the seat leg. `notebook_path` is what Claude Code's own
+    NotebookEdit sends and what a gateway notebook editor is spelled with, and
+    `_PATH_KEYS` did not contain it -- so the call normalised to a path-shaped
+    tool with NO path, reached core with `target.ref = null`, and the audit
+    record did not name the notebook.
+
+    THIS TEST EXISTS BECAUSE THE SUITE COULD NOT SEE THE FIX. Removing
+    `notebook_path` from `_PATH_KEYS` again leaves all 398 other seat tests
+    green: every path-shaped case in this file is spelled `path` or
+    `file_path`, so the seat's own distribution had no way to fail on this.
+    Asserted here at the seam the seat owns, and not borrowed from the
+    adapter's suite, which does not import this module.
+    """
+    nb = "/srv/prod/etl/nightly.ipynb"
+    c = n("edit_notebook", {"notebook_path": nb, "cell_id": "c1",
+                            "edit_mode": "delete"})
+    assert c.mapped is True, "a notebook editor no longer maps at all"
+    assert c.tool_name == "Edit"
+    # projected onto the key the classifier reads, value byte for byte
+    assert c.tool_input["file_path"] == nb
+    # and nothing was dropped -- `edit_mode` is what prices the delete
+    assert c.tool_input["notebook_path"] == nb
+    assert c.tool_input["edit_mode"] == "delete"
+
+    # The seam is only worth asserting if the classification on the far side of
+    # it carries the ref. Same call, through the classifier this seat feeds.
+    cls = classify.classify(c.tool_name, c.tool_input)
+    assert cls["target_ref"] == nb, (
+        "the seat mapped the call but core would still not be told WHICH "
+        "notebook")
+
+
 # -- the conservative refusals to guess -------------------------------------
 
 def test_a_shell_name_with_no_command_argument_is_NOT_mapped_to_bash():

@@ -272,6 +272,31 @@ PUBLISHED_LAG: dict = {
     # `allow`, where the checkout answers irreversible/systemic -> `deny`.
     "ctrl-write-path-over-the-cap":   "RFX-339",
     "ctrl-edit-path-over-the-cap":    "RFX-339",
+    # The NotebookEdit delete-mode hold (the defect is RFX-342, closed on main
+    # by this change; the lag this entry records is RFX-339, the republish --
+    # the same distinction the two blocks above draw, and for the same reason).
+    #
+    # RFX-341 DECLARED THIS ROW A RESIDUAL, so this component EXCLUDED it and
+    # could not have seen the divergence. RFX-342 cleared the residual, the row
+    # started being scored, and it diverged on the first run afterwards -- the
+    # residual mechanism and this ledger composing the way they were meant to,
+    # one handing the row to the other.
+    #
+    # MEASURED, not inferred from the diff: published `reeflex-claude 0.2.0`
+    # prices `{"notebook_path": ..., "edit_mode": "delete"}` update/recoverable/
+    # single -> `allow`, where the checkout now answers update/irreversible/
+    # single -> `ask` under reeflex.policy/irreversible_protected_asset_prod.
+    #
+    # ONLY THIS ROW, and the two that are absent are absent on purpose:
+    #   * `everyday-notebookedit-replace-a-cell` -- RFX-342 changed its REF, not
+    #     its verdict, and this component compares VERDICTS. It agrees with
+    #     0.2.0 both before and after, so declaring it would be STALE on arrival
+    #     and `audit` would fail it. The ref regression lives in the unit suite
+    #     (TestRFX341TheRecordNamesTheResource), which is the plane that can see
+    #     it -- worth knowing before trusting this arm's green for a ref.
+    #   * `ctrl-notebookedit-spelled-with-file-path` -- 0.2.0 already reads
+    #     `file_path`, so that spelling never diverged.
+    "destroy-notebookedit-deletes-a-production-cell": "RFX-339",
 }
 
 # --------------------------------------------------------------------------
@@ -361,6 +386,21 @@ SEAT_PUBLISHED_LAG: dict = {
     # unknown path would come back as an ERROR here, not as a mispricing.
     "ctrl-write-path-over-the-cap":   "RFX-339",
     "ctrl-edit-path-over-the-cap":    "RFX-339",
+    # NotebookEdit delete-mode, one distribution further out. MEASURED on THIS
+    # arm and not mirrored from the table above -- the rule this block already
+    # states, and it is not a formality here: the two arms fail open for
+    # DIFFERENT reasons, and only one of them is fixed by the seat's own change.
+    # BOTH causes were read off the published artefacts rather than inferred
+    # from this arm's output, which cannot separate them -- a dropped path and
+    # a mispriced delete both surface as update/recoverable/single:
+    #   * `reeflex-litellm==0.1.0`: `normalize._PATH_KEYS` is
+    #     ('file_path','path','filename','file','target_path','filepath',
+    #     'dest','destination') -- no `notebook_path`. Fixed in this change.
+    #   * `reeflex-claude==0.2.0`: prices delete-mode `recoverable`. Fixed on
+    #     main by this change, in a customer's hands only by the republish.
+    # So this entry would still diverge with the seat republished and the
+    # adapter not, which is why it names RFX-339 like every other entry here.
+    "destroy-notebookedit-deletes-a-production-cell": "RFX-339",
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")
