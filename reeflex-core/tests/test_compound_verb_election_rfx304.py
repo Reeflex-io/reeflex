@@ -162,18 +162,29 @@ class TestElectionIsMostGuardedNotFirst(unittest.TestCase):
         rather than deleted, so a later change that silently un-adds those
         words reddens this test instead of passing it.
 
-        The residual itself SURVIVES, narrower: `commit` and `install` are
-        deliberately still absent (neither names a destruction — see the
-        WIDENING note in envelope.py), so a compound built from one of them
-        still elects the leading `count` and still reaches R1. That is the
-        arm that keeps this a known gap, and closing it wants a rule about
-        UNKNOWN words in the election, not more vocabulary.
+        AND THE EXPECTATION MOVED A SECOND TIME (RFX-324). The paragraph this
+        replaces said the residual survives for `commit` and `install`, "and
+        closing it wants a rule about UNKNOWN words in the election, not more
+        vocabulary". It was never two words: the election skips EVERY word the
+        canon does not know, so the residual was the whole complement of the
+        canon — `get_and_redact`, `describe_and_decommission`,
+        `list_and_unmount` and nine more were ALLOWED under R1 as decisions,
+        irreversible and in production, measured on caf2cd6. RFX-324 closed it
+        with the narrow half of that rule: a leading `read` does not survive an
+        explicit conjunction followed by a word the canon does not know (the
+        WIDE reading breaks 34 of 36 genuine reads — see
+        test_conjunction_veto_rfx324.py, which owns the arms, the cost column
+        and the residual that is still open).
+
+        Both words are asserted at their NEW value here rather than deleted,
+        so removing the conjunction clause reddens this test too.
         """
         # Closed by RFX-308: the word is in the canon, so the election sees it.
         self.assertEqual(_verb("count_and_compact", ability=None), "delete")
-        # Still open: the two words RFX-308 deliberately did not add.
-        self.assertEqual(_verb("count_and_install", ability=None), "read")
-        self.assertEqual(_verb("count_and_commit", ability=None), "read")
+        # Closed by RFX-324: the conjunction veto sends both to the
+        # irreversible default instead of handing out R1.
+        self.assertEqual(_verb("count_and_install", ability=None), "delete")
+        self.assertEqual(_verb("count_and_commit", ability=None), "delete")
 
     def test_the_escape_is_not_only_about_delete(self):
         # Same defect, other verbs: on v0.2.1 both of these were recorded
