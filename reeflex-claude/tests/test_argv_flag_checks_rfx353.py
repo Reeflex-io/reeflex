@@ -123,6 +123,30 @@ class TestGitCleanReadsItsOwnFlags(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertNotEqual("delete", _cls(command)["verb"])
 
+    def test_a_config_override_that_removes_the_refusal_is_a_delete(self):
+        """`git -c clean.requireForce=false clean -d` deletes with no `-f`.
+
+        Measured: with the default config `git clean -d` answers *"clean.
+        requireForce is true and -f not given: refusing to clean"* and removes
+        nothing; with the override it printed "Removing probe/" and the canary
+        was gone. Found by dev-1--167's measurement handover.
+        """
+        for command in ("git -c clean.requireForce=false clean -d /srv/prod",
+                        "git -c clean.requireForce=0 clean /srv/prod"):
+            with self.subTest(command=command):
+                got = _cls(command)
+                self.assertEqual("delete", got["verb"])
+                self.assertEqual("irreversible", got["reversibility"])
+
+    def test_the_config_override_complement(self):
+        """Its complement, three ways: the refusal still standing, an unrelated
+        `-c`, and the dry run, which dominates the override too (measured)."""
+        for command in ("git -c clean.requireForce=true clean -d build/",
+                        "git -c user.name=x clean -d build/",
+                        "git -c clean.requireForce=false clean -n -d build/"):
+            with self.subTest(command=command):
+                self.assertNotEqual("delete", _cls(command)["verb"])
+
     def test_the_uppercase_F_position_is_carried_over_deliberately(self):
         """`git clean -Fdx` is NOT a git command -- git answers "unknown switch
         `F'" and removes nothing, measured. Two tests in test_classify.py pin it

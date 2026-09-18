@@ -432,6 +432,7 @@ PUBLISHED_LAG: dict = {
     "destroy-git-push-empty-source-refspec":               "RFX-339",
     "destroy-git-push-global-option-before-subcommand":    "RFX-339",
     "destroy-git-clean-global-option-before-subcommand":   "RFX-339",
+    "destroy-git-clean-require-force-disabled":            "RFX-339",
     # The fail-NOISY half. Same table for the same reason: the component
     # fails an undeclared divergence in EITHER direction, and a gate that
     # asks on a dry run is a gate that gets switched off.
@@ -642,6 +643,7 @@ SEAT_PUBLISHED_LAG: dict = {
     "destroy-git-push-empty-source-refspec":               "RFX-339",
     "destroy-git-push-global-option-before-subcommand":    "RFX-339",
     "destroy-git-clean-global-option-before-subcommand":   "RFX-339",
+    "destroy-git-clean-require-force-disabled":            "RFX-339",
     "everyday-rm-single-file-name-contains-dash-r":        "RFX-339",
     "everyday-git-clean-dry-run-path-contains-dash-f":     "RFX-339",
     "everyday-git-push-dry-run-force":                     "RFX-339",

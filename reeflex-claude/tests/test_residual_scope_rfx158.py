@@ -127,6 +127,7 @@ BYPASSABLE_THROUGH_RFX158 = frozenset({
     "destroy-rm-recursive-uppercase-bundled-rev",
     "destroy-rm-recursive-uppercase-unprotected-path",
     "destroy-git-clean-global-option-before-subcommand",
+    "destroy-git-clean-require-force-disabled",
     # ... and its complement row, which is priced `delete` for the same reason
     # `everyday-rm-one-tmp-file` right below is.
     "everyday-rm-single-file-name-contains-dash-r",

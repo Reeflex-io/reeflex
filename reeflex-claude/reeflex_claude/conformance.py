@@ -1189,6 +1189,15 @@ CASES = [
        "git --no-pager clean -fdx /srv/prod",
        "the same adjacency hole on the delete side", "ask", "destroy",
        verb="delete", blast_radius="broad"),
+    # dev-1--167 measured this one and handed it over rather than binning it
+    # after losing the claim race by a minute; it is the only shape in that
+    # handover the argv rewrite did not already close, so it is closed here.
+    _c("destroy-git-clean-require-force-disabled",
+       "git -c clean.requireForce=false clean -d /srv/prod",
+       "the config override that removes git's own refusal: with the default "
+       "config `git clean -d` refuses and removes nothing, with this one it "
+       "printed 'Removing probe/' and the canary was gone",
+       "ask", "destroy", verb="delete", blast_radius="broad"),
 
     # The complement. These four are the half that stops the fix from being
     # bought with over-blocking -- each one destroys NOTHING, measured, and
@@ -1212,6 +1221,11 @@ CASES = [
        "git push --dry-run --force origin main",
        "--dry-run dominates: the remote ref did not move", "allow",
        "everyday", verb="emit", blast_radius="scoped"),
+    _c("everyday-git-clean-require-force-still-required",
+       "git -c clean.requireForce=true clean -d build/",
+       "the same line with the refusal left standing removes nothing -- git "
+       "answers 'clean.requireForce is true and -f not given: refusing to "
+       "clean'", "allow", "everyday", verb="execute", blast_radius="scoped"),
     _c("everyday-git-push-force-if-includes",
        "git push --force-if-includes origin main",
        "a SAFETY modifier that never forces on its own -- measured: the push "

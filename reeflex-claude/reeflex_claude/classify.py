@@ -3236,12 +3236,59 @@ def _git_subcommand_args(command: str, sub: str) -> Optional[list]:
     return None
 
 
+_GIT_FALSE_VALUES = frozenset(["false", "0", "no", "off", ""])
+
+
+def _git_config_overrides(command: str) -> list:
+    """The `-c key=value` overrides git is given BEFORE its subcommand.
+
+    Same walk as `_git_subcommand_args`, which skips these as global options.
+    They matter because one of them switches a refusal off (RFX-353).
+    """
+    tokens = _safe_split(command)
+    tokens, _, _ = _peel_wrappers(tokens)
+    if not tokens or os.path.basename(tokens[0]).lower() != "git":
+        return []
+    out = []
+    i = 1
+    while i < len(tokens):
+        t = tokens[i]
+        if not t.startswith("-"):
+            break                                  # the subcommand
+        if t == "-c" and i + 1 < len(tokens):
+            out.append(tokens[i + 1].lower())
+            i += 2
+            continue
+        if t in _GIT_GLOBAL_VALUE_OPTS:
+            i += 2
+            continue
+        if t.startswith("-c") and len(t) > 2 and not t.startswith("--"):
+            out.append(t[2:].lower())              # `-ckey=value`
+        i += 1
+    return out
+
+
+def _git_clean_force_not_required(command: str) -> bool:
+    """`git -c clean.requireForce=false clean -d` deletes with no `-f` at all.
+
+    Measured: with the default config `git clean -d` answers *"clean.requireForce
+    is true and -f not given: refusing to clean"* and removes nothing; with the
+    override on the command line it prints "Removing probe/" and the canary is
+    gone. Found by dev-1--167, whose measurement handover this closes.
+    """
+    for kv in _git_config_overrides(command):
+        key, sep, value = kv.partition("=")
+        if key.strip() == "clean.requireforce":
+            return (value.strip() if sep else "") in _GIT_FALSE_VALUES
+    return False
+
+
 def _git_clean_destroys(command: str) -> bool:
     """Does this `git clean` actually remove anything? (RFX-353)"""
     args = _git_subcommand_args(command, "clean")
     if args is None:
         return False
-    force = False
+    force = _git_clean_force_not_required(command)
     for t in args:
         if t == "--":
             break
