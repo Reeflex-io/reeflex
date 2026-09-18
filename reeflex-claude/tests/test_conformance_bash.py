@@ -167,6 +167,116 @@ class TestBashConformanceCorpus(unittest.TestCase):
         self.assertEqual([], unexpectedly_passing, "\n".join(unexpectedly_passing))
 
 
+# --------------------------------------------------------------------------
+# RFX-341/RFX-342: rows whose declared `expect_target_ref` the classifier does
+# NOT carry today. Same rules as conformance.py's residuals and
+# check_published_classifier.py's PUBLISHED_LAG, for the same reason: an
+# exclusion nobody has to justify is how a gate quietly stops gating.
+#
+#   * an entry must name a ticket, or it fails
+#   * an entry that STOPS diverging fails as STALE, so the fix deletes the
+#     entry by reddening the suite until someone does
+#
+# There is one, and it is the whole NotebookEdit route: the tool's key is
+# `notebook_path`, `_classify_edit` reads only `file_path`, and the tool's
+# schema is additionalProperties:false -- so this is 100% of real calls, not an
+# edge. See RFX-342 for the measurement and the second leg (delete-mode).
+# --------------------------------------------------------------------------
+REF_BLIND = {
+    "everyday-notebookedit-replace-a-cell": "RFX-342",
+    "destroy-notebookedit-deletes-a-production-cell": "RFX-342",
+}
+
+
+class TestRFX341TheRecordNamesTheResource(unittest.TestCase):
+    """
+    RFX-206 put `target_ref` on the wire and in the audit record because "a
+    delete was held in production" is not something a human can answer or an
+    auditor can check. That makes WHICH RESOURCE a claim the adapter makes,
+    and a claim nothing asserts is a claim nothing keeps: the verdict tests
+    above would all stay green with every ref set to None.
+    """
+
+    def setUp(self):
+        os.environ.pop("REEFLEX_CLAUDE_STRICT", None)
+
+    def _declared(self):
+        return [c for c in conformance.CASES if c["expect_target_ref"]]
+
+    def test_the_corpus_declares_a_ref_for_the_tools_whose_input_IS_a_path(self):
+        """A floor, so this cannot decay to zero declarations and stay green."""
+        declared = {c["id"] for c in self._declared()}
+        path_tools = {c["id"] for c in conformance.CASES
+                      if c["tool"] in ("Write", "Edit", "MultiEdit",
+                                       "NotebookEdit", "Read")
+                      and len(str(c["input"].get("file_path")
+                                  or c["input"].get("notebook_path") or "")) < 4096}
+        self.assertTrue(
+            path_tools,
+            "no file-tool rows in the corpus at all -- RFX-341 regressed")
+        self.assertEqual(
+            set(), path_tools - declared,
+            "file-tool rows with a usable path and no declared ref: "
+            + ", ".join(sorted(path_tools - declared)))
+
+    def test_every_declared_ref_is_the_one_the_classification_carries(self):
+        mismatches = []
+        for case in self._declared():
+            if case["id"] in REF_BLIND:
+                continue
+            cls = classify(case["tool"], case["input"])
+            if cls["target_ref"] != case["expect_target_ref"]:
+                mismatches.append(
+                    f"{case['id']} ({case['tool']}): target_ref "
+                    f"{cls['target_ref']!r} != {case['expect_target_ref']!r} "
+                    f"-- the record does not name the resource")
+        self.assertEqual([], mismatches, "\n".join(mismatches))
+
+    def test_every_ref_blind_entry_names_a_ticket(self):
+        for case_id, ticket in REF_BLIND.items():
+            self.assertTrue(
+                str(ticket).startswith("RFX-"),
+                f"{case_id} is excluded from the ref assertion without naming "
+                f"a ticket")
+            self.assertIn(case_id, {c["id"] for c in conformance.CASES},
+                          f"REF_BLIND names {case_id}, which is not a corpus "
+                          f"case -- a renamed row would make this exclusion "
+                          f"silently cover nothing")
+
+    def test_every_ref_blind_entry_still_diverges(self):
+        """A stale exclusion is how a gate quietly stops gating."""
+        fixed = []
+        for case_id, ticket in REF_BLIND.items():
+            case = next(c for c in conformance.CASES if c["id"] == case_id)
+            cls = classify(case["tool"], case["input"])
+            if cls["target_ref"] == case["expect_target_ref"]:
+                fixed.append(
+                    f"{case_id} now carries its declared ref -- delete its "
+                    f"REF_BLIND entry ({ticket})")
+        self.assertEqual([], fixed, "\n".join(fixed))
+
+    def test_the_notebook_route_is_blind_because_of_the_key_name(self):
+        """
+        The mechanism, not just the symptom -- so a future fix that happens to
+        make the row pass for another reason does not read as this one closing.
+        RFX-342's control: the same call under the key the adapter reads.
+        """
+        real = classify("NotebookEdit", {
+            "notebook_path": "/srv/prod/etl/nightly.ipynb",
+            "cell_id": "c1", "new_source": "x", "edit_mode": "replace"})
+        control = classify("NotebookEdit", {
+            "file_path": "/srv/prod/etl/nightly.ipynb",
+            "cell_id": "c1", "new_source": "x"})
+        self.assertEqual("/srv/prod/etl/nightly.ipynb", control["target_ref"],
+                         "the control lost its ref too -- this test no longer "
+                         "isolates the key name")
+        self.assertIsNone(
+            real["target_ref"],
+            "RFX-342 appears to be fixed: a real NotebookEdit call now carries "
+            "its path. Delete REF_BLIND's entry, this test, and the residual "
+            "on destroy-notebookedit-deletes-a-production-cell.")
+
+
 class TestRFX303TheOracleTracksTheShippedPack(unittest.TestCase):
     """
     The oracle is a hand transcription of policy an operator EDITS, which is
@@ -248,16 +358,27 @@ class TestRFX146AuditRecordTruthfulness(unittest.TestCase):
         os.environ.pop("REEFLEX_CLAUDE_STRICT", None)
 
     def test_no_destructive_command_is_recorded_as_a_read(self):
+        """
+        RFX-341: this used to `continue` on any case with no `command` key,
+        which silently excluded every non-Bash row -- one Read row then, the
+        whole Write/Edit family now. The subject is the case, not the command
+        string, so the row is identified by its id and its input is printed
+        whatever shape it has.
+        """
         offenders = []
         for case in conformance.CASES:
             if case["family"] == "everyday":
                 continue
-            command = case["input"].get("command")
-            if not command:
+            # A row whose ground truth IS a read says so in `expect_verb`
+            # (`ctrl-read-file` is the harness's own discrimination control).
+            # Anything else reporting verb=read is the RFX-146 defect.
+            if case["expect_verb"] == "read":
                 continue
             cls = classify(case["tool"], case["input"])
             if cls["verb"] == "read":
-                offenders.append(f"{case['id']}: verb=read for {command!r}")
+                offenders.append(
+                    f"{case['id']} ({case['tool']}): verb=read for "
+                    f"{case['input']!r}")
         self.assertEqual([], offenders, "\n".join(offenders))
 
     def test_destructions_are_counted_by_the_delete_budget(self):
