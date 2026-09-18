@@ -43,6 +43,9 @@ from reeflex_claude.classify import classify
 from policy_oracle import (  # noqa: E402  -- the SHARED oracle (RFX-303)
     PROTECTED_PREFIXES,
     DEFAULT_PROTECTED,
+    ability_tokens,
+    authority_rego_path,
+    authority_signals_from_rego,
     policy_oracle,
     policy_oracle_rule,
     protected_assets_from_rego,
@@ -395,6 +398,76 @@ class TestRFX303TheOracleTracksTheShippedPack(unittest.TestCase):
                                 "reversibility": "reversible",
                                 "blast_radius": "single",
                                 "target_ref": "/srv/prod/README.md"}))
+
+
+class TestTheUnmodelledRulesAreStillUnreachable(unittest.TestCase):
+    """RFX-327: the oracle's declared residual was evidence with a date on it.
+
+    policy_oracle.py does not model R7, and justified that with "no corpus case
+    reaches it (measured 0 of 84)". The corpus is past 150 now and nothing
+    re-took the measurement, so the sentence the offline green rests on had
+    quietly become a claim about a corpus that no longer exists. Same family as
+    RFX-303 itself: a hand-held fact about the pack, kept in prose, drifting.
+
+    R7 fires on `action.ability`, and envelope.py composes that as
+    `claude-code/<tool>` -- so reachability is decided by the TOOL NAME, and it
+    changes the moment someone adds a row for a tool whose name carries a
+    signal token. `mcp__admin__grant_role` tokenises to {mcp, admin, grant,
+    role} and matches two. Nothing stops such a row being added; this is what
+    notices.
+
+    IF IT EVER FAILS, THE CORPUS IS NOT WRONG. The failure means the oracle can
+    no longer predict what a real core says for that row, so either the row's
+    verdict must be verified against the live arm or R7 must be modelled.
+    """
+
+    def _require_monorepo(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        if not (repo_root / "reeflex-spec" / "SPEC.md").exists():
+            self.skipTest("no monorepo checkout around this file (installed wheel)")
+
+    def test_no_corpus_case_can_reach_r7(self):
+        self._require_monorepo()
+        parsed = authority_signals_from_rego()
+        self.assertIsNotNone(
+            parsed,
+            f"{authority_rego_path()} is missing -- the oracle's claim that no "
+            "corpus case reaches R7 is now unverifiable against the pack")
+        self.assertTrue(
+            parsed["complete"],
+            "authority.rego no longer defines all three signal lists "
+            f"(found {parsed['lists_found']}). A renamed list would parse as "
+            "an empty set and make this whole test pass vacuously")
+        signals = parsed["signals"]
+        self.assertTrue(signals, "parsed zero signal tokens from authority.rego")
+
+        offenders = {}
+        for case in conformance.cases():
+            ability = "claude-code/%s" % case["tool"]
+            matched = ability_tokens(ability) & signals
+            if matched:
+                offenders.setdefault(ability, sorted(matched))
+        self.assertEqual(
+            {}, offenders,
+            "a corpus case's ability matches an R7 signal, so the oracle -- "
+            "which does not model R7 -- can no longer predict core for it: "
+            "%s. Verify those rows against the live arm, or model R7."
+            % offenders)
+
+    def test_the_reachability_check_can_actually_fire(self):
+        """The control. Without it the test above is a green that proves nothing:
+        an empty signal set, a broken tokenizer or a corpus read as empty all
+        produce the same clean pass (RFX-217)."""
+        self._require_monorepo()
+        signals = authority_signals_from_rego()["signals"]
+        for ability, expected in (("claude-code/mcp__admin__grant_role", {"grant", "role"}),
+                                  ("claude-code/mcp__ops__install_plugin", {"install", "plugin"})):
+            self.assertEqual(expected, ability_tokens(ability) & signals,
+                             "the reachability check cannot see a tool name "
+                             "that plainly carries R7 signals: %s" % ability)
+        # and the shape the corpus actually ships must NOT match, or the test
+        # above would be failing for a reason that has nothing to do with R7.
+        self.assertEqual(set(), ability_tokens("claude-code/Bash") & signals)
 
 
 class TestRFX146AuditRecordTruthfulness(unittest.TestCase):
