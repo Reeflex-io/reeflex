@@ -1175,13 +1175,300 @@ def _overwrite_targets(cmd0: str, args: list, low: list):
 
     Redirections are NOT handled here any more -- they are not a property of
     the command word.  See `_redirect_overwrite_targets`.
+
+    A THIRD family lives below (RFX-343): commands that open their named
+    destination for writing with no redirection operator anywhere on the line.
+    `tee`, `sort -o`, `sed -i`, `gzip`, `tar -cf` and `install` all destroy
+    what was at that path, and a first-token classifier that only knows `dd`
+    and `truncate` prices every one of them `execute / recoverable / scoped`.
     """
     if cmd0 == "dd":
         targets = [a.split("=", 1)[1] for a in args if a.lower().startswith("of=")]
         return targets or None
     if cmd0 == "truncate":
         return _positional_args(args, value_flags=("-s", "--size", "-r", "--reference")) or None
-    return None
+    return _command_overwrite_targets(cmd0, args, low) or None
+
+
+# Commands that OPEN A NAMED DESTINATION FOR WRITING, with no redirection
+# operator anywhere on the line.  Each extractor returns the paths that
+# command writes, given its arguments.
+#
+# WHY THESE ARE WEIGHTY-GATED AND `dd`/`truncate` ARE NOT.  Every command here
+# writes its destination unconditionally, so on an ordinary file it is an edit
+# and not a destruction -- `sed -i` over `build/out.txt` is the same kind of
+# event as `pytest > out.log`, which `_redirect_target_is_weighty` deliberately
+# leaves with the command that wrote it so routine output is not charged to
+# R5's cumulative delete budget.  That is the rule RFX-340 landed for
+# redirections, and these are the same shape of write, so they inherit it
+# rather than inventing a second answer.  `dd` and `truncate` above are NOT
+# gated; narrowing them is not this change's business and `TestTruncatingOverwrite`
+# pins them where they are.
+#
+# The residual asymmetry -- `truncate -s 0 ./notes.md` is a delete, `sed -i 1d
+# ./notes.md` is not -- is inherited, NOT introduced here, and is flagged on
+# RFX-343 rather than decided.
+#
+# An extractor that cannot parse its own command line returns [], which leaves
+# the line priced exactly as it is priced today.  Failing to the shipped
+# behaviour is the only safe direction for a parser this crude.
+
+
+def _short_flag_cluster(arg: str):
+    """
+    The letters of a single-dash short-option cluster, or None.
+
+    `-czf` -> "czf".  `--create` and a bare `-` are not clusters, and neither
+    is a path that merely starts with a dash.
+    """
+    if len(arg) < 2 or not arg.startswith("-") or arg.startswith("--"):
+        return None
+    return arg[1:]
+
+
+def _tee_targets(args: list, low: list) -> list:
+    """`tee A B` truncates every operand.  `tee -a` appends, so it destroys nothing."""
+    if any(l in ("-a", "--append") for l in low):
+        return []
+    for l in low:
+        letters = _short_flag_cluster(l)
+        if letters and "a" in letters:
+            return []
+    return _positional_args(args, value_flags=("--output-error",))
+
+
+def _sort_output_targets(args: list, low: list) -> list:
+    """`sort -o P`, `sort -oP`, `sort --output=P` all truncate P before reading."""
+    out = []
+    i = 0
+    while i < len(args):
+        a, l = args[i], low[i]
+        if l in ("-o", "--output"):
+            if i + 1 < len(args):
+                out.append(args[i + 1])
+            i += 2
+            continue
+        if l.startswith("--output="):
+            out.append(a.split("=", 1)[1])
+        elif l.startswith("-o") and not l.startswith("--") and len(a) > 2:
+            out.append(a[2:])
+        i += 1
+    return out
+
+
+# sed's short options that CONSUME a value, so the rest of the cluster (or the
+# next word) belongs to them and is not a further flag.
+_SED_VALUE_FLAGS = frozenset("efl")
+
+
+def _sed_inplace_targets(args: list, low: list) -> list:
+    """
+    The files `sed -i` rewrites in place.
+
+    The first positional is the SCRIPT unless a `-e`/`-f` supplied one, which
+    is the whole reason this cannot be `_positional_args`: in `sed -i 1d P`
+    the word `1d` is a program, not a path, and pricing it as a destroyed file
+    would name the wrong thing in the audit record.
+    """
+    inplace = False
+    script_supplied = False
+    positional = []
+    skip = False
+    for idx, a in enumerate(args):
+        l = low[idx]
+        if skip:
+            skip = False
+            continue
+        if l.startswith("--"):
+            if l == "--in-place" or l.startswith("--in-place="):
+                inplace = True
+            elif l in ("--expression", "--file"):
+                script_supplied = True
+                skip = True
+            elif l.startswith("--expression=") or l.startswith("--file="):
+                script_supplied = True
+            continue
+        letters = _short_flag_cluster(l)
+        if letters is None:
+            positional.append(a)
+            continue
+        for pos, ch in enumerate(letters):
+            if ch == "i":
+                # everything after `i` is the backup suffix, not more flags
+                inplace = True
+                break
+            if ch in _SED_VALUE_FLAGS:
+                script_supplied = True
+                if pos == len(letters) - 1:
+                    skip = True          # the value is the next word
+                break
+    if not inplace:
+        return []
+    if not script_supplied and positional:
+        positional = positional[1:]      # drop the script
+    return positional
+
+
+def _gzip_targets(args: list, low: list) -> list:
+    """
+    `gzip P` REPLACES P with P.gz -- P itself stops existing.
+
+    `-c`/`--stdout` writes to stdout and leaves P alone; `-l`/`-t` only read.
+    """
+    for l in low:
+        if l in ("-c", "--stdout", "--to-stdout", "-l", "--list",
+                 "-t", "--test", "-h", "--help", "-V", "--version"):
+            return []
+        letters = _short_flag_cluster(l)
+        if letters and any(ch in letters for ch in "cltShV"):
+            return []
+    return _positional_args(args, value_flags=("-S", "--suffix"))
+
+
+def _tar_create_target(args: list, low: list) -> list:
+    """
+    The archive `tar` CREATES, which truncates whatever was at that path.
+
+    Only the create mode destroys: `tar -xf P` and `tar -tf P` read P.  Both
+    the dashed cluster (`tar -czf P src`) and the legacy bundled form
+    (`tar cf P src`) name the archive as the word after the cluster ending in
+    `f`, which is why the position of `f` in the cluster matters.
+    """
+    creating = False
+    target = None
+    i = 0
+    while i < len(args):
+        a, l = args[i], low[i]
+        if l in ("-c", "--create"):
+            creating = True
+            i += 1
+            continue
+        if l in ("-f", "--file"):
+            if i + 1 < len(args):
+                target = args[i + 1]
+            i += 2
+            continue
+        if l.startswith("--file="):
+            target = a.split("=", 1)[1]
+            i += 1
+            continue
+        if l.startswith("--"):
+            i += 1
+            continue
+        letters = _short_flag_cluster(l)
+        if letters is None and i == 0 and a.isalpha():
+            letters = a              # legacy `tar cf ARCHIVE ...`
+        if letters is None:
+            i += 1
+            continue
+        if "c" in letters:
+            creating = True
+        if "f" in letters:
+            if letters.endswith("f"):
+                if i + 1 < len(args):
+                    target = args[i + 1]
+                i += 2
+                continue
+            target = letters.split("f", 1)[1]
+        i += 1
+    return [target] if creating and target else []
+
+
+def _install_target(args: list, low: list) -> list:
+    """
+    `install SRC DST` writes DST.
+
+    `-d` makes directories and names no file.  With three or more operands the
+    last is a DIRECTORY and the files land inside it, so nothing named on the
+    line is destroyed -- only the two-operand form has a file destination.
+    """
+    for l in low:
+        if l in ("-d", "--directory"):
+            return []
+        letters = _short_flag_cluster(l)
+        if letters and "d" in letters:
+            return []
+    positional = _positional_args(args, value_flags=(
+        "-m", "--mode", "-o", "--owner", "-g", "--group", "-S", "--suffix",
+        "-t", "--target-directory", "--backup",
+    ))
+    return [positional[-1]] if len(positional) == 2 else []
+
+
+# An archive path -- a superset of the archive extensions
+# `_DATA_CONTAINER_PATH_RE` already treats as data containers, plus the
+# abbreviated spellings it does not list.
+_ARCHIVE_PATH_RE = re.compile(
+    r"\.(tar(\.(gz|bz2|xz|zst))?|tgz|tbz2?|txz|tzst|zip)$", re.IGNORECASE)
+
+
+def _archive_destination_is_routine(path: str) -> bool:
+    """
+    Is an ARCHIVE TOOL writing an archive where an archive belongs?
+
+    MEASURED, not assumed: `.tar`, `.tar.gz` and `.zip` are all in
+    `_DATA_CONTAINER_PATH_RE`, so without this every archive operation over an
+    archive path is weighty and needs an approval -- including
+    `tar -czf /srv/backups/db-2026-09-18.tar.gz /srv/prod/db.sqlite`, which is
+    a BACKUP, the safety-increasing thing we want an agent to do, and
+    `gzip dist/bundle.tar`, which is a build step.  A 16170-row sweep put 218
+    rows in exactly that bucket.  Holding those buys nothing and trains
+    operators to click through the ones that matter.
+
+    Writing an archive over a DATABASE is a different event and stays priced:
+    `tar -cf /srv/prod/db.sqlite ...` and `gzip /srv/prod/db.sqlite` (which
+    makes the database itself stop existing) have no innocent reading.  So the
+    excuse is withdrawn the moment the path is weighty for a reason OTHER than
+    being an archive -- a system path, a secret or a block device is never a
+    routine archive destination.
+
+    Applies to `tar`/`gzip`/`gunzip` only.  `tee`, `sort -o`, `sed -i` and
+    `install` writing over an archive genuinely destroy it; there is no
+    archive-tool excuse to make for them.
+    """
+    if _ARCHIVE_PATH_RE.search(path) is None:
+        return False
+    return not (_is_systemic_path(path)
+                or _SENSITIVE_PATH_RE.search(path) is not None
+                or _BLOCK_DEVICE_RE.match(path) is not None)
+
+
+_ARCHIVE_TOOLS = frozenset(["tar", "gzip", "gunzip"])
+
+
+_COMMAND_OVERWRITE_EXTRACTORS = {
+    "tee": _tee_targets,
+    "sort": _sort_output_targets,
+    "sed": _sed_inplace_targets,
+    "gzip": _gzip_targets,
+    "gunzip": _gzip_targets,
+    "tar": _tar_create_target,
+    "install": _install_target,
+}
+
+
+def _command_overwrite_targets(cmd0: str, args: list, low: list) -> list:
+    """
+    Every WEIGHTY path the command word itself opens for writing.
+
+    Gated by `_redirect_target_is_weighty` and `_is_null_sink` for the reasons
+    given above the extractors: the same two predicates the redirection scan
+    uses, reused so the two paths cannot drift apart.
+    """
+    extractor = _COMMAND_OVERWRITE_EXTRACTORS.get(cmd0)
+    if extractor is None:
+        return []
+    targets = []
+    for path in extractor(args, low):
+        if not path or _is_null_sink(path):
+            continue
+        if not _redirect_target_is_weighty(path):
+            continue
+        if cmd0 in _ARCHIVE_TOOLS and _archive_destination_is_routine(path):
+            continue
+        if path not in targets:
+            targets.append(path)
+    return targets
 
 
 # A redirection token that OPENS ITS TARGET FOR TRUNCATION.  Matches an
