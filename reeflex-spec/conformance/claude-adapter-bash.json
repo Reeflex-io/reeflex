@@ -989,6 +989,36 @@
       "expect_target_ref": null
     },
     {
+      "id": "everyday-writer-cp-to-directory-bundled-weighty-source",
+      "tool": "Bash",
+      "input": {
+        "command": "cp -at /srv/backup/ /tmp/a.sql /srv/prod/db.sqlite"
+      },
+      "effect": "with -t the LAST operand is still a source; naming it would report a destruction of a file that is only being read",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-writer-cp-to-directory-attached-weighty-source",
+      "tool": "Bash",
+      "input": {
+        "command": "cp -t/srv/backup/ /tmp/a.sql /srv/prod/db.sqlite"
+      },
+      "effect": "the attached spelling of the same, which only the bundle scan sees",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
       "id": "everyday-writer-install-make-directory-bundled",
       "tool": "Bash",
       "input": {
