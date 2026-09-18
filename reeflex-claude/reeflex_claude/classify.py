@@ -1640,7 +1640,20 @@ def _classify_write(tool_input: dict) -> dict:
 
 def _classify_edit(tool_input: dict) -> dict:
     """Classification for Edit / MultiEdit / NotebookEdit."""
-    file_path = (tool_input.get("file_path") or "")
+    # RFX-342.  `NotebookEdit` names its path `notebook_path`, not `file_path`,
+    # and its schema is `additionalProperties: false` -- so a real caller CANNOT
+    # send `file_path` on that route and this arm read `""` for 100% of real
+    # notebook calls, not for an edge.  target_ref then went to core as null:
+    # the audit line RFX-206 added so that "a delete was held in production"
+    # is answerable did not name the notebook, and R6/R7 -- which match on the
+    # ref -- had nothing to match.
+    #
+    # The tree's only NotebookEdit test could not see this, in either
+    # direction, because it fed `file_path` -- the key the CODE reads and a
+    # shape the tool does not permit.  A test that supplies the key the
+    # implementation reads cannot detect a key-name mismatch.
+    file_path = (tool_input.get("file_path")
+                 or tool_input.get("notebook_path") or "")
     file_path_str = str(file_path) if file_path else ""
 
     # RFX-338.  Same cap, same reason, before the same pattern.  This arm serves
@@ -1649,7 +1662,26 @@ def _classify_edit(tool_input: dict) -> dict:
     if len(file_path_str) > MAX_FILE_PATH_CHARS:
         return _oversize_path("update", file_path_str)
 
-    # Targeted edit: generally recoverable (git-revertable)
+    # RFX-342, second leg.  The Edit family is priced `recoverable` because the
+    # inverse of the change is in the call: `Edit`/`MultiEdit` carry
+    # `old_string`, so the prior text can be put back from the envelope alone.
+    # `NotebookEdit` with `edit_mode="delete"` carries the removed cell's source
+    # in NO form -- not in `new_source`, which is the replacement and is absent
+    # for a delete -- so that stated reason does not hold for it and the axis is
+    # `irreversible`.  Scoped deliberately to delete-mode: `replace` hands back
+    # a working-tree notebook whose prior source is in git, which is the same
+    # bargain every `Edit` makes, and widening the axis to the whole family is a
+    # policy change with a far larger blast radius (flagged on RFX-342, not
+    # taken here).
+    #
+    # This is the leg that makes R6 reachable.  The ref alone does not: measured
+    # on the shipped tree, a NotebookEdit spelled with `file_path` carries a
+    # correct, protected ref and STILL scores allow/default_allow, because R6
+    # reads `irreversible` first.  So a fix that stopped at the key name would
+    # have corrected the record and left the hold unreachable.
+    mode = str(tool_input.get("edit_mode") or "").strip().lower()
+    reversibility = "irreversible" if mode == "delete" else "recoverable"
+
     # Sensitive path -> scoped blast_radius as a flag
     is_sensitive = bool(file_path_str and _SENSITIVE_PATH_RE.search(file_path_str))
     blast_radius = "scoped" if is_sensitive else "single"
@@ -1658,7 +1690,7 @@ def _classify_edit(tool_input: dict) -> dict:
 
     return _make(
         verb="update",
-        reversibility="recoverable",
+        reversibility=reversibility,
         blast_radius=blast_radius,
         externality="internal",
         magnitude_count=1,

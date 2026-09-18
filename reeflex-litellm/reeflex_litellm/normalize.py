@@ -114,8 +114,16 @@ KNOWN_CLASSIFIER_TOOLS = frozenset({
 # ---------------------------------------------------------------------------
 _COMMAND_KEYS = ("command", "cmd", "shell_command", "script", "bash_command",
                  "code", "commandline", "command_line")
-_PATH_KEYS = ("file_path", "path", "filename", "file", "target_path",
-              "filepath", "dest", "destination")
+# RFX-342: `notebook_path` is the key Claude Code's own NotebookEdit sends, and
+# a gateway tool wrapping a notebook editor is spelled the same way.  Without it
+# a notebook edit normalised to a path-shaped tool with no path -- so the seat
+# handed core `target.ref = null`, the audit record did not name the notebook,
+# and the name-AND-shape mapping below could not fire at all because the shape
+# half never matched.  The adapter's `_classify_edit` reads both keys for the
+# same reason; these two distributions have to agree or the seat is blind where
+# the hook is not.
+_PATH_KEYS = ("file_path", "notebook_path", "path", "filename", "file",
+              "target_path", "filepath", "dest", "destination")
 _CONTENT_KEYS = ("content", "text", "data", "body", "contents", "new_content")
 _URL_KEYS = ("url", "uri", "link", "endpoint", "address")
 _QUERY_KEYS = ("query", "q", "search", "search_query", "pattern")
