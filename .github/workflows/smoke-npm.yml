@@ -1,0 +1,58 @@
+# smoke-npm.yml — scores the PUBLISHED n8n connector against this tree.
+#
+# The npm sibling of smoke-pypi.yml, and it exists for a measured reason:
+# smoke-pypi covers the three PyPI packages, so the connector — published to npm,
+# and (measured 2026-09-18) from a different repository — was the one shipped
+# adapter no job in this repo read. Five commits landed under
+# n8n-nodes-reeflex/ between 2026-07-19 and 2026-09-18, none of them reached
+# either published channel, and CI was green for all sixty days.
+#
+# Deliberately NOT paths:-filtered and scheduled daily, for the same reason
+# smoke-pypi is not: the thing that changes is the PUBLISHED artefact and the
+# tree around it, so this has to be able to turn red without anyone touching
+# n8n-nodes-reeflex/. It reads the npm registry and the publish repo over the
+# network and never the checkout's own copy of the shipped files.
+#
+# It does NOT publish anything. Releasing the connector is owner-gated
+# (n8n-nodes-reeflex/PUBLISH.md, "No agent may run any step in this document").
+#
+# Exit 3 (a channel could not be read) is reported as a neutral result rather
+# than a failure: an index that is down is not a fix that is missing.
+
+name: smoke-npm
+
+on:
+  schedule:
+    - cron: "41 5 * * *" # daily, 05:41 UTC — after smoke-pypi's 05:17
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  published-connector:
+    name: published n8n-nodes-reeflex vs this tree
+    runs-on: ubuntu-latest
+    steps:
+      # Unlike smoke-pypi this DOES check out: the point is the comparison
+      # between the published bytes and the tree's, so it needs both arms.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Score the published connector
+        run: |
+          set +e
+          python scripts/check_published_connector.py
+          rc=$?
+          set -e
+          if [ "$rc" = "3" ]; then
+            echo "::warning::a published channel could not be read — no verdict taken"
+            exit 0
+          fi
+          exit "$rc"
