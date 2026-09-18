@@ -91,6 +91,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
   **What it cannot see, stated because a gate is worth what its limits are.** It answers *"same content"*, never *"same origin"* — there is no provenance attestation here and two commits can produce identical sources. It reads the package directory only, so `dist-info` metadata and dependency pins are out of scope. It cannot say whether a version *should* have moved: cutting `0.1.4` is a release-sequencing decision, not a measurement, and **this change does not take it — neither RFX-300's republish nor RFX-299's bump is closed by this PR.** A package with no `pyproject.toml` is not discovered, which is why `reeflex-core` (artefact: the GHCR image) is absent by design.
 
+- **`reeflex-mcp` moves to 0.1.4, so the next tag can actually publish the fix the index has never served (RFX-300).**
+
+  The one Reeflex adapter that **dispatches** rather than advises has been unpublishable since 2026-08-11 for a reason nobody had to decide: `release.yml` publishes "only a package whose `version` MOVED since the last release", and `reeflex-mcp/pyproject.toml` still said `0.1.3` — the string already on PyPI. It did not move for `v0.2.0` and did not move for `v0.2.1`, so **317 lines of merged security fixes have now missed two releases** while `pip install -U reeflex-mcp` reported "already satisfied". Moving the version is the whole of what the tree owes here; cutting the tag is not this change's to take, and is flagged rather than done.
+
+  **What the index is still serving, re-measured today rather than quoted** (qa--247, published wheel from a clean `pip install` with no pin, driven through its OWN `normalize.build_envelope()`, verdict from a `reeflex-core:v0.2.1` container whose image id `2f18d19fce83` is the one the production core runs). Unmapped tool, `target_environment: production`:
+
+  | upstream declares | axes | core |
+  |---|---|---|
+  | nothing (control) | `execute` / irreversible / systemic / internal | **deny** |
+  | `readOnlyHint: true` | `read` / reversible / single / internal | **allow** |
+
+  The control denies in the same run, so the only thing that moved the verdict is the annotation **the governed component supplied about itself**. On the tree, both rows deny: the annotation tier is `trust_annotations`-gated (RFX-173) and off by default.
+
+  **The opt-in was walked too, and it is a documented limit rather than a defect:** with `trust_annotations: true` an operator does hand the upstream the classification back, and `readOnlyHint: true` returns to `allow`. That is the opt-in doing what its name says, on a per-upstream setting only the operator's `reeflex-mcp.yaml` can set — worth knowing before enabling it on an upstream you do not own, which is the population the product positions itself at.
+
+- **A gate line that went quiet because the defect's remedy was applied (RFX-300).**
+
+  `pypi-content` printed `reeflex-mcp==0.1.3: COLLISION (WAIVED, RFX-300)` on every gate run. Moving the version retires that waiver by its own self-expiry rule — **watched failing first: bump present, waiver still there → `PUBLISHED-CONTENT: FAIL (stale waiver …)`, exit 1** — and leaves reeflex-mcp reading `UNPUBLISHED — the tree is ahead of the index`, a line identical to the two packages merely waiting for a tag. The bump on its own is therefore a change that makes the component **quieter about a defect that has not moved**: the wheel a customer installs is the same wheel.
+
+  `UNPUBLISHED_WITH_A_TICKET` keeps the ticket on the line for as long as the lag is real, and carries the waiver's three properties for the same reasons: it pins the version the **index** serves, it must name a ticket and a reason, and **it self-expires** — once the package is no longer ahead of the index the release has happened, the warning describes nothing, and the component fails until the entry is deleted. It never converts a FAIL into a PASS; it can only add a line and add a failure condition, so it cannot be used to quiet a measurement.
+
+  Four new selftest arms (17 checks, up from 13) and three unit tests. Each guard was watched failing on a real break rather than on an import error: cutting the self-expiry block reddens only `flag whose lag is over`; cutting the annotated line reddens only `flagged lag -> PASS, names the ticket`; pointing the table at the tree's own version reddens only `test_every_lag_flag_is_behind_the_tree`. An index outage is asserted **not** to read as either expiry, so a network failure cannot tell a reader to delete the entry.
+
 ### Fixed
 
 - **An irreversible production erasure named `get_and_redact` was decided by the rule that allows reads, and the residual behind it was never two words (RFX-324).**
