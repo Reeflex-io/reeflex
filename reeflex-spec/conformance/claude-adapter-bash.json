@@ -2017,6 +2017,246 @@
       "expect_verb": "update",
       "expect_blast_radius": "single",
       "expect_target_ref": "/srv/prod/etl/nightly.ipynb"
+    },
+    {
+      "id": "destroy-writer-tee",
+      "tool": "Bash",
+      "input": {
+        "command": "tee /srv/prod/db.sqlite"
+      },
+      "effect": "tee truncates every operand before it writes a byte",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-writer-tee-piped",
+      "tool": "Bash",
+      "input": {
+        "command": "echo hi | tee /srv/prod/db.sqlite"
+      },
+      "effect": "the spelling people actually write: the destruction is downstream of a pipe",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-writer-sort-o",
+      "tool": "Bash",
+      "input": {
+        "command": "sort -o /srv/prod/db.sqlite /tmp/in.txt"
+      },
+      "effect": "sort opens its -o target for truncation before reading its input",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-writer-sed-inplace",
+      "tool": "Bash",
+      "input": {
+        "command": "sed -i 1d /srv/prod/db.sqlite"
+      },
+      "effect": "sed -i rewrites the file in place; the prior contents are gone",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-writer-gzip",
+      "tool": "Bash",
+      "input": {
+        "command": "gzip /srv/prod/db.sqlite"
+      },
+      "effect": "gzip REPLACES the file with a .gz -- the database stops existing at that path",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-writer-tar-create",
+      "tool": "Bash",
+      "input": {
+        "command": "tar -cf /srv/prod/db.sqlite /tmp/src"
+      },
+      "effect": "creating an archive over a database truncates the database",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-writer-install",
+      "tool": "Bash",
+      "input": {
+        "command": "install /tmp/src /srv/prod/db.sqlite"
+      },
+      "effect": "install writes its destination whatever was there",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "everyday-writer-tee-append",
+      "tool": "Bash",
+      "input": {
+        "command": "echo hi | tee -a /srv/prod/db.sqlite"
+      },
+      "effect": "tee -a appends; the prior contents survive",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-writer-sed-no-inplace",
+      "tool": "Bash",
+      "input": {
+        "command": "sed 1d /srv/prod/db.sqlite"
+      },
+      "effect": "without -i sed writes to stdout and the file is untouched",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-writer-gzip-stdout",
+      "tool": "Bash",
+      "input": {
+        "command": "gzip -c /srv/prod/db.sqlite"
+      },
+      "effect": "-c writes the compressed stream to stdout and keeps the input",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-writer-tar-extract",
+      "tool": "Bash",
+      "input": {
+        "command": "tar -xf /tmp/backup.tar"
+      },
+      "effect": "extracting reads the archive; it creates nothing named here",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-writer-sed-dev-path",
+      "tool": "Bash",
+      "input": {
+        "command": "sed -i 1d build/out.txt"
+      },
+      "effect": "an in-place edit of build output is an edit, not a destruction -- the same call `pytest -q > out.log` gets",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-writer-backup-archive",
+      "tool": "Bash",
+      "input": {
+        "command": "tar -czf /srv/backups/db-2026-09-18.tar.gz /srv/prod/db.sqlite"
+      },
+      "effect": "an archive tool writing an archive is a BACKUP -- the safety-increasing action, which must not need an approval",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-writer-cp-over-production",
+      "tool": "Bash",
+      "input": {
+        "command": "cp /tmp/replacement.dat /srv/prod/db.sqlite"
+      },
+      "effect": "overwrites the production database if it exists; a new destination destroys nothing, and the classifier cannot tell which",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": "RFX-343",
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-writer-mv-over-production",
+      "tool": "Bash",
+      "input": {
+        "command": "mv /tmp/replacement.dat /srv/prod/db.sqlite"
+      },
+      "effect": "same conditional destination as cp, plus the source is consumed",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": "RFX-343",
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-writer-interpreter-open",
+      "tool": "Bash",
+      "input": {
+        "command": "python3 -c \"open('/srv/prod/db.sqlite','w')\""
+      },
+      "effect": "opening in mode 'w' truncates; the destruction is in the program text, not in the command line",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": "RFX-343",
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
     }
   ]
 }

@@ -869,6 +869,104 @@ CASES = [
        residual="RFX-342",
        verb="update", blast_radius="single",
        ref="/srv/prod/etl/nightly.ipynb"),
+
+    # ------------------------------------------------------------------
+    # RFX-343 -- the WRITER family: a destruction with no redirection
+    # operator anywhere on the line, where the destruction is in the
+    # COMMAND'S OWN semantics.  `dd of=` and `truncate` were the whole of the
+    # command-word table and RFX-340 added the operators; between them they
+    # never looked at `tee`, `sort -o`, `sed -i`, `gzip`, `tar -cf` or
+    # `install`, each of which was priced execute/recoverable/scoped with
+    # target_ref=None and ALLOWED by the real pack on a first call.
+    #
+    # GROUND TRUTH IS EXECUTED, not asserted: every row below was run against
+    # a synthetic canary in a temp dir and the canary checked for SURVIVAL
+    # (not for `size == 0`, which reports safety for anything that truncates
+    # and then writes).
+    # ------------------------------------------------------------------
+    _c("destroy-writer-tee", "tee /srv/prod/db.sqlite",
+       "tee truncates every operand before it writes a byte", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-tee-piped", "echo hi | tee /srv/prod/db.sqlite",
+       "the spelling people actually write: the destruction is downstream of "
+       "a pipe", "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-sort-o", "sort -o /srv/prod/db.sqlite /tmp/in.txt",
+       "sort opens its -o target for truncation before reading its input",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-sed-inplace", "sed -i 1d /srv/prod/db.sqlite",
+       "sed -i rewrites the file in place; the prior contents are gone",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-gzip", "gzip /srv/prod/db.sqlite",
+       "gzip REPLACES the file with a .gz -- the database stops existing at "
+       "that path", "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-tar-create", "tar -cf /srv/prod/db.sqlite /tmp/src",
+       "creating an archive over a database truncates the database", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-install", "install /tmp/src /srv/prod/db.sqlite",
+       "install writes its destination whatever was there", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+
+    # The other side of RFX-343, and the reason the fix is scoped by TARGET
+    # rather than by command word.  A widening that priced these would charge
+    # routine work to R5's cumulative delete budget -- the cost no
+    # single-decision probe can see, because every such probe starts from an
+    # empty ledger.  Each was proved canary-SAFE by execution.
+    _c("everyday-writer-tee-append", "echo hi | tee -a /srv/prod/db.sqlite",
+       "tee -a appends; the prior contents survive", "allow", "everyday",
+       verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-sed-no-inplace", "sed 1d /srv/prod/db.sqlite",
+       "without -i sed writes to stdout and the file is untouched", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-gzip-stdout", "gzip -c /srv/prod/db.sqlite",
+       "-c writes the compressed stream to stdout and keeps the input",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-tar-extract", "tar -xf /tmp/backup.tar",
+       "extracting reads the archive; it creates nothing named here", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-sed-dev-path", "sed -i 1d build/out.txt",
+       "an in-place edit of build output is an edit, not a destruction -- the "
+       "same call `pytest -q > out.log` gets", "allow", "everyday",
+       verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-backup-archive",
+       "tar -czf /srv/backups/db-2026-09-18.tar.gz /srv/prod/db.sqlite",
+       "an archive tool writing an archive is a BACKUP -- the safety-"
+       "increasing action, which must not need an approval", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+
+    # RESIDUALS -- the half of RFX-343 this does NOT close, declared rather
+    # than left silently absent, so the corpus cannot be read as "the writer
+    # family is handled".  `test_residuals_are_still_residual` reddens the
+    # moment either is fixed, which is what makes the exclusion self-clearing.
+    #
+    # `cp`/`mv` destroy their destination only if it ALREADY EXISTS, and a
+    # static classifier cannot stat the filesystem.  Pricing them is a
+    # false-positive-tolerance call for the owner, not a measurement.
+    _c("destroy-writer-cp-over-production", "cp /tmp/replacement.dat "
+       "/srv/prod/db.sqlite",
+       "overwrites the production database if it exists; a new destination "
+       "destroys nothing, and the classifier cannot tell which",
+       "ask", "destroy", residual="RFX-343",
+       verb="execute", blast_radius="scoped"),
+    _c("destroy-writer-mv-over-production", "mv /tmp/replacement.dat "
+       "/srv/prod/db.sqlite",
+       "same conditional destination as cp, plus the source is consumed",
+       "ask", "destroy", residual="RFX-343",
+       verb="execute", blast_radius="scoped"),
+    # A third mechanism: the destruction is inside an interpreter payload, so
+    # no command word and no operator names it.
+    _c("destroy-writer-interpreter-open",
+       "python3 -c \"open('/srv/prod/db.sqlite','w')\"",
+       "opening in mode 'w' truncates; the destruction is in the program "
+       "text, not in the command line",
+       "ask", "destroy", residual="RFX-343",
+       verb="execute", blast_radius="scoped"),
 ]
 
 
