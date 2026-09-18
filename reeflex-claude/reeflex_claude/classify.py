@@ -501,14 +501,43 @@ _EMIT_RE = re.compile(
     re.VERBOSE | re.IGNORECASE,
 )
 
-_FORCE_PUSH_RE = re.compile(r"\bgit\s+push\b.*--force\b|\bgit\s+push\b.*-f\b")
+# RFX-353 — this used to be
+#     _FORCE_PUSH_RE = re.compile(r"\bgit\s+push\b.*--force\b|\bgit\s+push\b.*-f\b")
+# i.e. "is there a dash-f anywhere on the line after the words `git push`".  It
+# is now `_git_push_forces()`, which reads git push's OWN argv.  The measured
+# reason (qa--248, ground truth against a local bare repo) is that the letter
+# test answers a question about a remote ref without looking at one:
+#   git push origin +main:main   -> git prints "(forced update)", allowed
+#   git push --mirror origin     -> "- [deleted] doomed",         allowed
+#   git push origin :doomed      -> "- [deleted] probe",          allowed
+#   git push --delete origin b   -> "- [deleted] doomed2",        allowed
+#   git push --dry-run --force   -> remote ref did not move,      held
+# All five spellings reach the same `git_force_push` signature rather than a new
+# one: the audit line's signature vocabulary is a closed allowlist core-side.
+_GIT_PUSH_FORCE_LONG = frozenset([
+    "--force", "--force-with-lease", "--mirror", "--delete",
+])
+# `--force-if-includes` is deliberately absent: it is a SAFETY modifier that only
+# has meaning alongside a force flag, and never forces on its own.
+_GIT_PUSH_DRY_LONG = frozenset(["--dry-run"])
+
 _PUBLISH_RE = re.compile(r"\b(npm|yarn)\s+publish\b")
 
 # ---------------------------------------------------------------------------
 # Bash DELETE patterns
 # ---------------------------------------------------------------------------
 
-_GIT_CLEAN_RE  = re.compile(r"\bgit\s+clean\b.*-[a-zA-Z]*f[a-zA-Z]*", re.IGNORECASE)
+# RFX-353 — this used to be
+#     _GIT_CLEAN_RE = re.compile(r"\bgit\s+clean\b.*-[a-zA-Z]*f[a-zA-Z]*", re.I)
+# i.e. "is there an `f` after a dash anywhere on the line".  A PATH OPERAND
+# supplies that letter, so `git clean -n src/my-fixtures` — a dry run, which
+# printed "Would remove" and left the file in place when measured — was priced
+# delete / irreversible / broad and held for approval, while `git clean -n -d`
+# was execute / recoverable.  It is now `_git_clean_destroys()`, on git clean's
+# own argv, with dry-run dominant: `-n` beat `-f` in all four orders measured
+# (`-n -f`, `-f -n`, `-nfd`, `-fnd` — every one left the canary in place).
+_GIT_CLEAN_FORCE_LONG = frozenset(["--force"])
+_GIT_CLEAN_DRY_LONG = frozenset(["--dry-run"])
 _SQL_DROP_DATABASE_RE = re.compile(r"\bDROP\s+(DATABASE|SCHEMA)\b", re.IGNORECASE)
 _SQL_DROP_TABLE_RE    = re.compile(r"\bDROP\s+TABLE\b", re.IGNORECASE)
 _SQL_TRUNCATE_RE      = re.compile(r"\bTRUNCATE\b", re.IGNORECASE)
@@ -522,7 +551,20 @@ _SQL_DELETE_NO_WHERE  = re.compile(r"\bDELETE\s+FROM\b(?!.*\bWHERE\b)", re.IGNOR
 # irreversible+scoped+production is R4's default ALLOW. `WHERE 1=1` was allowed.
 _SQL_DELETE_ANY       = re.compile(r"\bDELETE\s+FROM\b", re.IGNORECASE)
 
-_RM_RECURSIVE_RE   = re.compile(r"\brm\b.*-[a-zA-Z]*r[a-zA-Z]*")
+# RFX-353 — this used to be
+#     _RM_RECURSIVE_RE = re.compile(r"\brm\b.*-[a-zA-Z]*r[a-zA-Z]*")
+# i.e. "is there a LOWERCASE r after a dash anywhere on the line".  Wrong in
+# both directions at once, which is the tell that no argv was ever read:
+#   rm -R /home/app/uploads    destroyed the tree when measured, scored
+#                              single/none and was ALLOWED (`-R` is the POSIX
+#                              synonym of `-r`; so were `-fR` and `-Rf`)
+#   rm /home/app/my-report.txt removed one file and left its sibling tree in
+#                              place, scored broad/rm_recursive and was HELD —
+#                              the caller's FILENAME was the whole difference.
+# Recursion is now read off the rm command's own flag tokens by
+# `_rm_is_recursive()`.
+_RM_RECURSIVE_SHORT = ("r", "R")
+_RM_RECURSIVE_LONG = frozenset(["--recursive"])
 
 # ---------------------------------------------------------------------------
 # Bash READ: find without dangerous flags
@@ -1018,7 +1060,7 @@ def _classify_segment(segment: str, preview: Optional[str],
         return _classify_bash_delete(segment, preview)
 
     # --- git clean -fdx ------------------------------------------------------
-    if _GIT_CLEAN_RE.search(segment):
+    if _git_clean_destroys(segment):
         return _classify_bash_delete(segment, preview, sql=False)
 
     # --- rm / rmdir / unlink / shred -----------------------------------------
@@ -1096,7 +1138,11 @@ def _classify_segment(segment: str, preview: Optional[str],
         )
 
     # --- EMIT (push / publish / upload) --------------------------------------
-    if _EMIT_RE.search(segment):
+    # RFX-353: `_EMIT_RE`'s git arm is `\bgit\s+push\b`, so a global option
+    # between the two words (`git -C /srv/app push --force`) skipped EMIT
+    # entirely and fell through to the default EXECUTE arm. The argv test
+    # routes it, which is what makes `_git_push_forces` reachable at all.
+    if _EMIT_RE.search(segment) or _git_subcommand_args(segment, "push") is not None:
         return _classify_bash_emit(segment, preview)
 
     # --- READ ----------------------------------------------------------------
@@ -1610,7 +1656,7 @@ def _classify_bash_delete(command: str, preview: Optional[str],
         )
 
     # git clean
-    if _GIT_CLEAN_RE.search(command):
+    if _git_clean_destroys(command):
         return _make(
             verb="delete",
             reversibility="irreversible",
@@ -1626,7 +1672,7 @@ def _classify_bash_delete(command: str, preview: Optional[str],
         )
 
     # rm / rmdir / unlink / shred
-    is_recursive = bool(_RM_RECURSIVE_RE.search(command))
+    is_recursive = _rm_is_recursive(command)
     path_args = _extract_rm_paths(command)
     count = max(len(path_args), 1)
 
@@ -1715,7 +1761,7 @@ def _radius_for_paths(path_args: list, is_recursive: bool):
 
 def _classify_bash_emit(command: str, preview: Optional[str]) -> dict:
     """Classification for a Bash EMIT intent (outbound network/publish)."""
-    if _FORCE_PUSH_RE.search(command):
+    if _git_push_forces(command):
         blast_radius = "broad"
         sig = "git_force_push"
     elif _PUBLISH_RE.search(command):
@@ -3108,6 +3154,141 @@ def _is_systemic_path(path: str) -> bool:
     if p in ("/", "/*", "~", "$HOME", "~/", "$HOME/"):
         return True
     return bool(_SYSTEM_DIR_RE.match(p))
+
+
+def _rm_flag_tokens(command: str) -> list:
+    """
+    The flag tokens belonging to the `rm` command itself (RFX-353).
+
+    Same walk as `_extract_rm_paths`, kept deliberately beside it so the two
+    cannot drift: locate the rm word by basename, stop at `--`, and return the
+    tokens that are flags rather than the ones that are paths.  Restricted to
+    `rm` — `rmdir`/`unlink`/`shred` have no recursion flag, and the regex this
+    replaces only ever fired on `\\brm\\b`, so widening the family here would be
+    an unmeasured change riding along with a measured one.
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+
+    start = None
+    for i, t in enumerate(tokens):
+        if os.path.basename(t).lower() == "rm":
+            start = i + 1
+            break
+    if start is None:
+        return []
+
+    flags = []
+    for t in tokens[start:]:
+        if t == "--":
+            break
+        if t.startswith("-") and t != "-":
+            flags.append(t)
+    return flags
+
+
+def _rm_is_recursive(command: str) -> bool:
+    """Does this `rm` ask for recursion, in its OWN argv? (RFX-353)"""
+    for t in _rm_flag_tokens(command):
+        if t in _RM_RECURSIVE_LONG:
+            return True
+        if any(_short_bundle_has(t, ch) for ch in _RM_RECURSIVE_SHORT):
+            return True
+    return False
+
+
+_GIT_GLOBAL_VALUE_OPTS = frozenset([
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
+    "--super-prefix", "--config-env",
+])
+
+
+def _git_subcommand_args(command: str, sub: str) -> Optional[list]:
+    """
+    The argv of `git <sub>` in this segment, or None when it is not one.
+
+    RFX-353: every git check in this module was spelled `\\bgit\\s+push\\b` —
+    the subcommand had to be the very next word.  A git GLOBAL option in between
+    defeated all of them at once, and `git -C /srv/app push --force origin main`
+    was not even routed to EMIT: it came out execute / recoverable / scoped,
+    i.e. a literal unambiguous force push scoring BELOW a plain `git push`.
+
+    `_peel_wrappers` runs first so `sudo git push --force` is still a push.
+    """
+    tokens = _safe_split(command)
+    tokens, _, _ = _peel_wrappers(tokens)
+    if not tokens or os.path.basename(tokens[0]).lower() != "git":
+        return None
+    i = 1
+    while i < len(tokens):
+        t = tokens[i]
+        if not t.startswith("-"):
+            return tokens[i + 1:] if t.lower() == sub else None
+        if t in _GIT_GLOBAL_VALUE_OPTS:
+            i += 2               # `-C <path>`, `-c key=value`
+            continue
+        if "=" in t:
+            i += 1               # `--git-dir=/srv/x` carries its own value
+            continue
+        i += 1
+    return None
+
+
+def _git_clean_destroys(command: str) -> bool:
+    """Does this `git clean` actually remove anything? (RFX-353)"""
+    args = _git_subcommand_args(command, "clean")
+    if args is None:
+        return False
+    force = False
+    for t in args:
+        if t == "--":
+            break
+        if t in _GIT_CLEAN_DRY_LONG or _short_bundle_has(t, "n"):
+            return False         # measured: -n wins over -f in every order
+        if (t in _GIT_CLEAN_FORCE_LONG
+                or _short_bundle_has(t, "f") or _short_bundle_has(t, "F")):
+            # The uppercase spelling is carried over deliberately. `git clean
+            # -Fdx` is NOT a git command -- measured, git 2.x answers
+            # "error: unknown switch `F'", prints usage and deletes nothing --
+            # but two tests in test_classify.py pin it as delete/broad on
+            # purpose ("was broken by [a-z]-only regex"). That position is a
+            # separate question from this one; RFX-353 is about reading an
+            # ARGV instead of a whole line, and flipping someone else's tested
+            # call inside it would be an unmeasured change riding along.
+            # Raised in the RFX-353 report instead.
+            force = True
+    return force
+
+
+def _git_push_forces(command: str) -> bool:
+    """Does this `git push` rewrite or remove a remote ref? (RFX-353)"""
+    args = _git_subcommand_args(command, "push")
+    if args is None:
+        return False
+    forces = False
+    for t in args:
+        if t == "--":
+            continue
+        if t.startswith("--"):
+            name = t.split("=", 1)[0]
+            if name in _GIT_PUSH_DRY_LONG:
+                return False
+            if name in _GIT_PUSH_FORCE_LONG:
+                forces = True
+            continue
+        if t.startswith("-") and t != "-":
+            if _short_bundle_has(t, "n"):
+                return False                       # `-n` is --dry-run
+            if _short_bundle_has(t, "f") or _short_bundle_has(t, "d"):
+                forces = True                      # `-f` force, `-d` delete
+            continue
+        if t.startswith("+") or t.startswith(":"):
+            # `+refspec` is the force spelling; `:branch` is an empty SOURCE
+            # refspec, which deletes the remote branch. Both measured.
+            forces = True
+    return forces
 
 
 def _extract_rm_paths(command: str) -> list:

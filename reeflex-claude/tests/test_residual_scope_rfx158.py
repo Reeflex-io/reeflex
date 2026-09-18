@@ -112,6 +112,27 @@ BYPASSABLE_THROUGH_RFX158 = frozenset({
     "destroy-kubectl-drain",
     "destroy-pulumi-destroy",
     "destroy-terraform-destroy",
+    # RFX-353 (qa--248) widened the destruction vocabulary by five rows that
+    # this residual swallows, and they are declared here DELIBERATELY rather
+    # than re-baselined: the substitution re-spelling takes each of them from
+    # `delete` to `execute` with target_ref=null, exactly as it does the
+    # nineteen filesystem rows above. Nothing about RFX-353 narrows RFX-158 --
+    # the fix reads an argv, and under `$(echo ...)` there is no argv to read
+    # until runtime. The four `rm`/`git clean` rows below were destructions the
+    # letter test ALLOWED outright before RFX-353, so their arrival here is a
+    # gap moving from "open, undeclared and unclassified" to "open, declared
+    # and classified", which is the only thing this ticket claims about them.
+    "destroy-rm-recursive-uppercase-R",
+    "destroy-rm-recursive-uppercase-bundled",
+    "destroy-rm-recursive-uppercase-bundled-rev",
+    "destroy-git-clean-global-option-before-subcommand",
+    # ... and its complement row, which is priced `delete` for the same reason
+    # `everyday-rm-one-tmp-file` right below is.
+    "everyday-rm-single-file-name-contains-dash-r",
+    # The nine `git push` rows RFX-353 added are NOT here and must not be: the
+    # adapter prices them `emit`, so `_operator_free_delete_rows` never
+    # considers them. That is a real limit of this list, not an omission --
+    # it reads the delete vocabulary only.
     # rows outside the destroy family that are nonetheless priced delete
     "everyday-rm-one-tmp-file",
     "fp-rm-file-named-truncate",
