@@ -1170,18 +1170,154 @@ def _overwrite_targets(cmd0: str, args: list, low: list):
     """
     Return the paths a whole-file content destruction targets, or None.
 
-    Covers `dd ... of=PATH` and `truncate ... PATH`.  The file survives; all of
-    its previous content does not.
+    Covers `dd ... of=PATH`, `truncate ... PATH`, and the WRITER FAMILY below
+    (`tee`, `cp`, `install`, `mv`, `sort -o`, `tar -cf`).  The file survives;
+    all of its previous content does not.
 
-    Redirections are NOT handled here any more -- they are not a property of
-    the command word.  See `_redirect_overwrite_targets`.
+    Redirections are NOT handled here -- they are not a property of the
+    command word.  See `_redirect_overwrite_targets`.
     """
     if cmd0 == "dd":
         targets = [a.split("=", 1)[1] for a in args if a.lower().startswith("of=")]
         return targets or None
     if cmd0 == "truncate":
         return _positional_args(args, value_flags=("-s", "--size", "-r", "--reference")) or None
+    return _writer_overwrite_targets(cmd0, args, low)
+
+
+# Commands whose ORDINARY use is writing a file, and which destroy whatever was
+# at the destination when they do.  `dd` and `truncate` above are not in here
+# because they are not ambiguous: nobody writes `truncate -s 0` as build output,
+# so those two are priced from the path alone.  These are the opposite -- `cp`,
+# `mv` and `tee` are overwhelmingly routine -- which is why every one of them is
+# gated on `_redirect_target_is_weighty` below.
+_WRITER_COMMANDS = frozenset([
+    "tee", "cp", "install", "mv", "sort",
+])
+
+# `-t DIR` / `-d`: the destination is a DIRECTORY, so which file inside it gets
+# destroyed cannot be resolved without touching the filesystem -- and this
+# classifier never does.  Bail rather than name the directory, which would
+# report a destruction of the wrong thing.
+_WRITER_DIR_DEST_FLAGS = frozenset([
+    "-t", "--target-directory", "-d", "--directory",
+])
+
+
+def _short_bundle_has(arg: str, letter: str) -> bool:
+    """Is `letter` set in a short-flag bundle like `-a`, `-ai`, `-cf`?"""
+    return (arg.startswith("-") and not arg.startswith("--")
+            and letter in arg[1:])
+
+
+def _flag_value(args: list, short: str, long_: str):
+    """
+    Value of `-o VAL`, `-oVAL`, `--output VAL`, `--output=VAL` -- and of the
+    letter inside a SHORT BUNDLE, which is how `tar -cf PATH` is really
+    written.  Missing the bundle spelling is not a near-miss: `-cf` never
+    equals `-f`, so the value reads as absent and the destruction prices as
+    nothing at all.
+    """
+    letter = short[1:] if short.startswith("-") else short
+    for i, a in enumerate(args):
+        if a == short or a == long_:
+            return args[i + 1] if i + 1 < len(args) else None
+        if a.startswith(long_ + "="):
+            return a.split("=", 1)[1]
+        if a.startswith("--") or not a.startswith("-") or not letter:
+            continue
+        bundle = a[1:]
+        pos = bundle.find(letter)
+        if pos < 0:
+            continue
+        rest = bundle[pos + len(letter):]
+        # `-cfPATH` carries its value inline; `-cf PATH` takes the next word.
+        if rest:
+            return rest
+        return args[i + 1] if i + 1 < len(args) else None
     return None
+
+
+def _writer_overwrite_targets(cmd0: str, args: list, low: list):
+    """
+    The WRITER FAMILY: whole-file destruction carried by the command's own
+    semantics, with NO redirection operator anywhere on the line (RFX-343).
+
+    Measured, not reasoned: every shape below was executed against a real
+    /bin/bash and scored by per-target survival of five canary lines.  Only the
+    shapes that lost ALL FIVE on EVERY asserted operand are priced here.
+
+    NOT INCLUDED, and each exclusion is a measurement rather than an oversight:
+
+    * `sed -i 1d P` -- 4 of 5 canary lines survived.  It is a PARTIAL edit, and
+      this function is contracted to whole-file destruction.  Pricing it here
+      would make the contract false.
+    * `gzip P` -- P is gone, but its bytes are not: `gunzip` returns them.
+      `_classify_path_delete` hardcodes reversibility="irreversible", so
+      routing gzip through it would state something measurably untrue.
+      It needs a "recoverable but disruptive" pricing this function cannot
+      express.
+    * `python3 -c "open('P','w')"` -- truncates, but it is the INLINE
+      INTERPRETER mechanism (`_infra_destructive`), which extracts no path.
+      Without a path there is no way to apply the weighty gate below, and
+      without the gate every `open('/tmp/out','w')` in a one-liner becomes an
+      irreversible broad destruction.
+    * `tar -cf P SRC` -- destroys P, and the gate cannot separate it from
+      ordinary work: `.tar` is itself a data-container extension, so gating
+      `tar` on path weight prices EVERY `tar -cf dist.tar src` in every build
+      script as an irreversible destruction.  Measured, not supposed --
+      `ord.tar.cf` flipped allow -> require_approval when `tar` was in this
+      set.  The contrived `tar -cf <a-database>` shape is not worth that.
+    All four are still open; see the RFX-343 report for the evidence.
+    """
+    if cmd0 not in _WRITER_COMMANDS:
+        return None
+    if any(a in _WRITER_DIR_DEST_FLAGS or a.split("=", 1)[0] in _WRITER_DIR_DEST_FLAGS
+           for a in low):
+        return None
+
+    targets: list = []
+
+    if cmd0 == "tee":
+        # Every operand of `tee` is truncated -- `tee A B` destroys BOTH.
+        # `-a`/`--append` makes the whole line non-destroying; the bundle test
+        # catches `-ai` as well as a bare `-a`.
+        #
+        # THE BUNDLE TEST READS `args`, NOT `low`.  Short flags are
+        # case-sensitive, and folding case here fails OPEN: any bundle
+        # carrying an uppercase `A` would read as --append and switch the
+        # destruction pricing off.  (The same fold read `tar -C` as `tar -c`
+        # while tar was still in this set, which is how it was caught.)
+        if "--append" in low or any(_short_bundle_has(a, "a") for a in args):
+            return None
+        targets = _positional_args(args, value_flags=("--output-error",))
+
+    elif cmd0 in ("cp", "install", "mv"):
+        # `SRC... DEST` -- the LAST positional is the destination and the only
+        # thing destroyed.  Fewer than two positionals is not a valid
+        # invocation, so there is nothing to price.
+        positional = _positional_args(
+            args, value_flags=("-S", "--suffix", "--backup", "-Z", "--context",
+                               "-m", "--mode", "-o", "--owner", "-g", "--group"))
+        if len(positional) < 2:
+            return None
+        targets = [positional[-1]]
+
+    elif cmd0 == "sort":
+        # Only `-o` writes in place; a bare `sort P` writes to stdout.
+        out = _flag_value(args, "-o", "--output")
+        targets = [out] if out else []
+
+    # THE GATE. `tee build.log` and `cp a.txt b.txt` are ordinary developer
+    # work, and charging them to R5's cumulative DELETE budget would exhaust
+    # it on routine output -- a cost no single-decision probe can see, which
+    # is why it is decided here.  A database, a block
+    # device, a system path or a secret is not ordinary output.  This is the
+    # SAME predicate `_redirect_overwrite_targets` applies, reused deliberately
+    # so the redirect family and the writer family cannot drift apart.
+    weighty = [t for t in targets
+               if t and not _is_null_sink(t) and _redirect_target_is_weighty(t)]
+    return weighty or None
 
 
 # A redirection token that OPENS ITS TARGET FOR TRUNCATION.  Matches an

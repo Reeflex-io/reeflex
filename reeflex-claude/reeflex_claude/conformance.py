@@ -264,6 +264,94 @@ CASES = [
        "2>&1 duplicates a descriptor; there is no file to truncate",
        "allow", "everyday", verb="read", blast_radius="single"),
 
+    # ------------------------------------------------------------------
+    # THE WRITER FAMILY (RFX-343) -- whole-file destruction carried by the
+    # COMMAND'S OWN semantics, with NO redirection operator anywhere on the
+    # line.  `tee P` truncates P because tee truncates, not because the shell
+    # opened anything, so neither the redirect rows above nor the substitution
+    # rows below can reach these: there is no operator to peel.
+    #
+    # Every row was EXECUTED against a real /bin/bash before it was written
+    # here, and scored by per-target survival of five canary lines -- five and
+    # not one, because a single canary cannot separate a WHOLE-FILE
+    # destruction from a PARTIAL edit and where you place it decides the
+    # answer.  Only shapes that lost ALL FIVE lines on EVERY asserted operand
+    # are declared destructive.  Evidence:
+    # code-reports/dev-2--076--20260918-evidence/
+    # ------------------------------------------------------------------
+    _c("destroy-writer-tee", "tee /srv/prod/db.sqlite",
+       "tee truncates its operand before it writes a byte", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-tee-pipe", "echo hi | tee /srv/prod/db.sqlite",
+       "the spelling people actually write", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    # EVERY operand of `tee` is truncated, not just the first.  target_ref is
+    # null here for the same reason `rm a b` carries none -- the multi-path
+    # convention puts the count in magnitude_count -- so this row pins the
+    # DECISION, and the single-target rows above pin the ref.
+    _c("destroy-writer-tee-multi",
+       "echo hi | tee /srv/prod/db.sqlite /srv/prod/wal.sqlite",
+       "every operand is truncated, not only the first", "ask",
+       "destroy", verb="delete", blast_radius="broad"),
+    _c("destroy-writer-cp-devnull", "cp /dev/null /srv/prod/db.sqlite",
+       "the idiomatic 'empty this file' spelling", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-cp-file", "cp /tmp/replacement.dat /srv/prod/db.sqlite",
+       "overwriting with other content destroys the prior content just as "
+       "completely", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    # `cp /dev/null P` and `install /dev/null P` are the same operation in two
+    # spellings.  A vocabulary table that holds one and not the other is the
+    # defect RFX-343 names, so both are pinned.
+    _c("destroy-writer-install", "install /dev/null /srv/prod/db.sqlite",
+       "the same operation under a third command word", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-sort-o", "sort -o /srv/prod/db.sqlite /dev/null",
+       "-o writes in place; the operand is opened for truncation", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-mv", "mv /tmp/replacement.dat /srv/prod/db.sqlite",
+       "mv replaces the destination wholesale", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+
+    # The half of RFX-343 that pins what must STAY allowed.  `cp`, `mv` and
+    # `tee` are overwhelmingly ORDINARY developer work, and a fix that priced
+    # them all as deletes would exhaust R5's cumulative delete budget on build
+    # output -- a cost no single-decision probe can see, because every such
+    # probe starts from an empty ledger.  These six rows are the reason the
+    # writer family is gated on path weight, and they fail the moment that
+    # gate is dropped.
+    _c("everyday-writer-tee-append", "echo hi | tee -a /srv/prod/db.sqlite",
+       "-a appends; the prior contents survive (five of five canary lines)",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-tee-log", "echo hi | tee ./build.log",
+       "an ordinary log file is output, not a destruction", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-cp-ordinary", "cp ./a.txt ./b.txt",
+       "copying one ordinary file over another is routine work", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-sort-stdout", "sort /srv/prod/db.sqlite",
+       "without -o, sort writes to stdout and touches nothing", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-cp-source", "cp /srv/prod/db.sqlite ./copy.out",
+       "the production path as the SOURCE is a read, not a destruction",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    # `tar -cf` is DELIBERATELY not in the writer family: `.tar` is itself a
+    # data-container extension, so gating tar on path weight would price every
+    # `tar -cf dist.tar src` in every build script as an irreversible
+    # destruction.  Measured, not supposed -- this row flipped to `ask` when
+    # tar was in the set.  `tar -cf <a-database>` therefore remains open; see
+    # the RFX-343 report.
+    _c("everyday-writer-tar-create", "tar -cf ./dist.tar ./src",
+       "building an archive is ordinary work, not a destruction", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+
     # NEW rows (dev-1 round 054).  The corpus had `destroy-env-rm`
     # (`env FOO=1 rm ...`) but no BARE assignment row and no nested `sh -c`
     # row, so both gaps were invisible to it.  Neither of these was caught by
