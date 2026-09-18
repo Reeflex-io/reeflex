@@ -297,6 +297,37 @@ PUBLISHED_LAG: dict = {
     #   * `ctrl-notebookedit-spelled-with-file-path` -- 0.2.0 already reads
     #     `file_path`, so that spelling never diverged.
     "destroy-notebookedit-deletes-a-production-cell": "RFX-339",
+
+    # The WRITER FAMILY (the defect is RFX-343; the lag these eight entries
+    # record is RFX-339, the republish -- the same distinction every block
+    # above draws).  Published 0.2.0 prices `tee /srv/prod/db.sqlite` and its
+    # seven siblings execute/recoverable/scoped -> `allow`, where the checkout
+    # now answers delete/irreversible/broad -> `ask`.
+    #
+    # MEASURED on this arm, not inferred from the diff:
+    # code-reports/dev-2--076--20260918-evidence/10-pypi-tree-arm.txt
+    #
+    # EACH ENTRY WIDENS WHAT THE REPUBLISH CLEARS, AND THE REPUBLISH IS
+    # OWNER-GATED.  RFX-339 is a release action; nothing here performs it or
+    # decides it.  What these eight DO record is that the exposure a customer
+    # carries today grew by a family of eight, so the cost of not republishing
+    # is larger than it was when RFX-339 was last looked at.  Flagged for the
+    # owner, not decided -- see the RFX-343 report.
+    #
+    # THE SIX `everyday-writer-*` ROWS ARE DELIBERATELY NOT HERE, for the same
+    # reason the four `everyday-redirect-*` rows are not: published 0.2.0
+    # already agrees with the tree on all six, so declaring them would be STALE
+    # on arrival and `audit` would fail them.  They are the half of RFX-343
+    # that pins what must STAY allowed -- an ordinary `cp a.txt b.txt` is not a
+    # delete -- and the published wheel never got that wrong.
+    "destroy-writer-tee":         "RFX-339",
+    "destroy-writer-tee-pipe":    "RFX-339",
+    "destroy-writer-tee-multi":   "RFX-339",
+    "destroy-writer-cp-devnull":  "RFX-339",
+    "destroy-writer-cp-file":     "RFX-339",
+    "destroy-writer-install":     "RFX-339",
+    "destroy-writer-sort-o":      "RFX-339",
+    "destroy-writer-mv":          "RFX-339",
 }
 
 # --------------------------------------------------------------------------
@@ -401,6 +432,28 @@ SEAT_PUBLISHED_LAG: dict = {
     # So this entry would still diverge with the seat republished and the
     # adapter not, which is why it names RFX-339 like every other entry here.
     "destroy-notebookedit-deletes-a-production-cell": "RFX-339",
+
+    # The WRITER FAMILY, one distribution further out.  MEASURED on THIS arm
+    # and not mirrored from the table above -- the rule this block already
+    # states.  `--seat` against `reeflex-litellm==0.1.0` fails open on exactly
+    # these eight, through the seat's own normaliser, and on NONE of the six
+    # `everyday-writer-*` rows:
+    # code-reports/dev-2--076--20260918-evidence/11-pypi-seat-arm.txt
+    #
+    # The fact that both arms diverge on the same eight is a measurement, not
+    # an entailment -- the two resolves are independent.  Here the cause is
+    # single, unlike the NotebookEdit row above: the seat normaliser passes a
+    # Bash `command` through untouched, so the mispricing is entirely
+    # `reeflex-claude==0.2.0`'s.  The seat's floor admits whatever
+    # reeflex-claude it admits, so these clear on the same republish: RFX-339.
+    "destroy-writer-tee":         "RFX-339",
+    "destroy-writer-tee-pipe":    "RFX-339",
+    "destroy-writer-tee-multi":   "RFX-339",
+    "destroy-writer-cp-devnull":  "RFX-339",
+    "destroy-writer-cp-file":     "RFX-339",
+    "destroy-writer-install":     "RFX-339",
+    "destroy-writer-sort-o":      "RFX-339",
+    "destroy-writer-mv":          "RFX-339",
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")
