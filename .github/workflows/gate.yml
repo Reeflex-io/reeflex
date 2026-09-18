@@ -124,6 +124,17 @@ jobs:
         # census verdict is trusted.
         run: python scripts/check_test_census.py --selftest
 
+      - name: Suite-coverage selftest — prove every coverage detector (RFX-355)
+        # The layer under the census: it asks whether an enumerated test file
+        # yields tests, and `drift` asks whether a test-LOOKING file sits in an
+        # enumerated root. Neither could see a harness dropped into
+        # reeflex-wordpress/tests, which is inside a root and invoked by
+        # nothing, because that root is run from two hardcoded literals rather
+        # than by directory discovery. Detectors first, verdict after — a
+        # coverage checker that cannot detect an uncovered file certifies
+        # anything.
+        run: python scripts/check_suite_coverage.py --selftest
+
       - name: Start a local reeflex-core for the WordPress harnesses
         working-directory: reeflex-core
         env:
