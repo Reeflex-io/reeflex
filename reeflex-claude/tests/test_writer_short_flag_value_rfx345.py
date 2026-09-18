@@ -106,6 +106,16 @@ class TheBailsThatMustSurvive(unittest.TestCase):
         self.assert_unpriced("mv -ft /srv/backup/ /srv/prod/db.sqlite")
         self.assert_unpriced("install -dt /srv/prod/ ./a.sql")
 
+    def test_a_weighty_LAST_operand_under_t_is_still_a_source(self):
+        # The shape where the bundle scan is the ONLY thing standing: every
+        # other -t row leaves one positional, so the "fewer than two operands"
+        # rule answers it and the scan could be broken silently. A sabotage arm
+        # that reordered the scan went GREEN across the whole corpus until
+        # these were added. EXECUTED: both operands land inside the directory
+        # and db.sqlite comes through byte-identical.
+        self.assert_unpriced("cp -at /srv/backup/ /tmp/a.sql /srv/prod/db.sqlite")
+        self.assert_unpriced("cp -t/srv/backup/ /tmp/a.sql /srv/prod/db.sqlite")
+
     def test_install_d_creates_a_directory_even_when_bundled_before_a_value(self):
         # `-dm 755`: the d is a flag, the m takes 755.  Stopping the scan at
         # the first value-taking letter must not stop it BEFORE the d.

@@ -612,6 +612,23 @@ CASES = [
     _c("everyday-writer-cp-to-directory-attached", "cp -t/srv/prod/ ./a.sql",
        "the attached spelling of -t is still a directory destination", "allow",
        "everyday", verb="execute", blast_radius="scoped"),
+    # THE SHAPE WHERE THE BUNDLE SCAN IS THE ONLY THING STANDING, found by a
+    # sabotage arm that went GREEN and was decomposed instead of accepted.
+    # Every other `-t` row here has ONE positional left after the directory,
+    # so the "fewer than two operands" rule already answers them and the
+    # bundle scan could be broken without moving a single verdict.  With a
+    # weighty file LAST and still a SOURCE, the scan alone decides.  EXECUTED:
+    # `cp -t DIR a.sql db.sqlite` exits 0, both operands appear inside DIR and
+    # db.sqlite comes through byte-identical (08-ground-truth-rev5.txt).
+    _c("everyday-writer-cp-to-directory-bundled-weighty-source",
+       "cp -at /srv/backup/ /tmp/a.sql /srv/prod/db.sqlite",
+       "with -t the LAST operand is still a source; naming it would report a "
+       "destruction of a file that is only being read", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-cp-to-directory-attached-weighty-source",
+       "cp -t/srv/backup/ /tmp/a.sql /srv/prod/db.sqlite",
+       "the attached spelling of the same, which only the bundle scan sees",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
     _c("everyday-writer-install-make-directory-bundled",
        "install -dm 755 /srv/prod/newdir",
        "the d is a flag even though the m after it takes a value", "allow",
