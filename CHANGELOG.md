@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ### Added
 
+- **The declared residual RFX-158 is one corpus row, its measured scope is 41, and nothing was reading the difference.**
+
+  `gap-command-substitution` is declared by a single row — `$(echo rm) -rf /srv/prod/data`, `residual: RFX-158`, `check: false` — whose stated effect is *"the command word is the output of another command"*. Read as a **shape** that row looks narrow and unfixable: only the word `rm` is produced at runtime. Read as its own stated **effect** it covers every operator-free destructive row in the corpus, re-spelled. Measured on main `5d6b6f0`: **41 of 41** such rows fall from `delete` to `execute` with `target_ref=null` when re-spelled `$(echo '<row>')` — including `ctrl-rm-rf-root` and `ctrl-drop-database`, the corpus's own always-catch controls, and all six `destroy-writer-*` rows added by RFX-343 that same night.
+
+  **The gap is not new and is not being closed here.** RFX-158 is deliberate — in the general case the classifier cannot know what a substitution will print — and `test_substitution_rfx301.py` already asserts it stays open so that closing it without updating the corpus is a failure. What nothing asserted is **how wide it is**. RFX-343 added six destructive shapes; all six were bypassable through this residual the moment they landed, every check stayed green, and no file recorded it. A residual's scope was never something a test read.
+
+  `test_residual_scope_rfx158.py` declares the bypassable **set** rather than a count — a count tells you something moved, a set names which row — and fails in both directions: a row **joining** means a new destructive family is swallowed by the residual and its author has to say so deliberately rather than re-baseline; a row **leaving** means the gap narrowed and the corpus's residual marking is now stale. Both directions were watched to fail on a real break before merge, along with removal of the declaring row itself.
+
+  **Rows carrying a shell operator are excluded and the exclusion is measured, not assumed:** substitution output is word-split but never re-parsed for operators, so `echo hi > P` and `echo hi | tee P` re-spelled leave all five canary lines intact in a real bash — 39 of the 76 destroy rows are excluded on that ground. Ground truth for the rest was executed, not asserted: every writer shape emptied a five-canary victim through `/bin/bash`. **No corpus row and no ledger entry changes here**, so the owner-gated RFX-339 republish number is untouched.
+
 - **The conformance corpus now carries the file-writing tools, so the two published-wheel components can see them at all (RFX-341).**
 
   Until today `reeflex_claude.conformance.CASES` was 108 Bash rows and one `Read` row: **zero rows for `Write`, `Edit`, `MultiEdit` or `NotebookEdit`.** Since RFX-241 the corpus *is* `scripts/check_published_classifier.py`'s sensitivity — `pypi-behaviour` and `pypi-litellm-seat` score `pip install reeflex-claude` and `pip install reeflex-litellm` against this list — so for that whole family those components were not green because the published wheel was clean, they were green because nothing asked. RFX-338 (an uncapped `file_path` reaching a quadratic pattern from all four of those tools) was open and then fixed on main throughout.
