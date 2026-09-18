@@ -1022,11 +1022,54 @@ def _sql_reachable(segments: list) -> bool:
 
 
 def _severity(cls: dict) -> tuple:
-    """Order two classifications by how much damage they describe."""
+    """
+    Order two classifications by how much damage they describe.
+
+    RFX-346.  REVERSIBILITY IS COMPARED BEFORE BLAST RADIUS, and the order is
+    the whole point of this function rather than a detail of it.
+
+    `_classify_bash` reports `max(results, key=_severity)` over one candidate
+    per shell segment plus one per peeled truncation.  While blast radius was
+    compared first, a benign candidate with a WIDER radius outranked an
+    irreversible destruction with a NARROWER one whenever the two tied on
+    tier -- so the line's whole verdict came from the benign candidate:
+
+        > /srv/prod/secrets.env echo hi           delete /irreversible/single
+        true && > /srv/prod/secrets.env echo hi   execute/recoverable /scoped
+
+    A no-op `true &&`, supplied by the audited agent, removed the destruction
+    from the answer -- not underpriced but ABSENT, taking `target_ref` with it.
+    `true` is an unrecognised command, which is priced `scoped`/`moderate` as a
+    deliberately conservative floor (RFX-145); the truncation is `single`/
+    `moderate` because it names one file.  Same tier, so `scoped` beat
+    `single` and the no-op carried the line.
+
+    Why that is the wrong order and not merely an unlucky one: blast radius
+    answers HOW MUCH, reversibility answers WHETHER IT COMES BACK.  Between two
+    candidates the operator can only be shown one of, the one that cannot be
+    undone is the one a human has to see.  A wide recoverable candidate that is
+    genuinely more dangerous than a narrow irreversible one differs on TIER,
+    which is still compared first and still decides.
+
+    The exposure was exactly the class of weighty path that prices `moderate`:
+    a database path scores `broad`/`destructive_broad` and wins on tier before
+    the tie-break is reached, while a secret matched only by
+    `_SENSITIVE_PATH_RE` scores `single`/`moderate` and ties with any
+    unrecognised command.  Measured over a 5633-case grid enumerated from the
+    bash redirection grammar: 28 rows, all `/srv/prod/secrets.env`, spread
+    evenly across all seven truncating operators, in `&&` and `{ ; }` context.
+
+    NOT fixed here, and deliberately: a line carrying TWO destructions still
+    reports only the winner's `target_ref`, so the verdict is right and the
+    record can name nothing (80 rows in the same grid).  That is an
+    audit-record defect, not a fail-open, and it is filed separately -- see
+    RFX-346's CLASS 2.  Merging refs across candidates changes what every
+    destruction reports and needs its own evidence.
+    """
     return (
         _TIER_RANK.get(cls["classification_tier"], 1),
-        _BLAST_RANK.get(cls["blast_radius"], 1),
         _REV_RANK.get(cls["reversibility"], 2),
+        _BLAST_RANK.get(cls["blast_radius"], 1),
         _VERB_RANK.get(cls["verb"], 1),
     )
 

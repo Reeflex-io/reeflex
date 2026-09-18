@@ -440,6 +440,45 @@ PUBLISHED_LAG: dict = {
     "everyday-git-clean-dry-run-path-contains-dash-f":     "RFX-339",
     "everyday-git-push-dry-run-force":                     "RFX-339",
     "everyday-git-push-force-if-includes":                 "RFX-339",
+
+
+    # RFX-346 -- a NO-OP in front of a destruction removed the destruction from
+    # the verdict (`_severity` compared blast_radius before reversibility).  The
+    # lag these four record is RFX-339, the republish, exactly as every block
+    # above -- following RFX-346 lands you on a ticket that reads "fixed", which
+    # is not what an entry in this table means.
+    #
+    # MEASURED on this arm, python3.12, real wheel off the real index, and NOT
+    # mirrored from the seat table or inferred from the diff:
+    #   code-reports/dev-1--165--20260918-evidence/
+    #     70-published-tree-UNDECLARED-FAIL.txt
+    #
+    # THE FOURTH ROW IS NOT RFX-346's DEFECT, AND IT IS DECLARED ANYWAY.
+    # `destroy-noop-prefix-control-unwrapped` (`> /srv/prod/secrets.env echo hi`)
+    # is the control: priced correctly on the CHECKOUT both before and after
+    # this change, which is what its `effect` says.  It still DIVERGES from the
+    # published wheel, for an older and unrelated reason -- 0.2.0 prices it
+    # delete/irreversible/SCOPED where the checkout answers `single`.  A control
+    # row is not exempt from this ledger; it is scored like any other, and
+    # leaving it undeclared simply fails the component.
+    #
+    # THE THREE `everyday-noop-prefix-*` ROWS ARE DELIBERATELY NOT HERE, for the
+    # same reason the `everyday-redirect-*` and `everyday-writer-*` rows are not:
+    # published 0.2.0 already agrees with the tree on all three (0 fail-noisy in
+    # the same run), so declaring them would be STALE on arrival and `audit`
+    # would fail them.  They are the half of RFX-346 that pins what must STAY
+    # allowed -- a no-op in front of an ordinary build is still an ordinary
+    # build -- and the published wheel never got that wrong.
+    #
+    # These entries WIDEN WHAT THE REPUBLISH CLEARS, and the republish is
+    # OWNER-GATED.  Nothing here performs or decides RFX-339.  What they record
+    # is that the exposure a customer on the shipped wheel carries today grew by
+    # four more spellings, on top of the two RFX-344 added and the writer
+    # family's eight.  Flagged for the owner, not decided.
+    "destroy-noop-prefix-redirect-andand":   "RFX-339",
+    "destroy-noop-prefix-redirect-brace":    "RFX-339",
+    "destroy-noop-prefix-truncate":          "RFX-339",
+    "destroy-noop-prefix-control-unwrapped": "RFX-339",
 }
 
 # --------------------------------------------------------------------------
@@ -648,6 +687,30 @@ SEAT_PUBLISHED_LAG: dict = {
     "everyday-git-clean-dry-run-path-contains-dash-f":     "RFX-339",
     "everyday-git-push-dry-run-force":                     "RFX-339",
     "everyday-git-push-force-if-includes":                 "RFX-339",
+
+
+    # RFX-346, one distribution further out.  MEASURED ON THIS ARM and not
+    # mirrored from the table above -- the rule this block already states, and
+    # mirroring is not free: the checker FAILS a declaration that does not
+    # actually diverge, so a copied entry reddens the gate as STALE instead of
+    # quieting it.  Measured, python3.12, `--seat` against
+    # `reeflex-litellm==0.1.0`:
+    #   code-reports/dev-1--165--20260918-evidence/
+    #     71-published-seat-UNDECLARED-FAIL.txt
+    # It fails open on exactly these four and on NONE of the three
+    # `everyday-noop-prefix-*` rows.
+    #
+    # The two arms are INDEPENDENT resolves and the default arm cannot see this
+    # table at all, so the fact that both diverge on the same four is a
+    # measurement, not an entailment.  The cause here is single, unlike the
+    # NotebookEdit row above: the seat normaliser passes a Bash `command`
+    # through untouched, so the mispricing is entirely `reeflex-claude==0.2.0`'s
+    # and the seat's floor admits whatever reeflex-claude it admits.  Both clear
+    # on the same republish: RFX-339, owner-gated.
+    "destroy-noop-prefix-redirect-andand":   "RFX-339",
+    "destroy-noop-prefix-redirect-brace":    "RFX-339",
+    "destroy-noop-prefix-truncate":          "RFX-339",
+    "destroy-noop-prefix-control-unwrapped": "RFX-339",
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")
