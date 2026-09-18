@@ -198,6 +198,37 @@ def store(
     return path
 
 
+def lookup_portal_url(*, core_url: str, gate_id: str) -> Optional[str]:
+    """The portal base URL `connect` recorded for this engine and gate, or None.
+
+    NEVER RAISES and never prints, for the same reason as `lookup`: it runs
+    inside the PreToolUse hook.  It reads a NON-secret field -- `store` writes
+    `portal_url` precisely so a human can tell one credential from another
+    without pasting a token anywhere -- and it is used to tell the person at the
+    terminal where a hold is being decided (RFX-318).
+
+    Returns None rather than a default when nothing was recorded.  A guessed URL
+    in a dialog is a claim this adapter cannot support: an operator running a
+    self-hosted engine has no app.reeflex.io, and sending them there would be
+    worse than saying nothing.
+    """
+
+    try:
+        path = credentials_path()
+        data = _load(path)
+        for entry in data.get("credentials", []):
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("core_url") != core_url or entry.get("gate_id") != gate_id:
+                continue
+            portal = entry.get("portal_url")
+            if isinstance(portal, str) and portal.strip():
+                return portal.strip().rstrip("/")
+        return None
+    except Exception:  # noqa: BLE001 - see the docstring
+        return None
+
+
 def lookup(*, core_url: str, gate_id: str) -> Optional[str]:
     """The credential for this engine and gate, or None.
 

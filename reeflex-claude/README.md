@@ -330,6 +330,7 @@ about.
 | `REEFLEX_CLAUDE_MAX_COMMAND_CHARS`| `65536`                       | Longest Bash command the classifier will tokenize. Past it the command is **not parsed** and the action is refused under `adapter/command_too_large`. **Lowerable, not raisable**, for the same reason as the hook timeout. |
 | `REEFLEX_VERIFY_SSL`        | `true` (full TLS verification)     | set to `0`/`false`/`no`/`off` (case-insensitive) to **disable** TLS certificate verification on the call to core. Insecure — dev/self-signed endpoints only, at the operator's own risk. Same env name as the WordPress adapter. |
 | `REEFLEX_CORE_TOKEN`        | unset                               | optional bearer token; when set, adds `Authorization: Bearer <token>` to the `/v1/decide` request. Never logged. Same env name as the WordPress adapter. |
+| `REEFLEX_PORTAL_URL`        | unset                               | **not a secret.** Where the confirmation dialog tells the reader an open hold is being decided (RFX-318). Usually unnecessary: `connect` records the portal beside the credential and that is used automatically. With neither, the dialog names the **engine** URL — a portal is never guessed, because an operator on a self-hosted engine has no `app.reeflex.io`. |
 
 Setting `REEFLEX_CLAUDE_ENVIRONMENT=dev` or `staging` relaxes the base policy
 (R2/R3/R6 are production-scoped), letting dev workflows through without approvals.

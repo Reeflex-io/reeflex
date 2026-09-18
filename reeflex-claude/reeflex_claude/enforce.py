@@ -29,6 +29,14 @@ Decision mapping (SPEC §5 -> Claude Code permissionDecision):
 Return tuple: (permission_decision, reason_text, rule, core_reachable, obligations)
   obligations: list[str] -- the obligations from the core Decision (empty on error)
 
+  reason_text NAMES AN OPEN HOLD when the engine returned one (RFX-318).  Core
+  allocates a hold on `require_approval` and returns hold_id / expires_ts /
+  decision_id on that same response; this tuple has no field for them, so before
+  RFX-318 they reached no screen and the reader of the dialog was never told a
+  hold existed, had a deadline, or was being decided by somebody else.  They are
+  carried in the reason string rather than by widening the tuple, which every
+  caller and test unpacks positionally.
+
 Env:
   REEFLEX_CORE_URL       -- default http://127.0.0.1:8080
   REEFLEX_CLAUDE_TIMEOUT -- float seconds for HTTP request timeout; default 5.0.
@@ -48,6 +56,13 @@ Env:
                             "Authorization: Bearer <token>" to the request.  Never
                             logged.  Same env name as the WordPress adapter for
                             cross-adapter consistency.
+  REEFLEX_PORTAL_URL     -- optional portal base URL, NOT a secret.  Only used
+                            to tell the person answering the confirmation dialog
+                            where an open hold is being decided (RFX-318).  When
+                            unset, the portal `reeflex-claude connect` recorded
+                            for this (core_url, REEFLEX_GATE_ID) is used; when
+                            there is none either, the engine URL is named
+                            instead.  A portal is never guessed.
   REEFLEX_GATE_ID        -- optional gate id, written into settings.json by
                             `reeflex-claude connect`.  NOT a secret.  Two jobs:
                             it is sent as the "X-Reeflex-Gate" header (which an
@@ -85,6 +100,10 @@ from . import deadline
 _DEFAULT_CORE_URL = "http://127.0.0.1:8080"
 _DEFAULT_TIMEOUT  = 5.0
 _MAX_ERROR_LEN    = 300   # max chars of external error text in reason strings
+# Max chars of any single engine-supplied hold identifier echoed into the text a
+# human reads (RFX-318).  Generous next to the 32-hex ids we measure, small
+# enough that a hostile or broken engine cannot flood the dialog.
+_MAX_HOLD_FIELD_LEN = 120
 
 # Falsy string values for REEFLEX_VERIFY_SSL (case-insensitive).
 # Anything not in this set is treated as truthy (verification ON -- secure default).
@@ -181,7 +200,7 @@ def call_core_and_map(envelope: dict) -> _Result:
             status = exc.code
             parsed = json.loads(raw.decode("utf-8"))
             if "decision" in parsed:
-                return _map_decision(parsed, core_reachable=True)
+                return _map_decision(parsed, core_reachable=True, core_url=core_url, gate_id=gate_id)
         except Exception:
             pass
         return _fail_closed(f"core HTTP {exc.code}: {_trunc(str(exc.reason))}")
@@ -204,21 +223,100 @@ def call_core_and_map(envelope: dict) -> _Result:
     # Non-200 with embedded decision (e.g. core's 500 fail-closed response)
     if status != 200:
         if "decision" in parsed:
-            return _map_decision(parsed, core_reachable=True)
+            return _map_decision(parsed, core_reachable=True, core_url=core_url, gate_id=gate_id)
         return _fail_closed(f"core returned HTTP {status} without decision")
 
     # 200 but missing decision field
     if "decision" not in parsed:
         return _fail_closed("core response missing 'decision' field")
 
-    return _map_decision(parsed, core_reachable=True)
+    return _map_decision(parsed, core_reachable=True, core_url=core_url, gate_id=gate_id)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _map_decision(decision_resp: dict, core_reachable: bool) -> _Result:
+def _hold_field(value) -> str:
+    """One hold identifier, bounded, for embedding in a dialog string.
+
+    The engine's response is external input.  A hold id is 32 hex characters in
+    every reading we have, but nothing here depends on that: the cap stops a
+    core (or something answering in its place) from pushing an arbitrarily long
+    string into the text a human is about to read.
+    """
+    text = str(value).strip()
+    return text[:_MAX_HOLD_FIELD_LEN] + "...[truncated]" \
+        if len(text) > _MAX_HOLD_FIELD_LEN else text
+
+
+def _hold_clause(decision_resp: dict, core_url: str, gate_id: str) -> str:
+    """The sentence that tells the human a Reeflex hold exists and where it is.
+
+    RFX-318.  Core allocates a real hold on a `require_approval` and returns
+    `hold_id`, `expires_ts` and `decision_id` on the SAME /v1/decide response.
+    Before this, the adapter kept none of them, so the complete text at the
+    terminal was "... requires human approval [rule=...]" -- the reader is told
+    they are the required human, approves, and never learns that a hold with a
+    deadline is open and that somebody else is being asked the same question.
+
+    Returns "" when the engine named no hold, so an ordinary allow/deny is
+    unchanged.
+    """
+    hold_id = decision_resp.get("hold_id")
+    if not hold_id:
+        return ""
+
+    clause = f" -- Reeflex hold {_hold_field(hold_id)} is open"
+
+    expires = decision_resp.get("expires_ts")
+    if expires:
+        clause += f" until {_hold_field(expires)}"
+
+    # WHERE TO GO.  The portal `connect` recorded for this (core_url, gate_id)
+    # if there is one; otherwise the engine URL, which is known for certain.
+    # Never a guessed portal -- see credentials.lookup_portal_url.
+    portal = os.environ.get("REEFLEX_PORTAL_URL", "").strip().rstrip("/")
+    if not portal and gate_id:
+        try:
+            from .credentials import lookup_portal_url
+
+            portal = lookup_portal_url(core_url=core_url, gate_id=gate_id) or ""
+        except Exception:  # noqa: BLE001 - a dialog string is never worth raising in
+            portal = ""
+    if portal:
+        clause += f" and is awaiting a decision in the Reeflex portal ({portal})"
+    elif core_url:
+        clause += f" and is awaiting a decision on the engine at {core_url}"
+
+    clause += "."
+
+    # The consequence the reader cannot otherwise know.  This adapter maps
+    # require_approval to Claude Code's LOCAL confirmation dialog and has no
+    # resubmission path at all (tests/test_enforce.py asserts the absence by
+    # ast-scan), so answering here does not resolve the hold and the hold does
+    # not gate this terminal.  Stated for the ask case only, because that is the
+    # only one where a human is about to answer something.
+    if decision_resp.get("decision") == "require_approval":
+        clause += (
+            " Answering this dialog decides only whether this terminal runs the "
+            "action; it does not resolve that hold."
+        )
+
+    decision_id = decision_resp.get("decision_id")
+    if decision_id:
+        clause += f" [decision_id={_hold_field(decision_id)}]"
+
+    return clause
+
+
+def _map_decision(
+    decision_resp: dict,
+    core_reachable: bool,
+    *,
+    core_url: str = "",
+    gate_id: str = "",
+) -> _Result:
     """
     Map core decision -> permissionDecision.
 
@@ -226,6 +324,11 @@ def _map_decision(decision_resp: dict, core_reachable: bool) -> _Result:
     core "deny"             -> "deny"
     core "require_approval" -> "ask"
     anything else           -> "deny" (fail-closed on unknown value)
+
+    `core_url` / `gate_id` are only used to tell the reader where an open hold
+    is being decided (RFX-318).  They default to the environment so that a
+    caller that does not have them -- and every existing test -- behaves as
+    before.
     """
     decision    = decision_resp.get("decision", "")
     reason      = decision_resp.get("reason", "")
@@ -235,8 +338,14 @@ def _map_decision(decision_resp: dict, core_reachable: bool) -> _Result:
     if not isinstance(obligations, list):
         obligations = list(obligations) if obligations else []
 
+    if not core_url:
+        core_url = os.environ.get("REEFLEX_CORE_URL", _DEFAULT_CORE_URL).rstrip("/")
+    if not gate_id:
+        gate_id = os.environ.get("REEFLEX_GATE_ID", "").strip()
+
     # Compose the reason string that will be shown to the user / model
-    reason_text = f"Reeflex: {reason} [rule={rule}]"
+    reason_text = f"Reeflex: {reason} [rule={rule}]" \
+        + _hold_clause(decision_resp, core_url, gate_id)
 
     if decision == "allow":
         return ("allow", reason_text, rule, core_reachable, obligations)
