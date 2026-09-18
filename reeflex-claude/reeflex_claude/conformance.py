@@ -575,6 +575,18 @@ CASES = [
        "3+ positionals means a directory destination; the last operand is not "
        "the destroyed file", "allow",
        "everyday", verb="execute", blast_radius="scoped"),
+    # The SPACED long spelling, added because a sabotage arm found it missing:
+    # it is the only shape where matching the flag TOKEN decides the answer
+    # (a bundle cannot match `--`, and `--target-directory=DIR` leaves too few
+    # positionals to price).  EXECUTED: the original path is gone and all five
+    # canary lines are recoverable at the new one -- the `gzip` exclusion this
+    # family's docstring already names, so `delete/irreversible` would be
+    # measurably untrue rather than merely cautious.
+    _c("everyday-writer-mv-into-directory-long-flag",
+       "mv --target-directory /srv/backup/ /srv/prod/db.sqlite",
+       "the bytes move, they are not destroyed; recoverable-but-disruptive is "
+       "a pricing this family cannot express", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
 
     # NEW rows (dev-1 round 054).  The corpus had `destroy-env-rm`
     # (`env FOO=1 rm ...`) but no BARE assignment row and no nested `sh -c`
