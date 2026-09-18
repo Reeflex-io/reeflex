@@ -626,6 +626,22 @@ json.dump(out, sys.stdout)
 # has to be right before its PASS is worth reading.
 # --------------------------------------------------------------------------
 
+def lag_table_name(lag):
+    """Name the table a failure line should send its reader to.
+
+    DERIVED from the table's identity rather than passed alongside it, so the
+    two cannot drift: there is no call site that can hand `audit` the seat
+    table and the classifier arm's label. An anonymous fixture dict is named
+    as what it is -- the alternative, defaulting to a real table's name, is
+    the misdirection this function exists to remove.
+    """
+    if lag is SEAT_PUBLISHED_LAG:
+        return "SEAT_PUBLISHED_LAG"
+    if lag is PUBLISHED_LAG:
+        return "PUBLISHED_LAG"
+    return "the lag table for this arm"
+
+
 def audit(rows, cases, oracle, lag=None, min_scored=MIN_SCORED_CASES):
     """Score `rows` (case id -> {"cls": {...}} | {"error": str}) against `cases`.
 
@@ -634,6 +650,7 @@ def audit(rows, cases, oracle, lag=None, min_scored=MIN_SCORED_CASES):
     find out what moved.
     """
     lag = PUBLISHED_LAG if lag is None else lag
+    table = lag_table_name(lag)
     lines, stats = [], {"scored": 0, "fail_open": 0, "fail_noisy": 0,
                         "declared": 0, "errors": 0, "missing": 0, "stale": 0}
     failures = []
@@ -644,11 +661,13 @@ def audit(rows, cases, oracle, lag=None, min_scored=MIN_SCORED_CASES):
     # -- ledger hygiene, before any verdict rests on it --------------------
     for cid, ticket in sorted(lag.items()):
         if not TICKET_RE.search(str(ticket)):
-            failures.append("PUBLISHED_LAG[%s] = %r names no ticket — an exclusion "
-                            "nobody can look up is not a declaration" % (cid, ticket))
+            failures.append("%s[%s] = %r names no ticket — an exclusion "
+                            "nobody can look up is not a declaration"
+                            % (table, cid, ticket))
         if cid not in {c["id"] for c in cases}:
-            failures.append("PUBLISHED_LAG[%s] names a case the corpus does not "
-                            "contain — the id was renamed or the case was deleted" % cid)
+            failures.append("%s[%s] names a case the corpus does not "
+                            "contain — the id was renamed or the case was deleted"
+                            % (table, cid))
 
     diverged = set()
     for case in scored_cases:
@@ -687,9 +706,9 @@ def audit(rows, cases, oracle, lag=None, min_scored=MIN_SCORED_CASES):
     for cid, ticket in sorted(lag.items()):
         if cid not in diverged and cid in {c["id"] for c in cases}:
             stats["stale"] += 1
-            failures.append("PUBLISHED_LAG[%s] is STALE: the published wheel no longer "
+            failures.append("%s[%s] is STALE: the published wheel no longer "
                             "diverges on it. %s shipped — delete the entry rather than "
-                            "leave it behind" % (cid, ticket))
+                            "leave it behind" % (table, cid, ticket))
 
     # -- the anti-vacuity floor, last, so it reports on a real number -------
     if stats["scored"] < min_scored:
@@ -980,6 +999,59 @@ def selftest():
           not ok and stats["errors"] == 1)
     check("...and the line names the normaliser, so the classifier is not blamed",
           any("normalised" in l for l in lines))
+
+    # -- the failure line must name the arm's OWN table (RFX-347) ----------
+    # `audit` is shared and `lag` is a parameter, so a hardcoded table name in
+    # a failure line sends a seat-arm reader to a table the entry is not in --
+    # on exactly the day they are trying to find or delete it. Driven here
+    # through the REAL SEAT_PUBLISHED_LAG: against synthetic fixtures every
+    # entry takes the "corpus does not contain" branch, which is the branch
+    # whose TEXT is under test. The negative lookbehind matters: the string
+    # "SEAT_PUBLISHED_LAG" CONTAINS "PUBLISHED_LAG", so a naive `not in`
+    # assertion here would be vacuous in both directions.
+    ok, lines, _ = audit(agree, cases, oracle, lag=SEAT_PUBLISHED_LAG, min_scored=5)
+    misdirected = [l for l in lines if re.search(r"(?<!SEAT_)PUBLISHED_LAG\[", l)]
+    check("a seat-arm failure line names SEAT_PUBLISHED_LAG, never the "
+          "classifier arm's table", not ok and not misdirected)
+    check("...and that line is really emitted, so the check above cannot pass "
+          "by printing nothing at all",
+          any("SEAT_PUBLISHED_LAG[" in l for l in lines))
+    check("...while the classifier arm still names its own table unprefixed",
+          any(re.search(r"(?<!SEAT_)PUBLISHED_LAG\[", l)
+              for l in audit(agree, cases, oracle, lag=PUBLISHED_LAG,
+                             min_scored=5)[1]))
+    check("the label is derived from the table itself, both arms",
+          lag_table_name(PUBLISHED_LAG) == "PUBLISHED_LAG"
+          and lag_table_name(SEAT_PUBLISHED_LAG) == "SEAT_PUBLISHED_LAG")
+    check("an anonymous fixture table is named as one rather than borrowing a "
+          "real table's name",
+          lag_table_name({}) == "the lag table for this arm")
+
+    # THREE lines name the table, and a fixture only reaches one branch. That
+    # gap is measured, not assumed: reverting the STALE line alone -- leaving
+    # the other two derived -- passed the checks above at 31/31, exit 0,
+    # BYTE-IDENTICAL to the control. A guard covers only what it reads, so
+    # each branch gets its own arm. The label is derived by IDENTITY, so
+    # exercising a branch means making the fixture BE the seat table while it
+    # runs; the real table is restored in `finally` and then re-asserted.
+    real_seat = SEAT_PUBLISHED_LAG
+    try:
+        for branch, fixture in (("names no ticket", {"c0": "because reasons"}),
+                                ("corpus does not contain", {"nosuch": "RFX-241"}),
+                                ("is STALE", {"c0": "RFX-241"})):
+            globals()["SEAT_PUBLISHED_LAG"] = fixture
+            ok, lines, _ = audit(agree, cases, oracle, lag=fixture, min_scored=5)
+            hit = [l for l in lines if branch in l]
+            check("the seat arm's %r line names its own table" % branch,
+                  not ok and hit
+                  and all("SEAT_PUBLISHED_LAG[" in l for l in hit)
+                  and not any(re.search(r"(?<!SEAT_)PUBLISHED_LAG\[", l)
+                              for l in hit))
+    finally:
+        globals()["SEAT_PUBLISHED_LAG"] = real_seat
+    check("...and the real seat table is back after those arms, so no later "
+          "check is scored against a fixture",
+          SEAT_PUBLISHED_LAG is real_seat and len(SEAT_PUBLISHED_LAG) > 1)
 
     failed = [n for n, ok in checks if not ok]
     for n, ok in checks:
