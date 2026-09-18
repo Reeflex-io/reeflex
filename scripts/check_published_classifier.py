@@ -328,6 +328,34 @@ PUBLISHED_LAG: dict = {
     "destroy-writer-install":     "RFX-339",
     "destroy-writer-sort-o":      "RFX-339",
     "destroy-writer-mv":          "RFX-339",
+
+    # RFX-344 -- `>& PATH cmd`, bash's both-streams redirection written BEFORE
+    # the command word.  The lag these two record is RFX-339, the republish,
+    # exactly as the writer block above and every block before it.
+    #
+    # Published 0.2.0 prices both execute/recoverable/scoped -> `allow`, where
+    # the checkout now answers delete/irreversible/broad -> `ask`.  MEASURED on
+    # this arm, python3.12, real wheel off the real index, and NOT inferred
+    # from the diff:
+    #   code-reports/dev-1--163--20260918-evidence/71-mine-tree.txt
+    #     FAIL-OPEN  destroy-redirect-leading-both-streams
+    #     FAIL-OPEN  destroy-redirect-leading-both-streams-nospace
+    #
+    # THE THREE `everyday-redirect-*-leading` ROWS ARE DELIBERATELY NOT HERE.
+    # `>&2 echo hi`, `>&- echo hi` and `>& build.log echo hi` all answer
+    # `allow` on 0.2.0 AND on the checkout -- the published wheel never got
+    # those wrong, so declaring them would be STALE on arrival and `audit`
+    # would fail them.  They are the half of RFX-344 that pins what must STAY
+    # allowed.
+    #
+    # These entries WIDEN WHAT THE REPUBLISH CLEARS, and the republish is
+    # OWNER-GATED.  Nothing here performs or decides RFX-339.  What they record
+    # is that the exposure a customer on the shipped wheel carries today grew
+    # by two more spellings -- on top of the eight the writer family added the
+    # same night -- so the cost of not republishing is larger again.  Flagged
+    # for the owner, not decided.
+    "destroy-redirect-leading-both-streams":         "RFX-339",
+    "destroy-redirect-leading-both-streams-nospace": "RFX-339",
 }
 
 # --------------------------------------------------------------------------
@@ -454,6 +482,28 @@ SEAT_PUBLISHED_LAG: dict = {
     "destroy-writer-install":     "RFX-339",
     "destroy-writer-sort-o":      "RFX-339",
     "destroy-writer-mv":          "RFX-339",
+
+    # RFX-344, one distribution further out.  MEASURED ON THIS ARM and not
+    # mirrored from the table above -- the rule this block already states, and
+    # mirroring is not free: the checker FAILS a declaration that does not
+    # actually diverge, so a copied entry reddens the gate as STALE instead of
+    # quieting it.  Measured, python3.12:
+    #   code-reports/dev-1--163--20260918-evidence/72-mine-seat.txt
+    # `--seat` against reeflex-litellm==0.1.0 fails open on the same two rows
+    # and on NONE of the three `everyday-redirect-*-leading` rows.
+    #
+    # The two arms are INDEPENDENT resolves, and the default arm cannot see
+    # this table at all.  Measured on #173's head: cutting an entry from
+    # SEAT_PUBLISHED_LAG only and running WITHOUT `--seat` returns PASS exit 0,
+    # while the same tree WITH `--seat` returns FAIL exit 1.  So a removal arm
+    # that does not name its flag proves nothing about this table.
+    #
+    # Cause here is single, unlike the NotebookEdit row further up: the seat
+    # normaliser passes a Bash `command` through untouched, so the mispricing
+    # is entirely `reeflex-claude==0.2.0`'s, and the seat's floor admits
+    # whatever reeflex-claude it admits.  Both clear on the same republish.
+    "destroy-redirect-leading-both-streams":         "RFX-339",
+    "destroy-redirect-leading-both-streams-nospace": "RFX-339",
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")
