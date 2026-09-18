@@ -689,6 +689,96 @@
       "expect_target_ref": "/srv/prod/db.sqlite"
     },
     {
+      "id": "destroy-writer-cp-no-target-dir-short",
+      "tool": "Bash",
+      "input": {
+        "command": "cp -T /dev/null /srv/prod/db.sqlite"
+      },
+      "effect": "-T asserts the destination is a FILE; case-folding read it as -t",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-writer-mv-no-target-dir-short",
+      "tool": "Bash",
+      "input": {
+        "command": "mv -T /tmp/replacement.dat /srv/prod/db.sqlite"
+      },
+      "effect": "the same fold under a second command word",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-writer-install-no-target-dir-short",
+      "tool": "Bash",
+      "input": {
+        "command": "install -T /dev/null /srv/prod/db.sqlite"
+      },
+      "effect": "and under a third",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-writer-install-create-leading-dirs",
+      "tool": "Bash",
+      "input": {
+        "command": "install -D /dev/null /srv/prod/db.sqlite"
+      },
+      "effect": "-D creates the LEADING directories and writes DEST as a file; it folded to -d, which really does mean 'every operand is a directory'",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-writer-cp-no-dereference",
+      "tool": "Bash",
+      "input": {
+        "command": "cp -d /dev/null /srv/prod/db.sqlite"
+      },
+      "effect": "cp -d is --no-dereference, not a directory destination",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-writer-sort-field-separator",
+      "tool": "Bash",
+      "input": {
+        "command": "sort -t : -k1 -o /srv/prod/db.sqlite /tmp/in.txt"
+      },
+      "effect": "sort -t is --field-separator; -o still opens the operand for truncation",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
       "id": "everyday-writer-tee-append",
       "tool": "Bash",
       "input": {
@@ -770,6 +860,66 @@
         "command": "tar -cf ./dist.tar ./src"
       },
       "effect": "building an archive is ordinary work, not a destruction",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-writer-cp-to-directory",
+      "tool": "Bash",
+      "input": {
+        "command": "cp -t /srv/prod/ ./a.sql"
+      },
+      "effect": "-t says DEST is a directory; which file inside it is overwritten is unresolvable without the filesystem",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-writer-cp-to-directory-bundled",
+      "tool": "Bash",
+      "input": {
+        "command": "cp -at /srv/prod/ ./a.sql"
+      },
+      "effect": "the bundled spelling of the same flag must answer the same; before RFX-345 it named the SOURCE as the destroyed file",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-writer-install-make-directory",
+      "tool": "Bash",
+      "input": {
+        "command": "install -d /srv/prod/newdir"
+      },
+      "effect": "install -d creates directories; there is no destination file at all",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-writer-cp-many-into-directory",
+      "tool": "Bash",
+      "input": {
+        "command": "cp ./a.sql ./b.sql /var/lib/pgsql/data/"
+      },
+      "effect": "3+ positionals means a directory destination; the last operand is not the destroyed file",
       "expect": "allow",
       "family": "everyday",
       "check": false,
