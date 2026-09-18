@@ -250,8 +250,16 @@ def _hold_field(value) -> str:
         if len(text) > _MAX_HOLD_FIELD_LEN else text
 
 
-def _hold_clause(decision_resp: dict, core_url: str, gate_id: str) -> str:
+def hold_clause(decision_resp: dict, core_url: str, gate_id: str) -> str:
     """The sentence that tells the human a Reeflex hold exists and where it is.
+
+    PUBLIC because `reeflex-litellm` reuses it.  That package duplicates this
+    module's ~20-line decision mapping on purpose (calling ours would POST a
+    second time and raise a second hold for the same action) and pins the
+    duplicate with a contract test asserting the two produce the identical
+    reason string.  The text a human reads is exactly the kind of thing that
+    drifts between two seats, so it lives here once -- the same argument that
+    already makes `classify.classify` and `envelope.build_envelope` shared.
 
     RFX-318.  Core allocates a real hold on a `require_approval` and returns
     `hold_id`, `expires_ts` and `decision_id` on the SAME /v1/decide response.
@@ -345,7 +353,7 @@ def _map_decision(
 
     # Compose the reason string that will be shown to the user / model
     reason_text = f"Reeflex: {reason} [rule={rule}]" \
-        + _hold_clause(decision_resp, core_url, gate_id)
+        + hold_clause(decision_resp, core_url, gate_id)
 
     if decision == "allow":
         return ("allow", reason_text, rule, core_reachable, obligations)

@@ -56,6 +56,48 @@ def test_the_duplicated_mapping_agrees_with_reeflex_claudes(body, expected, stub
     assert mine.obligations == theirs[4]
 
 
+def test_this_seats_reason_names_the_hold_not_just_agrees(stub, monkeypatch):
+    """RFX-318, pinned by BEHAVIOUR here and not only by agreement.
+
+    The agreement test above would stay green if both seats went silent
+    together, which is the state this ticket was filed about.  This one asserts
+    what the human is actually told, so a regression has to fail something that
+    names the defect.
+    """
+    stub.decide_default = (200, {
+        "decision": "require_approval", "reason": "needs a human",
+        "rule": "reeflex.policy/irreversible_broad_prod", "obligations": [],
+        "hold_id": "h-318", "expires_ts": "2026-09-18T16:17:49Z",
+        "decision_id": "d-318",
+    })
+    monkeypatch.setenv("REEFLEX_CORE_URL", core.core_url())
+    monkeypatch.setenv("REEFLEX_PORTAL_URL", "https://portal.example.test")
+
+    mine = core.decide({"probe": True})
+
+    assert mine.kind == "ask"
+    assert "h-318" in mine.reason, (
+        "the gateway had the hold id in hand and did not tell the human: %r"
+        % mine.reason)
+    assert "2026-09-18T16:17:49Z" in mine.reason
+    assert "https://portal.example.test" in mine.reason
+    # The structured fields must keep working -- the hold loop is built on them.
+    assert mine.hold_id == "h-318"
+    assert mine.expires_ts == "2026-09-18T16:17:49Z"
+
+
+def test_a_decision_with_no_hold_keeps_the_plain_reason(stub, monkeypatch):
+    """An ordinary allow does not grow a clause in this seat either."""
+    stub.decide_default = (200, {
+        "decision": "allow", "reason": "read-only",
+        "rule": "reeflex.policy/read_only_internal", "obligations": []})
+    monkeypatch.setenv("REEFLEX_CORE_URL", core.core_url())
+
+    mine = core.decide({"probe": True})
+
+    assert mine.reason == "Reeflex: read-only [rule=reeflex.policy/read_only_internal]"
+
+
 def test_both_sides_fail_closed_on_the_same_unreachable_core(monkeypatch):
     port = stubcore.unused_port()
     monkeypatch.setenv("REEFLEX_CORE_URL", "http://127.0.0.1:%d" % port)
