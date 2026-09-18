@@ -627,7 +627,56 @@ _DB_CLIENTS = frozenset([
     "psql", "mysql", "mariadb", "mongosh", "mongo", "sqlite3", "cqlsh",
     "clickhouse-client", "redis-cli", "sqlcmd",
 ])
-_DB_SCRIPT_FLAGS = frozenset(["-f", "--file", "--init", "-init", "--source"])
+
+# RFX-351.  KEYED BY (CLIENT, FLAG), because a flag does not mean the same
+# thing in two different programs.  Until this table existed there was ONE set
+# -- {-f, --file, --init, -init, --source} -- answered for all ten clients, and
+# a uniform answer to a per-command question is wrong in both directions at
+# once:
+#
+#   fail-open   the client IS handed a script file under the spelling its own
+#               manual documents, the spelling is not in the shared set, and
+#               the statements stay invisible -- which is the whole reason this
+#               branch exists.  `sqlcmd -i`, `clickhouse-client --queries-file`,
+#               `redis-cli --eval` and `mongosh db drop.js` each fell through to
+#               the default Bash execute arm: execute/recoverable/scoped,
+#               danger_signature null, target_ref null.  No hold, no human.
+#   fail-noisy  `-f` is `--force` for mysql and mariadb and the CODEPAGE option
+#               for sqlcmd.  `mysql -f -e 'SELECT 1'` -- inline, fully visible,
+#               a read -- was priced irreversible/broad/sql_script_unbounded,
+#               the heaviest verdict this branch can produce.  A gate that asks
+#               on a SELECT gets switched off, and a switched-off gate protects
+#               nobody: the same argument RFX-131/RFX-145 make above.
+#
+# Flags that take the path as the NEXT argument.  A client absent from this map
+# has no flag spelling of its own (mysql/mariadb/mongo read a script through
+# the `<` shape, or through the in-client `source` handled below).
+_DB_SCRIPT_FLAGS_BY_CLIENT = {
+    "psql":              frozenset(["-f", "--file"]),
+    "cqlsh":             frozenset(["-f", "--file"]),
+    "mongosh":           frozenset(["-f", "--file"]),
+    "sqlite3":           frozenset(["-init", "--init"]),
+    "sqlcmd":            frozenset(["-i", "--input-file"]),
+    "clickhouse-client": frozenset(["--queries-file"]),
+    "redis-cli":         frozenset(["--eval"]),
+}
+# The same spellings written `--flag=VALUE`, per client.
+_DB_SCRIPT_PREFIXES_BY_CLIENT = {
+    client: tuple(sorted(f + "=" for f in flags if f.startswith("--")))
+    for client, flags in _DB_SCRIPT_FLAGS_BY_CLIENT.items()
+}
+# Clients that take a script file as a bare POSITIONAL argument.  Both mongo
+# shells do: `mongosh prod /tmp/drop.js` runs the file and exits.  Matched on
+# the extension only, so a database name or a connection string is not one.
+_DB_POSITIONAL_SCRIPT_CLIENTS = frozenset(["mongosh", "mongo"])
+_DB_POSITIONAL_SCRIPT_SUFFIXES = (".js", ".mongodb")
+# In-client "run this file" directives.  These travel INSIDE otherwise visible
+# inline SQL -- `mysql -e 'source /tmp/wipe.sql'`, `sqlite3 db '.read f.sql'` --
+# so the text is on the command line and the statements still are not.
+_DB_INLINE_SOURCE_RE = re.compile(
+    r"""(?:^|[;\s'"])(?: \.read | source | \\\. )\s+\S""",
+    re.VERBOSE | re.IGNORECASE,
+)
 
 # Filesystem/device formatters -- device-level, never recoverable.
 _DISK_COMMANDS = frozenset([
@@ -1019,7 +1068,7 @@ def _classify_segment(segment: str, preview: Optional[str],
         )
 
     # --- a database script hides its statements from the classifier ----------
-    if cmd0 in _DB_CLIENTS and _has_script_file(args, low):
+    if cmd0 in _DB_CLIENTS and _has_script_file(cmd0, args, low):
         return _make(
             verb="execute",
             reversibility="irreversible",
@@ -2989,7 +3038,7 @@ def _first_uri(args: list):
     return None
 
 
-def _has_script_file(args: list, low: list) -> bool:
+def _has_script_file(client: str, args: list, low: list) -> bool:
     """
     True when a database client is handed a script FILE instead of inline SQL.
 
@@ -2997,13 +3046,34 @@ def _has_script_file(args: list, low: list) -> bool:
     command string bounds what the call does to the database.  `-e`/`-c`
     inline SQL is excluded on purpose: that text IS visible and the SQL
     patterns above already read it.
+
+    RFX-351: `client` is a parameter because the answer depends on it.  The
+    flag spellings are looked up per client in `_DB_SCRIPT_FLAGS_BY_CLIENT`;
+    see the comment there for the two directions the single shared set was
+    wrong in.  Three shapes are not flags at all and are checked for every
+    client, because the shell -- not the client -- decides two of them:
+
+      `<`        stdin redirect.  Unchanged, and the shape mysql/mariadb/mongo
+                 actually use, which is why those three need no flag entry.
+      positional `mongosh prod /tmp/drop.js` runs the file and exits.  Matched
+                 on the extension so a database name or a connection string is
+                 not mistaken for one.
+      in-client  `mysql -e 'source f.sql'`, `sqlite3 db '.read f.sql'`.  The
+                 directive is visible; the statements it pulls in are not.
     """
+    flags = _DB_SCRIPT_FLAGS_BY_CLIENT.get(client, frozenset())
+    prefixes = _DB_SCRIPT_PREFIXES_BY_CLIENT.get(client, ())
+    positional = client in _DB_POSITIONAL_SCRIPT_CLIENTS
     for i, a in enumerate(low):
-        if a in _DB_SCRIPT_FLAGS and i + 1 < len(args):
+        if a in flags and i + 1 < len(args):
             return True
-        if a.startswith(("--file=", "--init=")):
+        if prefixes and a.startswith(prefixes):
             return True
         if a == "<" and i + 1 < len(args):
+            return True
+        if positional and a.endswith(_DB_POSITIONAL_SCRIPT_SUFFIXES):
+            return True
+        if _DB_INLINE_SOURCE_RE.search(a):
             return True
     return False
 
