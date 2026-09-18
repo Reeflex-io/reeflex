@@ -200,6 +200,36 @@ PUBLISHED_LAG: dict = {
     "destroy-group-nested":          "RFX-339",
     "destroy-group-piped":           "RFX-339",
     "destroy-group-then-benign":     "RFX-339",
+    # The trailing redirection (the defect is RFX-340; the lag these entries
+    # record is RFX-339, the same republish -- read the block above on why an
+    # entry must name the republish and not the classifier fix). Published
+    # 0.2.0 prices `echo hi > /srv/prod/db.sqlite` read/reversible/single and
+    # the real pack ALLOWS it; main prices it delete/irreversible/broad as of
+    # this change.
+    #
+    # EIGHT of the TWELVE rows RFX-340 adds diverge, measured against the wheel
+    # the index actually serves rather than assumed from the diff:
+    # code-reports/dev-1--159--20260917-evidence/40-published-classifier-BEFORE-lag.txt
+    #
+    # THE FOUR `everyday-redirect-*` ROWS ARE DELIBERATELY NOT HERE, for the
+    # same reason `destroy-group-with-operator` is not: published 0.2.0 already
+    # agrees with the tree on all four (0 fail-noisy in that same run), so
+    # declaring them would be STALE on arrival and `audit` would fail them.
+    # They are the half of RFX-340 that pins what must STAY allowed -- an
+    # ordinary `pytest -q > out.log` is not a delete -- and the published wheel
+    # never got that wrong.
+    #
+    # RFX-339 WIDENS BECAUSE OF THIS. The republish now clears the subshell
+    # group escapes AND these eight; that is recorded on the ticket rather than
+    # left for the next reader to infer. It is owner-gated either way.
+    "destroy-redirect-trailing":        "RFX-339",
+    "destroy-redirect-trailing-fd":     "RFX-339",
+    "destroy-redirect-trailing-both":   "RFX-339",
+    "destroy-redirect-varfd":           "RFX-339",
+    "destroy-redirect-nospace":         "RFX-339",
+    "destroy-redirect-mid-command":     "RFX-339",
+    "destroy-redirect-second-target":   "RFX-339",
+    "destroy-redirect-in-substitution": "RFX-339",
 }
 
 # --------------------------------------------------------------------------
@@ -262,6 +292,24 @@ SEAT_PUBLISHED_LAG: dict = {
     "destroy-group-nested":          "RFX-339",
     "destroy-group-piped":           "RFX-339",
     "destroy-group-then-benign":     "RFX-339",
+    # The trailing redirection, reached one distribution further out. MEASURED
+    # on this arm, not mirrored from the table above -- `--seat` against
+    # reeflex-litellm==0.1.0 fails open on exactly these eight, through the
+    # seat's own normaliser, and on none of the four `everyday-redirect-*`
+    # rows: code-reports/dev-1--159--20260917-evidence/41-seat-arm-BEFORE-lag.txt
+    #
+    # The two resolves are independent, so the fact that both arms diverge on
+    # the same eight is a measurement, not an entailment. The seat's floor
+    # admits whatever reeflex-claude it admits, so these clear on the same
+    # republish: RFX-339.
+    "destroy-redirect-trailing":        "RFX-339",
+    "destroy-redirect-trailing-fd":     "RFX-339",
+    "destroy-redirect-trailing-both":   "RFX-339",
+    "destroy-redirect-varfd":           "RFX-339",
+    "destroy-redirect-nospace":         "RFX-339",
+    "destroy-redirect-mid-command":     "RFX-339",
+    "destroy-redirect-second-target":   "RFX-339",
+    "destroy-redirect-in-substitution": "RFX-339",
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")

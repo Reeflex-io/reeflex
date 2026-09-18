@@ -983,8 +983,15 @@ def _classify_segment(segment: str, preview: Optional[str],
             file_path=None,
         )
 
-    # --- whole-file content destruction: dd of=, truncate, bare `> file` -----
+    # --- whole-file content destruction: dd of=, truncate, any `> file` -----
+    # The redirection scan runs over the WHOLE segment, so it catches the
+    # trailing spelling (`cmd > file`) that a command-word test cannot see.
     overwrite_paths = _overwrite_targets(cmd0, args, low)
+    redirect_paths = _redirect_overwrite_targets(tokens)
+    if redirect_paths is not None:
+        overwrite_paths = (overwrite_paths or []) + [
+            p for p in redirect_paths if p not in (overwrite_paths or [])
+        ]
     if overwrite_paths is not None:
         return _classify_path_delete(
             overwrite_paths, recursive=False, unbounded=unbounded,
@@ -1163,18 +1170,109 @@ def _overwrite_targets(cmd0: str, args: list, low: list):
     """
     Return the paths a whole-file content destruction targets, or None.
 
-    Covers `dd ... of=PATH`, `truncate ... PATH` and a bare `> PATH`
-    redirection used as a command.  The file survives; all of its previous
-    content does not.
+    Covers `dd ... of=PATH` and `truncate ... PATH`.  The file survives; all of
+    its previous content does not.
+
+    Redirections are NOT handled here any more -- they are not a property of
+    the command word.  See `_redirect_overwrite_targets`.
     """
     if cmd0 == "dd":
         targets = [a.split("=", 1)[1] for a in args if a.lower().startswith("of=")]
         return targets or None
     if cmd0 == "truncate":
         return _positional_args(args, value_flags=("-s", "--size", "-r", "--reference")) or None
-    if cmd0 in (">", ">|"):
-        return [a for a in args if not a.startswith("-")] or None
     return None
+
+
+# A redirection token that OPENS ITS TARGET FOR TRUNCATION.  Matches an
+# optional fd prefix (`2>`, `{fd}>`), then one of the truncating operators,
+# then refuses a following `>` so the appending forms never match:
+#
+#   matches  >   >|   &>   >&   1>   2>|   {fd}>   and each with the target
+#            attached (`>/srv/db`), because `>P` is one token, not two
+#   refuses  >>  &>>  2>>            -- append, prior contents survive
+#            <   <>   <<   <<<       -- not writes, or no truncation (`<>`
+#                                       opens read-write WITHOUT truncating)
+_TRUNCATING_REDIRECT_RE = re.compile(
+    r"^(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[0-9]*)(>\||&>|>&|>)(?!>)(.*)$"
+)
+
+# Writing to these destroys nothing, whatever the redirection says.
+_NULL_SINKS = frozenset([
+    "/dev/null", "/dev/zero", "/dev/stdout", "/dev/stderr", "/dev/tty",
+])
+
+
+def _is_null_sink(path: str) -> bool:
+    return path in _NULL_SINKS or path.startswith("/dev/fd/")
+
+
+def _redirect_target_is_weighty(path: str) -> bool:
+    """
+    Is this a file whose truncation is a DESTRUCTION rather than an output?
+
+    `pytest -q > out.log` truncates out.log, and calling that a delete would
+    charge routine build output to R5's cumulative delete budget for no gain --
+    a cost measured in NO probe that starts from an empty ledger, which is why
+    it has to be decided here and not by looking at a single decision.  So an
+    ordinary file left of a `>` stays with the command that wrote it, exactly
+    as `TestTruncatingOverwrite` has required since RFX-144.
+
+    A database, a block device, a system path or a secret is not an ordinary
+    file.  Those are the same predicates `_radius_for_paths` already uses to
+    tell `rm /srv/prod/db.sqlite` from `rm /tmp/x`, reused here so the two
+    paths cannot drift apart.
+    """
+    return (_DATA_CONTAINER_PATH_RE.search(path) is not None
+            or _BLOCK_DEVICE_RE.match(path) is not None
+            or _is_systemic_path(path)
+            or _SENSITIVE_PATH_RE.search(path) is not None)
+
+
+def _redirect_overwrite_targets(tokens: list):
+    """
+    Return every WEIGHTY path a TRUNCATING redirection opens, or None.
+
+    A redirection is not a command, and it is not required to sit in any
+    particular position: `> P cmd`, `cmd > P` and `cmd > P args` all truncate
+    P before `cmd` ever runs.  Reading the target off the command word alone
+    (which is what this classifier did until RFX-340) sees only the spelling
+    that leads with the operator -- the one nobody writes.
+
+    Every target on the line is returned, not just the last one.  In
+    `cmd > A > B` only B receives the output, but BOTH files are opened, and
+    opening for truncation is what destroys the prior contents.
+
+    `2>&1` and `>&2` are file-descriptor duplications, not files: the target
+    is all digits and there is no path to price.
+    """
+    targets = []
+    i = 0
+    while i < len(tokens):
+        m = _TRUNCATING_REDIRECT_RE.match(tokens[i])
+        if m is None:
+            i += 1
+            continue
+        op, attached = m.group(1), m.group(2)
+        if attached:
+            target = attached
+            i += 1
+        else:
+            # `> P` -- the target is the next token, if there is one.
+            if i + 1 >= len(tokens):
+                break
+            target = tokens[i + 1]
+            i += 2
+        # `2>&1`, `>&2`: duplicating a descriptor, not opening a file.
+        if op == ">&" and target.isdigit():
+            continue
+        if not target or _is_null_sink(target):
+            continue
+        if not _redirect_target_is_weighty(target):
+            continue
+        if target not in targets:
+            targets.append(target)
+    return targets or None
 
 
 def _classify_path_delete(paths: list, recursive: bool, unbounded: bool,
