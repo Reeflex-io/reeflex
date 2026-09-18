@@ -1311,6 +1311,87 @@ CASES = [
        "even behind a no-op -- charging routine build output to R5's "
        "cumulative delete budget is a cost no single-decision probe can see",
        "allow", "everyday", verb="execute", blast_radius="scoped"),
+
+    # ------------------------------------------------------------------
+    # RFX-358 -- `_READ_GIT_SUBCOMMANDS` priced a git subcommand from the
+    # subcommand WORD alone, so the flags that turn `branch`, `diff`, `log` and
+    # `show` into state changes were never read.  The whole family is pinned
+    # here because a fix with no corpus row narrows the guard to whatever its
+    # own test file happens to assert.
+    #
+    # THE READS MUST STAY CHEAP.  These four are the over-call half: if a
+    # later widening prices ordinary branch listing or ordinary diff output as
+    # a destruction, these rows go red before anyone ships it.
+    _c("everyday-git-branch-list", "git branch -a",
+       "list branches -- reads refs, changes none", "allow", "everyday",
+       verb="read", blast_radius="single"),
+    _c("everyday-git-branch-show-current", "git branch --show-current",
+       "print the checked-out branch", "allow", "everyday",
+       verb="read", blast_radius="single"),
+    _c("everyday-git-diff-output-ordinary", "git diff --output=/tmp/build.diff",
+       "a diff written to ordinary scratch output, not a destruction",
+       "allow", "everyday", verb="read", blast_radius="single"),
+    _c("everyday-git-log-output-ordinary", "git log --output=out.log",
+       "a log written to ordinary build output, not a destruction",
+       "allow", "everyday", verb="read", blast_radius="single"),
+
+    # THE FORCING REF MUTATIONS.  `-D` and `-M` are the spellings git will run
+    # when it refuses the lowercase pair: measured with git 2.52.0,
+    # `git branch -d <unmerged>` exits 1 and `git branch -m <src> <existing>`
+    # exits 128, both leaving every ref in place, while `-D` and `-M` succeed
+    # and the overwritten ref is gone.
+    #
+    # `expect` is "ask" -- the verdict a force ref-deletion OUGHT to reach --
+    # and the residual marker records that it does not get there.  It reaches
+    # `allow`, measured, and that is the reason for the marker.  The classifier now
+    # names the destruction correctly (verb delete, danger_signature
+    # git_ref_delete); core still allows it at a single call on an empty
+    # ledger, exactly as it allows `userdel alice`, `docker rm c1` and
+    # `aws s3 rm s3://b/k`, which are priced identically. That is the
+    # RESIDUAL_TICKET class -- classifier right, policy does not act -- and
+    # not something this change closes.  What it does change is measurable and
+    # is pinned by the RFX-358 test: the honest verb reaches R5's cumulative
+    # delete budget, so a session doing this in a loop turns over at call 21
+    # where on main it ran all 40 untouched.
+    _c("destroy-git-branch-force-delete", "git branch -D main",
+       "force-delete a branch ref; git loses the commits it was holding",
+       "ask", "destroy", residual=RESIDUAL_TICKET,
+       verb="delete", blast_radius="scoped"),
+    _c("destroy-git-branch-delete-force-longform",
+       "git branch --delete --force release/1",
+       "the same force delete spelled out", "ask", "destroy",
+       residual=RESIDUAL_TICKET, verb="delete", blast_radius="scoped"),
+    _c("destroy-git-branch-force-move", "git branch -M main legacy",
+       "force-rename over an existing ref; the overwritten ref is gone",
+       "ask", "destroy", residual=RESIDUAL_TICKET,
+       verb="delete", blast_radius="scoped"),
+
+    # THE NON-FORCING MUTATIONS.  Still not reads -- they change a ref -- but
+    # git refuses to lose data for them on its own, so they are priced as
+    # ordinary EXECUTE rather than charged to the delete budget.  Pinned so
+    # neither direction can drift: a later change that makes them reads again
+    # reopens RFX-358, and one that makes them destructions charges routine
+    # branch hygiene to R5.
+    _c("everyday-git-branch-safe-delete", "git branch -d feature/x",
+       "safe delete -- git refuses if the branch is unmerged", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-git-branch-safe-rename", "git branch -m old new",
+       "safe rename -- git refuses if the target name exists", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+
+    # `--output=` ON A WEIGHTY PATH.  This is the half that moves a verdict:
+    # git writes the diff/log text to the named file and whatever was there is
+    # gone.  Ground truth off disk with a canary, not read off the manual.
+    _c("destroy-git-diff-output-over-a-database",
+       "git diff --output=/srv/prod/db.sqlite",
+       "a diff written over a production database file destroys it",
+       "ask", "destroy", check=True,
+       verb="delete", blast_radius="broad"),
+    _c("destroy-git-show-output-over-a-database",
+       "git show HEAD --output=/srv/prod/db.sqlite",
+       "git show takes --output too, and destroys the same file",
+       "ask", "destroy", check=True,
+       verb="delete", blast_radius="broad"),
 ]
 
 

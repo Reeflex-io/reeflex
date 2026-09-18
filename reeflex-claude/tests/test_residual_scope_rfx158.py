@@ -70,6 +70,21 @@ BYPASSABLE_THROUGH_RFX158 = frozenset({
     # the corpus's own controls -- the rows that must never be missed
     "ctrl-drop-database",
     "ctrl-rm-rf-root",
+    # The git ref/output family, added by RFX-358.  WIDENED DELIBERATELY, which
+    # is what this test asks for: all five are priced `delete`, carry no shell
+    # operator, and stop being a `delete` when the command word comes out of a
+    # substitution, so they are inside this residual from the moment they land.
+    #
+    # Worth saying plainly, because it bounds what RFX-358 closed: the fix
+    # moves these five off the READ arm, and `$(echo git) branch -D main` walks
+    # straight back past it -- exactly as it already does for `rm -rf` and for
+    # the RFX-343 writer family below.  That is RFX-158's gap, not a new one,
+    # and RFX-358 neither widens nor narrows it.
+    "destroy-git-branch-force-delete",
+    "destroy-git-branch-delete-force-longform",
+    "destroy-git-branch-force-move",
+    "destroy-git-diff-output-over-a-database",
+    "destroy-git-show-output-over-a-database",
     # the writer family, added by RFX-343 hours before this was measured
     "destroy-writer-cp-devnull",
     "destroy-writer-cp-file",

@@ -481,6 +481,77 @@ _READ_GIT_SUBCOMMANDS = frozenset([
     "status", "log", "diff", "show", "branch",
 ])
 
+# The three subcommands above that accept `--output=PATH`, which writes the
+# diff/log text to PATH and destroys whatever was there.  Ground truth off
+# disk rather than off the manual (RFX-358): a file holding `PRECIOUS DATA`
+# was passed as `--output` to each of the three; all three returned 0 and the
+# canary was gone, replaced by diff/commit text.  `status` and `branch` do not
+# take the flag, so they are not in here.
+#
+# `--output=P` and `--output P` are the only spellings git accepts: `-oP`
+# exits 129 and `-o P` exits 128, writing nothing.  So this must NOT go through
+# `_flag_value(args, "-o", "--output")` the way `sort` does -- that helper also
+# matches a bare `-o` and the letter `o` inside any short bundle, and pricing a
+# destruction off a spelling git refuses to run states something untrue.
+_OUTPUT_WRITING_GIT_SUBCOMMANDS = frozenset([
+    "diff", "log", "show",
+])
+
+
+def _git_output_target(args: list):
+    """
+    Value of `git <sub> --output=PATH` / `--output PATH`, or None.
+
+    Deliberately narrower than `_flag_value`: only the two spellings git
+    actually accepts.  See `_OUTPUT_WRITING_GIT_SUBCOMMANDS` for why.
+    """
+    for i, a in enumerate(args):
+        if a == "--output":
+            return args[i + 1] if i + 1 < len(args) else None
+        if a.startswith("--output="):
+            return a.split("=", 1)[1]
+    return None
+
+
+# `git branch` flags that CHANGE a ref rather than list one.  Split by whether
+# git will refuse to lose data on its own, measured with the binary (2.52.0)
+# rather than reasoned:
+#
+#     git branch -d  <unmerged>        rc=1    branch survives, git refuses
+#     git branch -D  <unmerged>        rc=0    "Deleted branch (was c3a61fe)"
+#     git branch -m  <src> <existing>  rc=128  both survive, git refuses
+#     git branch -M  <src> <existing>  rc=0    the overwritten ref is gone
+#
+# So the uppercase pair is the one that can lose commits.  The lowercase pair
+# still is not a READ -- it changes a ref -- but pricing it as an irreversible
+# destruction would charge ordinary branch hygiene to R5's cumulative delete
+# budget, which is the RFX-249 over-blocking cost the account-delete branch in
+# `_infra_destructive` already weighs.  They are separated here so the two
+# tiers can be priced differently.
+_GIT_BRANCH_MUTATE_FLAGS = frozenset([
+    "-d", "--delete", "-D", "-m", "--move", "-M", "-c", "--copy", "-C",
+    "--set-upstream-to", "-u", "--unset-upstream", "--edit-description",
+])
+_GIT_BRANCH_FORCE_FLAGS = frozenset(["-D", "-M", "-C", "-f", "--force"])
+
+
+def _git_branch_flags(branch_args: list):
+    """
+    (mutates, forces) for the arguments of `git branch`.
+
+    `--set-upstream-to=origin/main` carries its value inline, so the flag name
+    is taken from the left of the `=`.  Short flags are read CASE-SENSITIVELY:
+    `-d` and `-D` are different commands, and folding them would read a force
+    delete as the spelling git refuses -- the same fail-open direction that
+    `tee`'s bundle test documents above.
+    """
+    names = [a.split("=", 1)[0] for a in branch_args]
+    mutates = any(n in _GIT_BRANCH_MUTATE_FLAGS for n in names)
+    forces = (any(n in _GIT_BRANCH_FORCE_FLAGS for n in names)
+              # `--delete --force` / `-d --force` is `-D` spelled out.
+              or (mutates and any(n in ("-f", "--force") for n in names)))
+    return mutates, forces
+
 # ---------------------------------------------------------------------------
 # Bash EMIT patterns
 # ---------------------------------------------------------------------------
@@ -1195,7 +1266,14 @@ def _classify_segment(segment: str, preview: Optional[str],
         # find with -delete / -exec rm was handled by _infra_destructive above.
         return _read_result(preview)
     if cmd0 == "git" and low and low[0] in _READ_GIT_SUBCOMMANDS:
-        return _read_result(preview)
+        # RFX-358.  `branch` is in that set for `git branch` the LISTING.  The
+        # same subcommand carrying a ref-mutating flag is not a read, and this
+        # arm used to swallow it because it keys on the subcommand word alone.
+        # The forcing spellings were already priced as destructions by
+        # `_infra_destructive` above; the rest fall through to the EXECUTE arm
+        # below rather than claiming benign.
+        if not (low[0] == "branch" and _git_branch_flags(args[1:])[0]):
+            return _read_result(preview)
 
     # --- EXECUTE (default) ----------------------------------------------------
     return _classify_bash_execute(segment, preview)
@@ -1293,6 +1371,35 @@ def _infra_destructive(cmd0: str, args: list, low: list, segment: str):
             return ("container_delete", "scoped", _first_positional(args))
         return None
 
+    # git ref destruction (RFX-358).
+    #
+    # `branch` is a member of `_READ_GIT_SUBCOMMANDS`, and the READ arm in the
+    # dispatcher keys on the subcommand WORD ALONE.  So before this branch
+    # existed `git branch -D main` returned read / benign / reversible /
+    # danger_signature=none -- the cheapest verdict the classifier has -- on a
+    # command that destroys a ref.  Measured end to end, not reasoned: through
+    # `build_envelope` into core's real pack it decided
+    # `allow / reeflex.policy/read_only_internal`.
+    #
+    # Only the FORCING spellings are priced as destructions here; see
+    # `_GIT_BRANCH_MUTATE_FLAGS` for the binary-measured reason that boundary
+    # is git's own and not one this file invented.  The non-forcing mutations
+    # return None and fall through to the default EXECUTE arm, which is what
+    # the dispatcher's READ arm now declines to swallow.
+    #
+    # `blast_radius` is `scoped`, matching the account-delete branch below: a
+    # named branch is one enumerable ref, and SPEC §4.2 lets a name-derived
+    # signal RAISE and never lower.  What this does NOT claim is that the
+    # commits are unrecoverable -- `git branch -D` prints the sha and the
+    # reflog holds it until it expires.  It is priced with the same
+    # `irreversible` the caller hardcodes for every member of this function,
+    # and that limit is stated in the RFX-358 report rather than implied here.
+    if cmd0 == "git" and low[:1] == ["branch"]:
+        mutates, forces = _git_branch_flags(args[1:])
+        if mutates and forces:
+            return ("git_ref_delete", "scoped", _first_positional(args[1:]))
+        return None
+
     # Account / group destruction -- the principal is gone (RFX-166).
     #
     # Before this branch existed the whole family matched nothing here and fell
@@ -1362,7 +1469,7 @@ def _overwrite_targets(cmd0: str, args: list, low: list):
 # `mv` and `tee` are overwhelmingly routine -- which is why every one of them is
 # gated on `_redirect_target_is_weighty` below.
 _WRITER_COMMANDS = frozenset([
-    "tee", "cp", "install", "mv", "sort",
+    "tee", "cp", "install", "mv", "sort", "git",
 ])
 
 # `-t DIR` / `-d`: the destination is a DIRECTORY, so which file inside it gets
@@ -1476,6 +1583,20 @@ def _writer_overwrite_targets(cmd0: str, args: list, low: list):
     elif cmd0 == "sort":
         # Only `-o` writes in place; a bare `sort P` writes to stdout.
         out = _flag_value(args, "-o", "--output")
+        targets = [out] if out else []
+
+    elif cmd0 == "git":
+        # `git diff|log|show --output=P` destroys P (RFX-358).  Without this
+        # the line took the READ arm and priced benign, because that arm reads
+        # the subcommand word and never the flags.
+        #
+        # The subcommand test is adjacency-bound exactly like that READ arm:
+        # `git -c x=y diff --output=P` is not matched here and falls to
+        # EXECUTE.  That direction is noisier rather than weaker, and it was
+        # measured rather than assumed before being left alone.
+        if not low[:1] or low[0] not in _OUTPUT_WRITING_GIT_SUBCOMMANDS:
+            return None
+        out = _git_output_target(args)
         targets = [out] if out else []
 
     # THE GATE. `tee build.log` and `cp a.txt b.txt` are ordinary developer
