@@ -75,6 +75,16 @@ NOT_DESTROYING = (
     "install --directory /srv/prod/newdir",
     "cp ./a.sql ./b.sql /var/lib/pgsql/data/",
     "cp ./a.sql ./b.sql %s" % PROD,
+    # THE SPACED LONG SPELLING, and it is here because a sabotage arm found it
+    # missing.  Disabling the exact-token branch moved NO verdict across the
+    # whole corpus and every assertion above -- the one-letter bundle test
+    # covers a bare `-t`, and `--target-directory=DIR` leaves too few
+    # positionals to price.  `--target-directory DIR` with TWO positionals is
+    # the shape where that branch is the only thing standing, and nothing
+    # asserted it.  Evidence: 11-exact-branch-loadbearing.txt.
+    "mv --target-directory /srv/backup/ %s" % PROD,
+    "cp --target-directory /srv/prod/ %s" % PROD,
+    "install --target-directory /srv/prod/ %s" % PROD,
 )
 
 
@@ -194,6 +204,26 @@ class TestTheBailOnARealDirectoryStays(unittest.TestCase):
         for command in ("cp ./a.sql ./b.sql /var/lib/pgsql/data/",
                         "cp ./a.sql ./b.sql %s" % PROD,
                         "mv ./a.sql ./b.sql /var/lib/pgsql/data/"):
+            with self.subTest(command=command):
+                cls = _c(command)
+                self.assertEqual("execute", cls["verb"])
+                self.assertIsNone(cls["target_ref"])
+
+    def test_the_spaced_long_flag_is_the_exact_branch_standing_alone(self):
+        """`mv --target-directory DIR FILE` -- the case a sabotage arm found.
+
+        Bundles cannot match a `--` flag and the `=` spelling is caught by the
+        positional count, so this is the only shape where matching the flag
+        token itself decides the answer.  EXECUTED: the original path is gone
+        and all five canary lines are recoverable at the new one -- which is
+        the `gzip` exclusion this function's own docstring names, "P is gone,
+        but its bytes are not".  Pricing it delete/irreversible would state
+        something measurably untrue, so `execute` is the truthful answer and
+        not merely the conservative one.
+        """
+        for command in ("mv --target-directory /srv/backup/ %s" % PROD,
+                        "cp --target-directory /srv/prod/ %s" % PROD,
+                        "install --target-directory /srv/prod/ %s" % PROD):
             with self.subTest(command=command):
                 cls = _c(command)
                 self.assertEqual("execute", cls["verb"])

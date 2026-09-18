@@ -929,6 +929,21 @@
       "expect_target_ref": null
     },
     {
+      "id": "everyday-writer-mv-into-directory-long-flag",
+      "tool": "Bash",
+      "input": {
+        "command": "mv --target-directory /srv/backup/ /srv/prod/db.sqlite"
+      },
+      "effect": "the bytes move, they are not destroyed; recoverable-but-disruptive is a pricing this family cannot express",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
       "id": "destroy-bare-assign-rm",
       "tool": "Bash",
       "input": {
