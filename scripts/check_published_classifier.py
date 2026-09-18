@@ -394,6 +394,20 @@ PUBLISHED_LAG: dict = {
     "everyday-mysql-force-inline-select": "RFX-339",
     "everyday-mariadb-force":             "RFX-339",
     "everyday-sqlcmd-codepage":           "RFX-339",
+
+    # qa--251, landing this branch.  A thirteenth row, same republish.  The
+    # in-client directive was anchored to a statement boundary so that a column
+    # named `source` stops being read as a script (the two `everyday-*-named-
+    # source` rows); this row is the discriminator proving the anchor did not
+    # cost the directive when it legitimately follows a `;`.  Published 0.2.0
+    # has no in-client directive check at all, so it answers `allow` here --
+    # MEASURED on the default arm in this round, not inferred:
+    #   code-reports/qa--251--20260918-evidence/05-published-default-arm.txt
+    # The two everyday rows are deliberately NOT declared: 0.2.0 prices them
+    # `allow` and so does the checkout, so an entry for either would be a STALE
+    # declaration and would redden this component.  That agreement is also the
+    # independent evidence that `allow` is the right answer for them.
+    "destroy-mysql-inline-source-after-statement": "RFX-339",
 }
 
 # --------------------------------------------------------------------------
@@ -569,6 +583,17 @@ SEAT_PUBLISHED_LAG: dict = {
     "everyday-mysql-force-inline-select": "RFX-339",
     "everyday-mariadb-force":             "RFX-339",
     "everyday-sqlcmd-codepage":           "RFX-339",
+
+    # qa--251.  MEASURED ON THIS ARM, not mirrored from the table above -- the
+    # rule this block already states, and the first run of this round proved
+    # why it matters: on python3.9 the seat arm SKIPs (reeflex-litellm is not
+    # installable there) and a SKIP is not a pass, so an entry written from the
+    # default arm's result would have been a guess.  Re-run under python3.12 it
+    # installs and answers, and this row diverges there too:
+    #   code-reports/qa--251--20260918-evidence/06-published-seat-arm.txt
+    # reeflex-litellm==0.1.0 answers execute/recoverable/scoped -> `allow`.
+    # Same republish, RFX-339, which is owner-gated; nothing here decides it.
+    "destroy-mysql-inline-source-after-statement": "RFX-339",
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")

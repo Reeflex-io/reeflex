@@ -673,8 +673,20 @@ _DB_POSITIONAL_SCRIPT_SUFFIXES = (".js", ".mongodb")
 # In-client "run this file" directives.  These travel INSIDE otherwise visible
 # inline SQL -- `mysql -e 'source /tmp/wipe.sql'`, `sqlite3 db '.read f.sql'` --
 # so the text is on the command line and the statements still are not.
+#
+# qa--251: the directive is anchored to a STATEMENT boundary -- the start of the
+# argument or a `;` -- and not, as first written, to any whitespace.  `source`
+# is an ordinary SQL identifier, so accepting it mid-statement priced seven
+# measured everyday reads at the heaviest verdict this branch produces:
+# `mysql -e 'SELECT source FROM logs'` and `psql -c 'SELECT source FROM events'`
+# both came back irreversible/broad/sql_script_unbounded.  That is the same
+# fail-noisy this table was written to remove from `mysql -f -e 'SELECT 1'`, and
+# a gate that asks on a SELECT gets switched off.  Anchoring costs nothing in
+# the other direction: a directive IS a statement, so every genuine spelling --
+# `source f.sql`, `.read f.sql`, `\. f.sql`, and any of them after a `;` -- is
+# still at a boundary.  Measured both ways in qa--251's report.
 _DB_INLINE_SOURCE_RE = re.compile(
-    r"""(?:^|[;\s'"])(?: \.read | source | \\\. )\s+\S""",
+    r"""(?:^|[;'"])\s*(?: \.read | source | \\\. )\s+\S""",
     re.VERBOSE | re.IGNORECASE,
 )
 

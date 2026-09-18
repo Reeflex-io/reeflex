@@ -183,5 +183,66 @@ class TheClientStillHasToBeADatabaseClient(unittest.TestCase):
                                     _c(command)["danger_signature"], command)
 
 
+class TheInlineDirectiveIsAStatementNotAWord(unittest.TestCase):
+    """
+    qa--251, landing this branch.  The in-client directive check above was
+    first anchored to any whitespace -- `(?:^|[;\\s'"])(?:\\.read|source|\\\\.)`
+    -- and `source` is an ordinary SQL identifier.  So the table written to
+    stop `mysql -f -e 'SELECT 1'` being priced irreversible/broad reintroduced
+    the same fail-noisy one line down, on seven measured everyday reads.
+
+    Every command in OVERCALLS was scored on the branch head before the anchor
+    was tightened and came back irreversible / broad / `sql_script_unbounded`
+    -- the heaviest verdict this branch produces -- against `recoverable /
+    scoped / none` on main.  They are regression rows, not hypotheticals.
+
+    Nothing here weakens the directive: a directive IS a statement, so the
+    genuine spellings all sit at a boundary and BOUNDARY asserts they stay
+    held.  Classifier input only; no file is opened.
+    """
+
+    OVERCALLS = [
+        "mysql -e 'SELECT source FROM logs'",
+        "mysql -e 'SELECT * FROM events WHERE source = 1'",
+        "psql -c 'SELECT source FROM events'",
+        "psql -c 'SELECT count(*) FROM t WHERE source IS NULL'",
+        "sqlcmd -S prod -Q 'SELECT source FROM t'",
+        "clickhouse-client --query 'SELECT source FROM t'",
+        "mysql -e 'UPDATE feeds SET source = 2 WHERE id = 1'",
+    ]
+
+    BOUNDARY = [
+        ("mysql prod -e 'source /tmp/wipe.sql'", "the directive alone"),
+        ("mysql prod -e '  source /tmp/wipe.sql'", "leading whitespace"),
+        ("mysql prod -e 'USE prod; source /tmp/wipe.sql'", "after a semicolon"),
+        ("mysql prod -e 'SELECT 1; \\. /tmp/wipe.sql'", "one-char, after ;"),
+        ("sqlite3 /srv/prod/db.sqlite 'SELECT 1; .read /tmp/wipe.sql'",
+         ".read after a statement"),
+        ("mysql prod -e 'source wipe.sql'", "a relative path, still a script"),
+    ]
+
+    def test_an_ordinary_read_naming_a_source_column_is_not_a_script(self):
+        for command in self.OVERCALLS:
+            with self.subTest(command=command):
+                r = _c(command)
+                self.assertTrue(
+                    _no_signature(r),
+                    f"visible SQL priced as a hidden script: {command!r} -> "
+                    f"{r['verb']}/{r['reversibility']}/{r['blast_radius']} "
+                    f"sig={r['danger_signature']!r}")
+
+    def test_the_directive_at_a_statement_boundary_is_still_a_script(self):
+        for command, why in self.BOUNDARY:
+            with self.subTest(command=command):
+                self.assertTrue(_is_script_verdict(_c(command)),
+                                f"{why}: {command!r}")
+
+    def test_visible_destructive_sql_next_to_the_word_is_still_caught(self):
+        """Precision here must not reach the SQL patterns, either."""
+        r = _c("mysql -e 'DROP TABLE source'")
+        self.assertEqual("delete", r["verb"])
+        self.assertEqual("irreversible", r["reversibility"])
+
+
 if __name__ == "__main__":
     unittest.main()

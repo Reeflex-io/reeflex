@@ -474,6 +474,14 @@ CASES = [
     _c("destroy-mysql-inline-dot-source", "mysql prod -e '\\. /tmp/wipe.sql'",
        "the same directive in its one-character spelling", "ask", "destroy",
        verb="execute", blast_radius="broad"),
+    # qa--251.  Anchoring the directive to a statement boundary (so a column
+    # named `source` stops being a script -- see the two everyday rows) must
+    # not lose the directive when it legitimately follows one.  This row is the
+    # anchor's own discriminator: remove the `;` branch and it goes red.
+    _c("destroy-mysql-inline-source-after-statement",
+       "mysql prod -e 'USE prod; source /tmp/wipe.sql'",
+       "the directive after a statement separator is still a hidden script",
+       "ask", "destroy", verb="execute", blast_radius="broad"),
 
     # ------------------------------------------------------------------
     # destroy, loops and conditionals -- `do`/`then` is a KEYWORD, not a
@@ -703,6 +711,22 @@ CASES = [
        "everyday", verb="execute", blast_radius="scoped"),
     _c("everyday-sqlcmd-codepage", "sqlcmd -f 65001 -Q 'SELECT 1'",
        "sqlcmd's -f sets the codepage; -i is its script flag", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    # RFX-351 / qa--251.  `source` is an ordinary SQL identifier, and the
+    # in-client directive check three rows up first matched it after ANY
+    # whitespace -- so the fix for the three rows above reintroduced the same
+    # fail-noisy one line down, on plain reads.  Both of these came back
+    # irreversible/broad/sql_script_unbounded before the directive was anchored
+    # to a statement boundary.  They are here because the corpus is what the
+    # published-classifier check is sensitive to: without a row, this regression
+    # is invisible to every ledger.
+    _c("everyday-mysql-select-a-column-named-source",
+       "mysql -e 'SELECT source FROM logs'",
+       "a read whose column is called source; the SQL is fully visible",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-psql-select-a-column-named-source",
+       "psql -c 'SELECT count(*) FROM t WHERE source IS NULL'",
+       "the same word mid-statement on the most common client", "allow",
        "everyday", verb="execute", blast_radius="scoped"),
     _c("everyday-node-eval", 'node -e "console.log(1)"',
        "an inline program that destroys nothing", "allow", "everyday",
