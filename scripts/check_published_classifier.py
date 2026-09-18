@@ -506,6 +506,37 @@ PUBLISHED_LAG: dict = {
     # two more spellings.  Flagged for the owner, not decided.
     "destroy-git-diff-output-over-a-database":       "RFX-339",
     "destroy-git-show-output-over-a-database":       "RFX-339",
+    # RFX-345 -- the writer family's directory-destination bail, which failed
+    # open three ways: a case-folded short flag (`-T` read as `-t`, `install
+    # -D` as `install -d`), and one shared flag set asked to answer for five
+    # commands in which `-t` and `-d` do not mean the same thing (`cp -d` is
+    # --no-dereference; `sort -t` is the field separator).  The lag these six
+    # record is RFX-339, the republish, exactly as every block above.
+    #
+    # Published 0.2.0 has no writer family AT ALL, so it prices all six
+    # execute/recoverable/scoped -> `allow` where the checkout now answers
+    # delete/irreversible/broad -> `ask`.  MEASURED on this arm against the
+    # wheel the index serves, python3.12, and NOT inferred from the diff:
+    # code-reports/dev-2--080--20260918-evidence/20-published-classifier-BEFORE-lag.txt
+    #
+    # THE FIVE `everyday-writer-*` ROWS ARE DELIBERATELY NOT HERE, for the same
+    # reason the six from RFX-343 are not: that same run reported ZERO
+    # fail-noisy, so published 0.2.0 agrees with the tree on every one of them
+    # and declaring any would be STALE on arrival -- `audit` would fail it.
+    # They are the half of RFX-345 that pins what must STAY unpriced.
+    #
+    # These entries WIDEN WHAT THE REPUBLISH CLEARS, and the republish is
+    # OWNER-GATED.  Nothing here performs or decides RFX-339.  What they record
+    # is that a customer on the shipped wheel carries six more spellings of a
+    # production-database destruction than they did yesterday -- on top of the
+    # eight the writer family added and the two RFX-344 added the same night.
+    # Flagged for the owner, not decided.
+    "destroy-writer-cp-no-target-dir-short":      "RFX-339",
+    "destroy-writer-mv-no-target-dir-short":      "RFX-339",
+    "destroy-writer-install-no-target-dir-short": "RFX-339",
+    "destroy-writer-install-create-leading-dirs": "RFX-339",
+    "destroy-writer-cp-no-dereference":           "RFX-339",
+    "destroy-writer-sort-field-separator":        "RFX-339",
 }
 
 # --------------------------------------------------------------------------
@@ -754,6 +785,32 @@ SEAT_PUBLISHED_LAG: dict = {
     # `reeflex-claude==0.2.0`'s.  Both clear on the same republish.
     "destroy-git-diff-output-over-a-database":       "RFX-339",
     "destroy-git-show-output-over-a-database":       "RFX-339",
+    # RFX-345, one distribution further out.  MEASURED ON THIS ARM and not
+    # mirrored from the table above -- the rule every block here states, and
+    # mirroring is not free: the checker FAILS a declaration that does not
+    # actually diverge, so a copied entry reddens the gate as STALE rather
+    # than quieting it.  Measured, python3.12, against the index:
+    #   code-reports/dev-2--080--20260918-evidence/21-seat-arm-BEFORE-lag.txt
+    #     PUBLISHED-LITELLM-SEAT: FAIL (reeflex-litellm==0.1.0; 156 scored;
+    #     43 fail-open; 0 fail-noisy; 37 declared)
+    # `--seat` fails open on exactly these six, through the seat's own
+    # normaliser, and on NONE of the five `everyday-writer-*` rows RFX-345
+    # adds -- which is why those five are absent from both tables.
+    #
+    # The two arms are INDEPENDENT resolves and the default arm cannot see this
+    # table at all, so the fact that both diverge on the same six is a
+    # measurement rather than an entailment.  Cause here is single, as for the
+    # writer block above: the seat normaliser passes a Bash `command` through
+    # untouched, so the mispricing is entirely `reeflex-claude==0.2.0`'s, and
+    # the seat's floor admits whatever reeflex-claude it admits.  Both clear on
+    # the same republish: RFX-339, owner-gated, neither performed nor decided
+    # here.
+    "destroy-writer-cp-no-target-dir-short":      "RFX-339",
+    "destroy-writer-mv-no-target-dir-short":      "RFX-339",
+    "destroy-writer-install-no-target-dir-short": "RFX-339",
+    "destroy-writer-install-create-leading-dirs": "RFX-339",
+    "destroy-writer-cp-no-dereference":           "RFX-339",
+    "destroy-writer-sort-field-separator":        "RFX-339",
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")
