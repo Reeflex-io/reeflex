@@ -514,6 +514,47 @@ CASES = [
        "destroy", verb="delete", blast_radius="broad",
        ref="/srv/prod/db.sqlite"),
 
+    # RFX-345, SECOND PASS (dev-1--170's review of the fix).  Keying the flags
+    # by command and reading `args` closes the case fold.  What replaced it was
+    # a SUBSTRING test over the bundle (`letter in arg[1:]`) and a bail on 3+
+    # positionals -- and both read a short option's VALUE as if it were a flag
+    # letter, which is the same class the ticket was filed for.  getopt reads a
+    # bundle left to right and the first letter that takes an argument swallows
+    # the rest of the token, so:
+    #
+    #   `cp -St P`        -- the t is -S's backup SUFFIX
+    #   `install -oroot`  -- the t belongs to the owner's name
+    #   `install -Dm 755` -- -m never appears as its own token, so 755 counted
+    #                        as a positional, which made three, which tripped
+    #                        the new bail
+    #
+    # REGRESSIONS, NOT RESIDUALS: every one was priced delete/irreversible on
+    # main (caf2cd6) and execute/recoverable with ref=null on #178's head
+    # (28936ee), over a 578-shape cross-product scored under both trees.  All
+    # EXECUTED against a canary in a real /bin/bash.
+    _c("destroy-writer-cp-suffix-value-not-a-flag",
+       "cp -St /dev/null /srv/prod/db.sqlite",
+       "the t is the backup SUFFIX of -S, not --target-directory", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-mv-suffix-value-not-a-flag",
+       "mv -S.tmp /tmp/replacement.dat /srv/prod/db.sqlite",
+       "not only the bare letter -- any backup suffix containing a t did it",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-install-owner-value-not-a-flag",
+       "install -oroot /dev/null /srv/prod/db.sqlite",
+       "the t of the owner name root is not install -t; an ordinary "
+       "provisioning line emptied the database", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-install-bundled-mode-value",
+       "install -Dm 755 /dev/null /srv/prod/db.sqlite",
+       "a bundled -m consumes 755, so counting it as a positional put a real "
+       "destruction over the three-operand bail", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+
     # The half of RFX-343 that pins what must STAY allowed.  `cp`, `mv` and
     # `tee` are overwhelmingly ORDINARY developer work, and a fix that priced
     # them all as deletes would exhaust R5's cumulative delete budget on build
@@ -565,6 +606,25 @@ CASES = [
     _c("everyday-writer-install-make-directory", "install -d /srv/prod/newdir",
        "install -d creates directories; there is no destination file at all",
        "allow", "everyday", verb="execute", blast_radius="scoped"),
+    # The complement of the value-aware bundle scan (dev-1--170).  Stopping at
+    # the first value-taking letter must not stop it BEFORE a real flag, and
+    # must not lose the attached spelling of -t.  Both EXECUTED as survivors.
+    _c("everyday-writer-cp-to-directory-attached", "cp -t/srv/prod/ ./a.sql",
+       "the attached spelling of -t is still a directory destination", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-install-make-directory-bundled",
+       "install -dm 755 /srv/prod/newdir",
+       "the d is a flag even though the m after it takes a value", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    # EXECUTED: exits 1, "missing destination file operand", file intact.
+    # MAIN priced this one -- a destruction that cannot happen -- because it
+    # counted the bundled -m's value as an operand.  A false positive closed
+    # by the same fix, recorded so it cannot come back unnoticed.
+    _c("everyday-writer-install-missing-dest-operand",
+       "install -Dm 755 /srv/prod/db.sqlite",
+       "one operand once the bundled -m takes 755; install exits 1 and the "
+       "file is intact", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
     # Three or more positionals say "DEST is a directory" with no flag at all.
     # EXECUTED both ways: `cp a b DIR/` leaves DIR intact, and `cp a b FILE`
     # exits 1 with "target is not a directory" and leaves FILE intact -- so

@@ -537,6 +537,33 @@ PUBLISHED_LAG: dict = {
     "destroy-writer-install-create-leading-dirs": "RFX-339",
     "destroy-writer-cp-no-dereference":           "RFX-339",
     "destroy-writer-sort-field-separator":        "RFX-339",
+
+    # RFX-345 second pass (dev-1--170's review of #178).  The per-command fix
+    # above replaced a substring test over a LOWERCASED token with a substring
+    # test over a CASED one, and a short option's value is not a flag letter
+    # either: `cp -St`, `mv -S.tmp`, `install -oroot` and `install -Dm 755`
+    # were all priced on main and unpriced on #178's head.  Published 0.2.0 is
+    # further back than both -- it has no writer family at all -- so it prices
+    # all four execute/recoverable/scoped -> `allow` where the checkout now
+    # answers delete/irreversible/broad -> `ask`.
+    #
+    # MEASURED ON THIS ARM against the wheel the index serves, python3.12, and
+    # NOT inferred from the diff or copied from the seat table below:
+    #   dev-1--170--20260918-evidence/06-published-default-arm.txt
+    #     PUBLISHED-CLASSIFIER: FAIL (reeflex-claude==0.2.0; 163 scored;
+    #     47 fail-open; 0 fail-noisy; 43 declared)
+    #
+    # THE THREE NEW `everyday-writer-*` ROWS ARE DELIBERATELY NOT HERE: that
+    # same run reported ZERO fail-noisy, so published 0.2.0 agrees with the
+    # tree on every one of them and declaring any would be STALE on arrival.
+    #
+    # Same widening, same gate: these four are more spellings a customer on the
+    # shipped wheel carries until RFX-339, which is OWNER-GATED and neither
+    # performed nor decided here.
+    "destroy-writer-cp-suffix-value-not-a-flag":     "RFX-339",
+    "destroy-writer-mv-suffix-value-not-a-flag":     "RFX-339",
+    "destroy-writer-install-owner-value-not-a-flag": "RFX-339",
+    "destroy-writer-install-bundled-mode-value":     "RFX-339",
 }
 
 # --------------------------------------------------------------------------
@@ -811,6 +838,29 @@ SEAT_PUBLISHED_LAG: dict = {
     "destroy-writer-install-create-leading-dirs": "RFX-339",
     "destroy-writer-cp-no-dereference":           "RFX-339",
     "destroy-writer-sort-field-separator":        "RFX-339",
+
+    # RFX-345 second pass, one distribution further out.  MEASURED ON THIS ARM
+    # and not mirrored from the table above -- the rule every block here
+    # states, and mirroring is not free: the checker FAILS a declaration that
+    # does not actually diverge, so a copied entry reddens the gate as STALE
+    # rather than quieting it.  Measured, python3.12, against the index:
+    #   dev-1--170--20260918-evidence/07-published-seat-arm.txt
+    #     PUBLISHED-LITELLM-SEAT: FAIL (reeflex-litellm==0.1.0; 163 scored;
+    #     47 fail-open; 0 fail-noisy; 43 declared)
+    # `--seat` fails open on exactly these four, through the seat's own
+    # normaliser, and on NONE of the three new `everyday-writer-*` rows.
+    #
+    # The two arms are INDEPENDENT resolves and the default arm cannot see this
+    # table at all, so both diverging on the same four is a measurement rather
+    # than an entailment.  Cause is single, as above: the seat normaliser
+    # passes a Bash `command` through untouched, so the mispricing is entirely
+    # `reeflex-claude==0.2.0`'s and the seat's floor admits whatever
+    # reeflex-claude it admits.  Both clear on the same republish: RFX-339,
+    # owner-gated, neither performed nor decided here.
+    "destroy-writer-cp-suffix-value-not-a-flag":     "RFX-339",
+    "destroy-writer-mv-suffix-value-not-a-flag":     "RFX-339",
+    "destroy-writer-install-owner-value-not-a-flag": "RFX-339",
+    "destroy-writer-install-bundled-mode-value":     "RFX-339",
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")
