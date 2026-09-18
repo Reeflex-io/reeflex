@@ -459,6 +459,61 @@ CASES = [
        "destroy", verb="delete", blast_radius="broad",
        ref="/srv/prod/db.sqlite"),
 
+    # RFX-345.  The writer family's "the destination is a DIRECTORY, so bail"
+    # test was one shared flag set, matched against the LOWERCASED args, for
+    # all five writer commands.  Each of these six lines EMPTIED a synthetic
+    # canary in a real /bin/bash and was priced execute/recoverable/scoped with
+    # target_ref=null, so R6 had no path to match.  Evidence:
+    # code-reports/dev-2--080--20260918-evidence/02-ground-truth.txt
+    #
+    # Read them in three groups, because they are three different ways for one
+    # test to fail open and a fix that closes only the first leaves four live:
+    #
+    #  (a) CASE.  `-T` is `--no-target-directory` -- it asserts the destination
+    #      is a FILE, the exact opposite of `-t` -- and it folded to `-t`.
+    #      `install -D` folded to `install -d` the same way.  The LONG spelling
+    #      was priced and the SHORT one was not, for the same effect.
+    _c("destroy-writer-cp-no-target-dir-short",
+       "cp -T /dev/null /srv/prod/db.sqlite",
+       "-T asserts the destination is a FILE; case-folding read it as -t",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-mv-no-target-dir-short",
+       "mv -T /tmp/replacement.dat /srv/prod/db.sqlite",
+       "the same fold under a second command word", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-install-no-target-dir-short",
+       "install -T /dev/null /srv/prod/db.sqlite",
+       "and under a third", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-install-create-leading-dirs",
+       "install -D /dev/null /srv/prod/db.sqlite",
+       "-D creates the LEADING directories and writes DEST as a file; it "
+       "folded to -d, which really does mean 'every operand is a directory'",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    #  (b) COMMAND.  `-d` is not a directory destination in `cp` at all -- it
+    #      is `--no-dereference --preserve=links`.  The shared set had no way
+    #      to know which command word it was answering for.
+    _c("destroy-writer-cp-no-dereference",
+       "cp -d /dev/null /srv/prod/db.sqlite",
+       "cp -d is --no-dereference, not a directory destination", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    #  (c) COMMAND, again, and this one carries its own discriminator: in
+    #      `sort`, `-t` is the FIELD SEPARATOR.  The SPACED spelling bailed
+    #      and the attached `sort -t:` was priced correctly -- same command,
+    #      same effect, two answers -- which is the tell that the bail was
+    #      matching a token and never reading a fact about the command.
+    _c("destroy-writer-sort-field-separator",
+       "sort -t : -k1 -o /srv/prod/db.sqlite /tmp/in.txt",
+       "sort -t is --field-separator; -o still opens the operand for "
+       "truncation", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+
     # The half of RFX-343 that pins what must STAY allowed.  `cp`, `mv` and
     # `tee` are overwhelmingly ORDINARY developer work, and a fix that priced
     # them all as deletes would exhaust R5's cumulative delete budget on build
@@ -489,6 +544,36 @@ CASES = [
     # the RFX-343 report.
     _c("everyday-writer-tar-create", "tar -cf ./dist.tar ./src",
        "building an archive is ordinary work, not a destruction", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+
+    # RFX-345's other half: what must STAY unpriced.  The bail on a GENUINE
+    # directory destination is RIGHT -- which file inside DIR gets overwritten
+    # cannot be resolved without touching the filesystem, and this classifier
+    # never does.  A careless fix that reads `args` but drops the `-t`
+    # handling turns every one of these into a claimed destruction of a
+    # directory that measurably survives, so they are the rows that fail first.
+    # All four were EXECUTED: the directory and its contents came through
+    # intact (03-ground-truth-2.txt, 05-ground-truth-3.txt).
+    _c("everyday-writer-cp-to-directory", "cp -t /srv/prod/ ./a.sql",
+       "-t says DEST is a directory; which file inside it is overwritten is "
+       "unresolvable without the filesystem", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-cp-to-directory-bundled", "cp -at /srv/prod/ ./a.sql",
+       "the bundled spelling of the same flag must answer the same; before "
+       "RFX-345 it named the SOURCE as the destroyed file", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-install-make-directory", "install -d /srv/prod/newdir",
+       "install -d creates directories; there is no destination file at all",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    # Three or more positionals say "DEST is a directory" with no flag at all.
+    # EXECUTED both ways: `cp a b DIR/` leaves DIR intact, and `cp a b FILE`
+    # exits 1 with "target is not a directory" and leaves FILE intact -- so
+    # there is no spelling of this that destroys the last positional, and
+    # naming it reported a destruction of /var/lib/pgsql/data/.
+    _c("everyday-writer-cp-many-into-directory",
+       "cp ./a.sql ./b.sql /var/lib/pgsql/data/",
+       "3+ positionals means a directory destination; the last operand is not "
+       "the destroyed file", "allow",
        "everyday", verb="execute", blast_radius="scoped"),
 
     # NEW rows (dev-1 round 054).  The corpus had `destroy-env-rm`

@@ -1594,9 +1594,58 @@ _WRITER_COMMANDS = frozenset([
 # destroyed cannot be resolved without touching the filesystem -- and this
 # classifier never does.  Bail rather than name the directory, which would
 # report a destruction of the wrong thing.
-_WRITER_DIR_DEST_FLAGS = frozenset([
-    "-t", "--target-directory", "-d", "--directory",
-])
+#
+# PER COMMAND, AND CASE-SENSITIVE.  One shared set applied to all five writer
+# commands failed OPEN three different ways, each one EXECUTED against a real
+# /bin/bash over a synthetic canary (RFX-345, and the two beyond it found while
+# fixing it -- evidence in the dev-2--080 report):
+#
+#   1. the set was tested against the LOWERCASED argument list, so `-T`
+#      (`--no-target-directory`, whose destination is emphatically a FILE) read
+#      as `-t`, and `install -D` read as `install -d`.  Four destroying shapes
+#      switched their own pricing off.  The LONG spelling was priced and the
+#      SHORT one was not, for the same command with the same effect.
+#   2. `-d` does not mean "directory destination" in `cp`: it is
+#      `--no-dereference --preserve=links`, and `cp -d /dev/null P` empties P.
+#   3. `-t` and `-d` mean nothing of the sort in `sort`: they are
+#      `--field-separator` and `--dictionary-order`.  `sort -t : -o P in` empties
+#      P, and the SPACED spelling bailed while the attached `-t:` was priced --
+#      which is the tell that this was a token match and never a fact about the
+#      command.
+#
+# So the flags are keyed by command word and compared against `args`, never
+# `low`.  `tee` and `sort` have no directory-destination flag at all and get an
+# empty set rather than a shared one.  Short flags are case-sensitive, and
+# folding case here fails OPEN -- the same sentence `_short_bundle_has` carries
+# two functions down for `tee -a`, which is where the class was first caught.
+_WRITER_DIR_DEST_FLAGS = {
+    # `-T`/`--no-target-directory` is the OPPOSITE of these and must never be
+    # in here: it asserts the destination is a file.
+    "cp":      (frozenset(["-t", "--target-directory"]), "t"),
+    "mv":      (frozenset(["-t", "--target-directory"]), "t"),
+    # `install -d` really does treat every operand as a directory to create.
+    # `install -D` creates the LEADING directories and writes DEST as a FILE --
+    # measured, not read off the man page.
+    "install": (frozenset(["-t", "--target-directory", "-d", "--directory"]), "td"),
+    "tee":     (frozenset(), ""),
+    "sort":    (frozenset(), ""),
+}
+
+
+def _writer_dest_is_a_directory(cmd0: str, args: list) -> bool:
+    """Does this invocation say, in its own flags, that DEST is a directory?"""
+    exact, letters = _WRITER_DIR_DEST_FLAGS.get(cmd0, (frozenset(), ""))
+    if not exact and not letters:
+        return False
+    for a in args:
+        if a in exact or a.split("=", 1)[0] in exact:
+            return True
+        # `cp -at DIR src` is the bundled spelling of `cp -a -t DIR src`.
+        # Case-sensitive by construction, so `-aT` -- which destroys -- does
+        # NOT match and keeps its pricing.
+        if any(_short_bundle_has(a, c) for c in letters):
+            return True
+    return False
 
 
 def _short_bundle_has(arg: str, letter: str) -> bool:
@@ -1667,8 +1716,7 @@ def _writer_overwrite_targets(cmd0: str, args: list, low: list):
     """
     if cmd0 not in _WRITER_COMMANDS:
         return None
-    if any(a in _WRITER_DIR_DEST_FLAGS or a.split("=", 1)[0] in _WRITER_DIR_DEST_FLAGS
-           for a in low):
+    if _writer_dest_is_a_directory(cmd0, args):
         return None
 
     targets: list = []
@@ -1695,6 +1743,19 @@ def _writer_overwrite_targets(cmd0: str, args: list, low: list):
             args, value_flags=("-S", "--suffix", "--backup", "-Z", "--context",
                                "-m", "--mode", "-o", "--owner", "-g", "--group"))
         if len(positional) < 2:
+            return None
+        # THREE OR MORE POSITIONALS SAY "DEST IS A DIRECTORY" WITHOUT A FLAG,
+        # and the answer is the same as for `-t DIR`: bail rather than name the
+        # wrong thing.  Both sub-cases were EXECUTED (RFX-345):
+        #   `cp a.sql b.sql DIR/`  -> exit 0, DIR and its contents intact
+        #   `cp a.sql b.sql FILE`  -> exit 1, "target 'FILE' is not a
+        #                             directory", FILE intact
+        # so there is no spelling of this shape that destroys the last
+        # positional.  Taking it as the destroyed file reported a destruction
+        # of `/var/lib/pgsql/data/` -- a resource that measurably survived.
+        # Fail-CLOSED, so not exposure; but a record naming a resource nothing
+        # touched is not a record an auditor can check.
+        if len(positional) > 2:
             return None
         targets = [positional[-1]]
 
