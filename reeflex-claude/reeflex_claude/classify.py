@@ -940,7 +940,8 @@ def _classify_segment(segment: str, preview: Optional[str],
     `sql_reachable` says whether a database client appears anywhere on the
     line; the SQL patterns are only consulted when it does (`_sql_reachable`).
     """
-    tokens, unbounded, _ = _peel_wrappers(_safe_split(segment))
+    raw_tokens = _safe_split(segment)
+    tokens, unbounded, _ = _peel_wrappers(raw_tokens)
     cmd0 = os.path.basename(tokens[0]).lower() if tokens else ""
     args = tokens[1:]
     low = [a.lower() for a in args]
@@ -986,8 +987,27 @@ def _classify_segment(segment: str, preview: Optional[str],
     # --- whole-file content destruction: dd of=, truncate, any `> file` -----
     # The redirection scan runs over the WHOLE segment, so it catches the
     # trailing spelling (`cmd > file`) that a command-word test cannot see.
+    #
+    # RFX-344.  It runs over the RAW tokens, not the peeled ones.  `>& P cmd`
+    # destroys P -- `>&word` with a non-numeric operand is bash's both-streams
+    # redirection, ground truth off disk with a canary -- but `_peel_wrappers`
+    # consumes a leading redirection AND its target before returning, and
+    # `_TRUNCATING_OPERATORS` does not list `>&`, so the peel neither reported
+    # it as truncated nor left it here to be found.  The path vanished from
+    # both halves of the line and `>& /srv/prod/db.sqlite echo hi` priced
+    # `read`/`benign` with `target_ref=None` -- the cheapest verdict there is,
+    # on an irreversible production destruction.
+    #
+    # Scanning the raw tokens rather than adding `>&` to `_TRUNCATING_OPERATORS`
+    # is deliberate: the peel records what it emptied WITHOUT consulting
+    # `_redirect_target_is_weighty`, so `> build.log echo hi` is already priced
+    # a delete while `echo hi > build.log` is benign.  Widening that tuple
+    # would extend an existing over-call to a new spelling and charge routine
+    # output to R5's cumulative delete budget.  Coming through here instead
+    # puts the leading spelling behind the SAME weight gate as the trailing
+    # one, so the two agree.  The peel is left exactly as RFX-337 wrote it.
     overwrite_paths = _overwrite_targets(cmd0, args, low)
-    redirect_paths = _redirect_overwrite_targets(tokens)
+    redirect_paths = _redirect_overwrite_targets(raw_tokens)
     if redirect_paths is not None:
         overwrite_paths = (overwrite_paths or []) + [
             p for p in redirect_paths if p not in (overwrite_paths or [])
@@ -1324,13 +1344,20 @@ def _writer_overwrite_targets(cmd0: str, args: list, low: list):
 # optional fd prefix (`2>`, `{fd}>`), then one of the truncating operators,
 # then refuses a following `>` so the appending forms never match:
 #
-#   matches  >   >|   &>   >&   1>   2>|   {fd}>   and each with the target
-#            attached (`>/srv/db`), because `>P` is one token, not two
+#   matches  >   >|   &>   &>|   >&   1>   2>|   {fd}>   and each with the
+#            target attached (`>/srv/db`), because `>P` is one token, not two
 #   refuses  >>  &>>  2>>            -- append, prior contents survive
 #            <   <>   <<   <<<       -- not writes, or no truncation (`<>`
 #                                       opens read-write WITHOUT truncating)
+#
+# `&>|` is listed BEFORE `&>`: the alternation is tried left to right, so with
+# `&>` first the longer operator never gets a chance and the `|` is left glued
+# to the front of the path -- `&>|/srv/prod/db.sqlite` yielded a target of
+# `|/srv/prod/db.sqlite`, a file that does not exist, so the verdict was right
+# and the `target_ref` in the audit line named the wrong thing.  Found by
+# RFX-344's before/after sweep, not by reading the pattern.
 _TRUNCATING_REDIRECT_RE = re.compile(
-    r"^(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[0-9]*)(>\||&>|>&|>)(?!>)(.*)$"
+    r"^(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[0-9]*)(>\||&>\||&>|>&|>)(?!>)(.*)$"
 )
 
 # Writing to these destroys nothing, whatever the redirection says.
@@ -1400,7 +1427,13 @@ def _redirect_overwrite_targets(tokens: list):
             target = tokens[i + 1]
             i += 2
         # `2>&1`, `>&2`: duplicating a descriptor, not opening a file.
-        if op == ">&" and target.isdigit():
+        # `>&-`, `2>&-`: CLOSING a descriptor -- also not a file.  `-` is the
+        # third and last fd operand bash accepts, so with it the fd forms are
+        # covered completely; without it the shape was reaching the weight
+        # test and only staying benign because `-` happens not to look
+        # weighty, which is an accident rather than a decision.  This changes
+        # no measured row (RFX-344).
+        if op == ">&" and (target.isdigit() or target == "-"):
             continue
         if not target or _is_null_sink(target):
             continue

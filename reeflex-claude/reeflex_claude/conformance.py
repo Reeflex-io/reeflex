@@ -960,6 +960,78 @@ CASES = [
                    "cell_id": "c1", "edit_mode": "delete"},
        verb="update", blast_radius="single",
        ref="/srv/prod/etl/nightly.ipynb"),
+
+    # ------------------------------------------------------------------
+    # RFX-344 (dev-1 round 163).  `>& PATH cmd` -- bash's both-streams
+    # redirection written BEFORE the command word.
+    #
+    # THESE ROWS ARE AT THE TAIL AND NOT NEXT TO THE REDIRECT FAMILY WHERE
+    # THEY BELONG, deliberately: dev-2--076 was landing fourteen writer-family
+    # rows immediately after `everyday-redirect-fd-dup` in the same hour, and
+    # `reeflex-spec/conformance/claude-adapter-bash.json` is GENERATED from
+    # this list.  Two lanes inserting at one point in a generated artefact is
+    # the shape that merges CLEAN and WRONG -- valid JSON, right row count,
+    # keys silently missing.  Appending at the true tail makes any conflict a
+    # tail conflict and therefore visible.  Move them up beside
+    # `destroy-redirect-*` once both have landed; nothing depends on position.
+    #
+    # WHAT MADE THIS ESCAPE, because it is not what the ticket was filed as.
+    # RFX-344 was filed as "the wrapper peel discards the redirection and its
+    # target".  Measured on main 3347665, leading `>`, `>|`, `&>`, `1>`, `2>`
+    # and `3>` ALL price correctly -- it is `>&` alone.  `_truncates()` folds a
+    # leading fd or `&` off the operator with `lstrip("0123456789&")`, and
+    # lstrip only strips from the LEFT: `&>` normalises to `>` and matches
+    # `_TRUNCATING_OPERATORS`, while `>&` keeps its `&` and does not.  So the
+    # peel consumed the operator AND its target without recording a
+    # truncation, and the path was gone before any classifier saw it ->
+    # verb=read, tier=benign, target_ref=None.  The cheapest verdict the
+    # classifier can produce, on an irreversible production destruction.
+    #
+    # The comment above `_TRUNCATING_OPERATORS` says `>&` "duplicate[s] a
+    # descriptor ... and that was checked against a real shell".  That check
+    # was the wrong instrument: `>&1` and `>&2` do duplicate a descriptor, but
+    # `>&word` with a NON-NUMERIC operand is `&>word`, and it truncates.
+    # Ground truth for both rows below is a real /bin/bash 5.1.8 against a
+    # synthetic canary, predicate "is the ORIGINAL content still there" -- an
+    # emptiness check grades both of these safe, because `>& P echo hi`
+    # truncates and THEN writes three bytes.
+    _c("destroy-redirect-leading-both-streams",
+       ">& /srv/prod/db.sqlite echo hi",
+       "bash's both-streams redirection written before the command word "
+       "truncates the production database (canary destroyed on a real shell)",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-redirect-leading-both-streams-nospace",
+       ">&/srv/prod/db.sqlite echo hi",
+       "removing the space after >& is not a different command",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+
+    # The complement, and the half that stops the NEXT widening from going too
+    # far.  `>&2` and `>&-` are a descriptor duplication and a descriptor
+    # CLOSE: there is no file on the line at all, in either position.  The
+    # corpus had `everyday-redirect-fd-dup` (`echo hi 2>&1`) for the trailing
+    # spelling only, so a fix that priced every `>&` as a truncation -- the
+    # obvious one-line fix for the two rows above -- would have kept the whole
+    # corpus green.  Ground truth: canary SURVIVES on all four.
+    _c("everyday-redirect-fd-dup-leading", ">&2 echo hi",
+       ">&2 before the command word still duplicates a descriptor; there is "
+       "no file to truncate", "allow", "everyday",
+       verb="read", blast_radius="single"),
+    _c("everyday-redirect-fd-close-leading", ">&- echo hi",
+       ">&- CLOSES a descriptor -- `-` is an fd operand, never a path",
+       "allow", "everyday", verb="read", blast_radius="single"),
+    # And the weight gate, which is the reason this fix routes through
+    # `_redirect_overwrite_targets` instead of widening the peel's operator
+    # table: an ordinary file left of a `>&` stays with the command that wrote
+    # it, exactly as `everyday-redirect-build-log` requires for `>`.  Charging
+    # routine output to R5's cumulative delete budget is a cost no
+    # single-decision probe can see, because every such probe starts from an
+    # empty ledger.
+    _c("everyday-redirect-leading-both-streams-ordinary",
+       ">& build.log echo hi",
+       "an ordinary file left of a >& stays with the command that wrote it",
+       "allow", "everyday", verb="read", blast_radius="single"),
 ]
 
 

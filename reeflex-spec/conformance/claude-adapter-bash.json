@@ -2227,6 +2227,81 @@
       "expect_verb": "update",
       "expect_blast_radius": "single",
       "expect_target_ref": "/srv/prod/etl/nightly.ipynb"
+    },
+    {
+      "id": "destroy-redirect-leading-both-streams",
+      "tool": "Bash",
+      "input": {
+        "command": ">& /srv/prod/db.sqlite echo hi"
+      },
+      "effect": "bash's both-streams redirection written before the command word truncates the production database (canary destroyed on a real shell)",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-redirect-leading-both-streams-nospace",
+      "tool": "Bash",
+      "input": {
+        "command": ">&/srv/prod/db.sqlite echo hi"
+      },
+      "effect": "removing the space after >& is not a different command",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "everyday-redirect-fd-dup-leading",
+      "tool": "Bash",
+      "input": {
+        "command": ">&2 echo hi"
+      },
+      "effect": ">&2 before the command word still duplicates a descriptor; there is no file to truncate",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "read",
+      "expect_blast_radius": "single",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-redirect-fd-close-leading",
+      "tool": "Bash",
+      "input": {
+        "command": ">&- echo hi"
+      },
+      "effect": ">&- CLOSES a descriptor -- `-` is an fd operand, never a path",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "read",
+      "expect_blast_radius": "single",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-redirect-leading-both-streams-ordinary",
+      "tool": "Bash",
+      "input": {
+        "command": ">& build.log echo hi"
+      },
+      "effect": "an ordinary file left of a >& stays with the command that wrote it",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "read",
+      "expect_blast_radius": "single",
+      "expect_target_ref": null
     }
   ]
 }
