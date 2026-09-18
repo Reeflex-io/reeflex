@@ -445,9 +445,17 @@ _VERB_DEFAULT: str = "update"
 # What that leaves open: WITH the RFX-304 election in the tree, a compound
 # like `count_and_install` still elects `count` -> `read` -> R1.  That is
 # unchanged by this commit rather than introduced by it, and the fix for it is
-# a rule about UNKNOWN words in the election (an unknown word outranking
-# `read`, since an unknown word never resolves to `read` on its own), not more
-# vocabulary.  Filed separately.
+# a rule about UNKNOWN words in the election, not more vocabulary.  Filed
+# separately.
+#
+# CLOSED BY RFX-324, AND THIS NOTE UNDERSTATED IT BY TEN WORDS.  The residual
+# is not `commit` and `install`: the election skips EVERY word the canon does
+# not know, so it was the whole complement of the canon — `get_and_redact`,
+# `list_and_anonymize`, `describe_and_decommission` and nine more, ALLOWED
+# under R1 as decisions on an irreversible production envelope.  The rule that
+# closed it is the NARROW half of the one proposed above: see the RFX-324
+# block in `_verb_last_resort_key`, which also records why the wide reading
+# ("an unknown word outranking `read`") must not ship.
 #
 # THE COST, MEASURED (dev-1--080 evidence).  A word here escalates any name
 # that CONTAINS it, so a genuine read can be priced a delete.  Over the 39
@@ -527,6 +535,16 @@ _VERB_GUARD_RANK: dict[str, int] = {
     "create": 1, "update": 1, "execute": 1, "transact": 1, "emit": 1,
     "delete": 2,
 }
+
+# RFX-324: the words that join two OPERATIONS in an operation name.  Read by
+# `_verb_last_resort_key` only, and only to decide whether a leading `read`
+# word is still the whole operation — see the block there for why the rule is
+# a conjunction and not "any unknown word".  These three are the spellings the
+# census names actually use (`findOneAndDelete`, `get_or_create_index`,
+# `fetch_then_purge`); they are not a general English conjunction list, and a
+# word added here TIGHTENS (it can only ever turn an elected `read` into the
+# reversibility default), never the other way.
+_VERB_CONJUNCTIONS: frozenset[str] = frozenset({"and", "or", "then"})
 
 
 def _split_words(raw: str) -> list[str]:
@@ -620,6 +638,67 @@ def _verb_last_resort_key(raw_verb: str) -> str | None:
     # which would hand out R1".
     if best_rank == 0 and best_word != words[0]:
         return None
+    # AND A LEADING `read` DOES NOT SURVIVE AN EXPLICIT CONJUNCTION FOLLOWED BY
+    # A WORD THE CANON DOES NOT KNOW (RFX-324).
+    #
+    # The guard above assumes the leading read word IS the operation.  For a
+    # NAMED SECOND OPERATION that assumption is false, and the RFX-308 note
+    # twenty lines up says so in passing — "a compound like `count_and_install`
+    # still elects `count` -> `read` -> R1" — while characterising the residual
+    # as the two words that note declined to add to the vocabulary.  It is not
+    # two words.  The election skips EVERY word the canon does not know, so the
+    # residual is the whole complement of the canon.  Measured as DECISIONS on
+    # `caf2cd6` (qa--229's probe, the real pack, deletions budget 20):
+    #
+    #   verb "get_and_redact"            irreversible/scoped/internal/production
+    #                                    -> allow, reeflex.policy/read_only_
+    #                                       internal, canonical verb `read`,
+    #                                       26 calls in one session without
+    #                                       stopping
+    #   verb "describe_and_decommission" -> same
+    #   verb "list_and_unmount"          -> same
+    #   verb "delete" (control)          -> require_approval at call 21
+    #
+    # i.e. GDPR erasure, account lifecycle and infra teardown, spelled the way
+    # an HONEST adapter names them, decided by the one rule that hands out an
+    # allow and charged nothing by the budget that prices destruction.
+    #
+    # WHY A CONJUNCTION AND NOT "ANY UNKNOWN WORD".  envelope.py's own RFX-308
+    # note proposes the wider rule ("an unknown word outranking `read`").
+    # Both rules were scored through THIS function — not through a model of it
+    # — over 130 names: dev-1--080's 82-name census (every name carrying the
+    # `human_reading` its own author declared, from reeflex-mcp's corpus, the
+    # qa-213 attack set, the last-resort design names and two adversarial
+    # sets) plus the 12 arms above in four spellings each, because an adapter
+    # picks the spelling and `_split_words` folds all four.
+    #
+    #                        arm spellings priced `read`   declared reads
+    #                        (48 = the fail-open)          priced non-read
+    #                                                      (36 = the cost)
+    #   shipped caf2cd6              48                        11
+    #   FIX A  unknown-word veto      0                        34
+    #   FIX B  this clause            0                        11
+    #
+    # FIX A turns `GetObject`, `search_files`, `query_database`,
+    # `read_text_file` and `getUserProfile` into the irreversible default —
+    # a human approval on almost every read — because a read's extra words are
+    # an object noun phrase and nouns are not in a VERB canon.  A conjunction
+    # is what distinguishes the two populations: every arm names a SECOND
+    # operation after an explicit `and`/`or`/`then`, while
+    # `list_directory_with_sizes` and `get_pull_request_comments` contain no
+    # conjunction at all.  The 11 wrong escalations are the shipped tree's own
+    # (RFX-304/RFX-308 priced them) and this clause moves none of them.
+    #
+    # WHAT THIS DOES NOT CLOSE, STATED.  A second operation named WITHOUT a
+    # conjunction after a leading read word — `get_subject_erasure` — still
+    # elects `get`.  That shape is not reachable by this rule without the cost
+    # of the wider one, and it is the residual a future round owns.
+    if best_rank == 0:
+        for i, word in enumerate(words):
+            if word in _VERB_CONJUNCTIONS and any(
+                later not in _VERB_CANON for later in words[i + 1:]
+            ):
+                return None
     return best_word
 
 
