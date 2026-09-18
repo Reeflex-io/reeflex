@@ -41,6 +41,28 @@ def document() -> dict:
         "adapter": "reeflex-claude",
         "tickets": ["RFX-144", "RFX-145", "RFX-146"],
         "residual_ticket": conformance.RESIDUAL_TICKET,
+        # The measured scope of RFX-158's command-substitution shape.  A
+        # residual id in a row tells a reader THAT something is open; this
+        # tells them how much.  Exported because the JSON, not the Python
+        # module, is what the spec ships and what an auditor reads.
+        #
+        # `case_ids` is DERIVED and a guard re-measures it on every run
+        # (test_residual_scope_rfx158).  `measured_utc` is NOT: it is a
+        # hand-maintained literal that nothing checks, so it goes stale the
+        # first time the scope changes and nobody edits this line.  dev-2--093
+        # found it already stale while rebasing -- the set moved from 41 ids to
+        # 53 and the date did not follow it -- and updated it by hand, which is
+        # the same failure mode one round later.  Whoever next widens the scope
+        # either moves this date or, better, derives it.
+        "residual_scope": {
+            conformance.GAP_TICKET: {
+                "shape": "gap-command-substitution",
+                "effect": "a destructive command re-spelled as `$(echo '<command>')` "
+                          "is priced execute/recoverable/scoped with target_ref=null",
+                "measured_utc": "2026-09-19",
+                "case_ids": list(conformance.GAP_COMMAND_SUBSTITUTION_SCOPE),
+            },
+        },
         "environment": "production",
         "generated_by": "python3 scripts/export-claude-conformance.py",
         "source_of_truth": "reeflex-claude/reeflex_claude/conformance.py",
