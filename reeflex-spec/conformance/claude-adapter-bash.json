@@ -779,6 +779,66 @@
       "expect_target_ref": "/srv/prod/db.sqlite"
     },
     {
+      "id": "destroy-writer-cp-suffix-value-not-a-flag",
+      "tool": "Bash",
+      "input": {
+        "command": "cp -St /dev/null /srv/prod/db.sqlite"
+      },
+      "effect": "the t is the backup SUFFIX of -S, not --target-directory",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-writer-mv-suffix-value-not-a-flag",
+      "tool": "Bash",
+      "input": {
+        "command": "mv -S.tmp /tmp/replacement.dat /srv/prod/db.sqlite"
+      },
+      "effect": "not only the bare letter -- any backup suffix containing a t did it",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-writer-install-owner-value-not-a-flag",
+      "tool": "Bash",
+      "input": {
+        "command": "install -oroot /dev/null /srv/prod/db.sqlite"
+      },
+      "effect": "the t of the owner name root is not install -t; an ordinary provisioning line emptied the database",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-writer-install-bundled-mode-value",
+      "tool": "Bash",
+      "input": {
+        "command": "install -Dm 755 /dev/null /srv/prod/db.sqlite"
+      },
+      "effect": "a bundled -m consumes 755, so counting it as a positional put a real destruction over the three-operand bail",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
       "id": "everyday-writer-tee-append",
       "tool": "Bash",
       "input": {
@@ -905,6 +965,51 @@
         "command": "install -d /srv/prod/newdir"
       },
       "effect": "install -d creates directories; there is no destination file at all",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-writer-cp-to-directory-attached",
+      "tool": "Bash",
+      "input": {
+        "command": "cp -t/srv/prod/ ./a.sql"
+      },
+      "effect": "the attached spelling of -t is still a directory destination",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-writer-install-make-directory-bundled",
+      "tool": "Bash",
+      "input": {
+        "command": "install -dm 755 /srv/prod/newdir"
+      },
+      "effect": "the d is a flag even though the m after it takes a value",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-writer-install-missing-dest-operand",
+      "tool": "Bash",
+      "input": {
+        "command": "install -Dm 755 /srv/prod/db.sqlite"
+      },
+      "effect": "one operand once the bundled -m takes 755; install exits 1 and the file is intact",
       "expect": "allow",
       "family": "everyday",
       "check": false,

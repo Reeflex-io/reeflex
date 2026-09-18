@@ -1631,19 +1631,63 @@ _WRITER_DIR_DEST_FLAGS = {
     "sort":    (frozenset(), ""),
 }
 
+# SHORT OPTIONS THAT CONSUME AN ARGUMENT, per writer command.  This is what
+# separates a flag LETTER from an option's VALUE, and it is needed in two
+# places below for the same reason.
+#
+# getopt reads a bundle left to right and the FIRST letter that takes an
+# argument swallows the whole rest of the token as its value.  So in `cp -St`
+# the `t` is the backup SUFFIX, not `--target-directory`; in
+# `install -oroot` the `t` of `root` is part of an owner's name.  A substring
+# test over the bundle cannot tell those from `cp -at DIR`, and it fails OPEN
+# exactly the way the shared lowercased set above did -- it matches a token
+# instead of reading a fact about the command.  Measured, not reasoned: `cp -St
+# /dev/null P`, `cp -S.tmp /dev/null P`, `mv -St src P`, `install -oroot
+# /dev/null P` and `install -groot /dev/null P` each emptied a real canary in a
+# real /bin/bash (dev-1--170 evidence, 03-ground-truth-rev2.txt).
+#
+# `-Z` is NOT here: in GNU cp, mv and install the short spelling takes no
+# argument (only the long `--context[=CTX]` does).
+_WRITER_VALUE_LETTERS = {
+    "cp":      "tS",       # -t DIR, -S SUFFIX
+    "mv":      "tS",
+    "install": "tSmog",    # -t DIR, -S SUFFIX, -m MODE, -o OWNER, -g GROUP
+    "tee":     "",         # --output-error is long-only; no short value option
+    "sort":    "",
+}
+
+
+def _short_bundle_flag_set(arg: str, letters: str, value_letters: str) -> bool:
+    """Is any of `letters` set as a FLAG -- not as part of a VALUE -- in `arg`?
+
+    Reads the bundle the way getopt does: left to right, stopping at the first
+    letter that takes an argument, because everything after that letter belongs
+    to it.  `-at` -> `a`, then `t` is a flag.  `-St` -> `S` takes an argument,
+    so the `t` is its value and nothing is set.
+    """
+    if not arg.startswith("-") or arg.startswith("--") or arg == "-":
+        return False
+    for ch in arg[1:]:
+        if ch in letters:
+            return True
+        if ch in value_letters:
+            return False    # the rest of this token is that option's value
+    return False
+
 
 def _writer_dest_is_a_directory(cmd0: str, args: list) -> bool:
     """Does this invocation say, in its own flags, that DEST is a directory?"""
     exact, letters = _WRITER_DIR_DEST_FLAGS.get(cmd0, (frozenset(), ""))
     if not exact and not letters:
         return False
+    values = _WRITER_VALUE_LETTERS.get(cmd0, "")
     for a in args:
         if a in exact or a.split("=", 1)[0] in exact:
             return True
         # `cp -at DIR src` is the bundled spelling of `cp -a -t DIR src`.
         # Case-sensitive by construction, so `-aT` -- which destroys -- does
         # NOT match and keeps its pricing.
-        if any(_short_bundle_has(a, c) for c in letters):
+        if _short_bundle_flag_set(a, letters, values):
             return True
     return False
 
@@ -1741,7 +1785,8 @@ def _writer_overwrite_targets(cmd0: str, args: list, low: list):
         # invocation, so there is nothing to price.
         positional = _positional_args(
             args, value_flags=("-S", "--suffix", "--backup", "-Z", "--context",
-                               "-m", "--mode", "-o", "--owner", "-g", "--group"))
+                               "-m", "--mode", "-o", "--owner", "-g", "--group"),
+            value_letters=_WRITER_VALUE_LETTERS.get(cmd0, ""))
         if len(positional) < 2:
             return None
         # THREE OR MORE POSITIONALS SAY "DEST IS A DIRECTORY" WITHOUT A FLAG,
@@ -3410,8 +3455,19 @@ def _peel_wrappers(tokens: list):
     return tokens[i:], unbounded, truncated
 
 
-def _positional_args(args: list, value_flags: tuple = ()) -> list:
-    """Positional arguments only: drops flags and the values they consume."""
+def _positional_args(args: list, value_flags: tuple = (),
+                     value_letters: str = "") -> list:
+    """Positional arguments only: drops flags and the values they consume.
+
+    `value_flags` are whole tokens (`-m`, `--mode`).  `value_letters` is for
+    BUNDLES: in `install -Dm 755`, `-m` never appears as its own token, so
+    without it the `755` is counted as a positional.  That miscount is not
+    cosmetic -- it is what puts `install -Dm 755 /dev/null P` over the
+    three-positional bail below and takes a destruction out of the verdict.
+    Only the LAST letter of a bundle can consume the next word; if the value is
+    attached (`-Dm755`) there is nothing to skip.  Callers that pass no
+    `value_letters` are unaffected.
+    """
     out: list = []
     skip = False
     for a in args:
@@ -3421,6 +3477,11 @@ def _positional_args(args: list, value_flags: tuple = ()) -> list:
         if a.startswith("-"):
             if a in value_flags:
                 skip = True
+            elif value_letters and not a.startswith("--") and len(a) > 1:
+                for i, ch in enumerate(a[1:]):
+                    if ch in value_letters:
+                        skip = (i == len(a) - 2)   # nothing attached after it
+                        break
             continue
         out.append(a)
     return out
