@@ -4,10 +4,17 @@
 WHY THIS EXISTS (RFX-300 requirement 3).  On 2026-09-16 qa-211 measured that the
 published `reeflex-mcp` 0.1.3 lets the governed upstream classify itself: an MCP
 server that declares `readOnlyHint: true` on an unmapped destructive tool turns
-core's DENY into ALLOW.  That hole is FIXED on main.  It reaches no customer,
-because `reeflex-mcp/pyproject.toml` on main also declares `version = "0.1.3"`,
-so `pip install -U reeflex-mcp` resolves 0.1.3 == 0.1.3 and reports "already
+core's DENY into ALLOW.  That hole is FIXED on main.  It reached no customer,
+because `reeflex-mcp/pyproject.toml` on main ALSO declared `version = "0.1.3"`,
+so `pip install -U reeflex-mcp` resolved 0.1.3 == 0.1.3 and reported "already
 satisfied".  317 source lines of merged security fixes, invisible to the index.
+
+UPDATE 2026-09-18 (qa--247).  The tree is at 0.1.4, so the COLLISION this
+component was written to catch is over and its waiver is gone.  The INDEX is
+unchanged -- `pip install reeflex-mcp` still serves the 0.1.3 wheel, re-measured
+that day answering `allow` on a `readOnlyHint: true` where the same call with no
+annotation answers `deny` -- and it stays that way until a tag is cut.  That
+half now lives in `UNPUBLISHED_WITH_A_TICKET`, below.
 
 The ticket states the requirement in its own words, and states why the
 instrument that already exists does not meet it:
@@ -49,6 +56,15 @@ THE THREE OUTCOMES, and why the middle one is the whole design
                protects nobody -- the same argument RFX-145 makes about strict
                mode.  The version being absent is reported on its own line so
                the state is visible rather than merely tolerated.
+
+               NOT EVERY LAG IS ROUTINE, though, and the difference is not
+               visible in this outcome on its own: while reeflex-mcp sat at a
+               COLLISION every gate run printed RFX-300 next to it, and moving
+               the version -- the remedy -- turned that into an UNPUBLISHED
+               line indistinguishable from the two packages merely waiting for
+               a tag.  `UNPUBLISHED_WITH_A_TICKET` below is what keeps the
+               ticket on the line until the release actually happens, and
+               fails once it has.
 
   COLLISION    the version is on the index AND the contents differ.  FAIL.
                This is the only failing outcome and it is the RFX-300 shape
@@ -144,15 +160,16 @@ class IndexUnreachable(Exception):
 # ---------------------------------------------------------------------------
 
 WAIVED_COLLISIONS = {
-    "reeflex-mcp": {
-        "version": "0.1.3",
-        "ticket": "RFX-300",
-        "why": "317 lines of merged security fixes (RFX-173 trust_annotations, "
-               "RFX-174/175, RFX-138, RFX-129/214) are on main under the version "
-               "string already on the index, so no customer can pip-upgrade into "
-               "them. Closing it means publishing a HIGHER version, which is a "
-               "release decision.",
-    },
+    # reeflex-mcp / RFX-300 was waived here at 0.1.3, with its own remedy
+    # written into the waiver: "publishing a HIGHER version".  qa--247 moved
+    # reeflex-mcp to 0.1.4, so the collision the waiver excused no longer
+    # exists and this component fails on the stale entry by design (watched
+    # failing: exit 1, "stale waiver: reeflex-mcp (waived at 0.1.3 for
+    # RFX-300)").  Removed rather than left to rot.  The half of RFX-300 the
+    # bump does NOT close -- the index still serving the old wheel until a tag
+    # is cut -- moved to UNPUBLISHED_WITH_A_TICKET below, because that is the
+    # state a version bump puts it in and an unannotated UNPUBLISHED line is
+    # indistinguishable from a routine lag.
     # reeflex-claude / RFX-299 was waived here at 0.2.0 ("#147 moved
     # SETUP_DOC_SHA256 without moving the version, so the published 0.2.0
     # prints a digest the tree no longer has"), with its own remedy written
@@ -160,6 +177,53 @@ WAIVED_COLLISIONS = {
     # the waiver excused no longer exists and the entry now hides nothing --
     # which this component detects and fails on by design. Removed rather
     # than left to rot into a waiver nobody can attribute.
+}
+
+
+# ---------------------------------------------------------------------------
+# UNPUBLISHED entries that are NOT a routine lag.
+#
+# WHY THIS TABLE EXISTS, and it is a consequence of moving a version rather
+# than a new idea.  UNPUBLISHED is "the tree is ahead of the index", which for
+# reeflex-claude and reeflex-litellm today means a normal wait for the next
+# tag.  For reeflex-mcp it means something a customer can be hurt by: the wheel
+# `pip install reeflex-mcp` serves is the one qa--211 measured letting the
+# governed upstream classify itself, and qa--247 re-measured it answering
+# `allow` where the same call with no annotation answers `deny` (RFX-300).
+# Before the bump that fact was printed on every gate run as "COLLISION
+# (WAIVED, RFX-300)".  After the bump the same fact renders as one more
+# UNPUBLISHED line, identical in appearance to the two routine ones -- so the
+# bump, on its own, is a change that makes this component QUIETER about a
+# defect that has not moved.  This table is what stops that.
+#
+# It follows the waiver's three properties, for the same reasons:
+#
+#   1. it names the version the INDEX is serving, so it cannot silently cover a
+#      different artefact;
+#   2. it must name a ticket -- an unexplained annotation is how a gate's
+#      output rots into noise;
+#   3. IT SELF-EXPIRES.  The entry applies only while the package is
+#      UNPUBLISHED.  The moment the tree's version IS on the index -- i.e. the
+#      release happened, which is the remedy -- the entry stops describing
+#      reality and this component FAILS until it is deleted.
+#
+# It does NOT fail the gate while the lag is real, for the reason the module
+# docstring already gives about UNPUBLISHED: a check that reddens on the state
+# the remedy passes through gets switched off, and the remedy here (cut a tag)
+# is an owner decision this component is not entitled to force.  What it is
+# entitled to do is refuse to be quiet.
+# ---------------------------------------------------------------------------
+
+UNPUBLISHED_WITH_A_TICKET = {
+    "reeflex-mcp": {
+        "index_serves": "0.1.3",
+        "ticket": "RFX-300",
+        "why": "the 0.1.3 wheel on the index classifies an unmapped production "
+               "tool from the upstream server's own `readOnlyHint`, so the "
+               "governed component moves core's verdict; the tree's fix "
+               "(RFX-173 trust_annotations, RFX-174/175, RFX-138, RFX-129/214) "
+               "reaches a customer only once this version is published",
+    },
 }
 
 
@@ -327,16 +391,19 @@ def compare(wheel_bytes: bytes, pkg_dir: str, module: str) -> dict:
 # the check
 # ---------------------------------------------------------------------------
 
-def check(repo_root: str, fetch=fetch_wheel, only=None, waivers=None):
+def check(repo_root: str, fetch=fetch_wheel, only=None, waivers=None, flagged=None):
     """Return (ok, lines). `fetch` is injectable so the selftest needs no network."""
     if waivers is None:
         waivers = WAIVED_COLLISIONS
+    if flagged is None:
+        flagged = UNPUBLISHED_WITH_A_TICKET
     packages = discover_packages(repo_root)
     if only:
         packages = [p for p in packages if p["dist"] in only]
 
     out, collisions, unreachable, matched, unpublished = [], [], [], [], []
     waived, used_waivers = [], set()
+    flagged_lags, used_flags = [], set()
 
     if not packages:
         out.append("  no directory with a [project] name+version was found")
@@ -355,8 +422,21 @@ def check(repo_root: str, fetch=fetch_wheel, only=None, waivers=None):
 
         if fetched is None:
             unpublished.append("%s==%s" % (dist, version))
-            out.append("  %s==%s: UNPUBLISHED — the tree is ahead of the index, "
-                       "which is not a collision" % (dist, version))
+            flag = flagged.get(dist)
+            if flag:
+                used_flags.add(dist)
+                flagged_lags.append("%s==%s (%s)" % (dist, version, flag["ticket"]))
+                out.append("  %s==%s: UNPUBLISHED — the tree is ahead of the index, "
+                           "which is not a collision, BUT the index still serves "
+                           "%s==%s and %s: %s"
+                           % (dist, version, dist, flag["index_serves"],
+                              flag["ticket"], flag["why"]))
+                out.append("      `pip install %s` keeps serving %s until this "
+                           "version is published; the tree moving is not the "
+                           "customer getting the fix." % (dist, flag["index_serves"]))
+            else:
+                out.append("  %s==%s: UNPUBLISHED — the tree is ahead of the index, "
+                           "which is not a collision" % (dist, version))
             continue
 
         wheel_bytes, uploaded = fetched
@@ -411,6 +491,22 @@ def check(repo_root: str, fetch=fetch_wheel, only=None, waivers=None):
                    "nothing. Delete it from WAIVED_COLLISIONS)" % "; ".join(stale))
         return False, out
 
+    # Same rule, one state over: an UNPUBLISHED_WITH_A_TICKET entry for a
+    # package that is no longer UNPUBLISHED means the release happened, which
+    # is the whole remedy.  The entry is then a warning about a lag that ended.
+    stale_flags = []
+    for dist, flag in sorted(flagged.items()):
+        if dist not in examined or dist in used_flags:
+            continue
+        stale_flags.append("%s (flagged at %s for %s)" % (dist, flag["index_serves"],
+                                                          flag["ticket"]))
+    if stale_flags:
+        out.append("PUBLISHED-CONTENT: FAIL (stale lag flag: %s — the package is no "
+                   "longer ahead of the index, so the lag this entry warns about is "
+                   "over. Delete it from UNPUBLISHED_WITH_A_TICKET)"
+                   % "; ".join(stale_flags))
+        return False, out
+
     if collisions:
         out.append("PUBLISHED-CONTENT: FAIL (%s published under a version string the "
                    "tree still declares, with different content — a customer running "
@@ -425,6 +521,10 @@ def check(repo_root: str, fetch=fetch_wheel, only=None, waivers=None):
     if waived:
         detail += ", %d KNOWN collision(s) waived against a ticket (%s)" % (
             len(waived), ", ".join(waived))
+    if flagged_lags:
+        detail += (", %d of those lag(s) NOT routine — the index still serves a "
+                   "wheel a ticket is open on (%s)"
+                   % (len(flagged_lags), ", ".join(flagged_lags)))
     out.append("PUBLISHED-CONTENT: PASS (%s)" % detail)
     return True, out
 
@@ -538,6 +638,43 @@ def selftest() -> int:
         record("outage is not read as a stale waiver",
                not ok and any("fails closed" in l for l in lines)
                and not any("stale waiver" in l for l in lines))
+
+        # --- the flagged-lag arms -------------------------------------------
+        # An UNPUBLISHED line that a ticket is open on must not read like the
+        # two routine ones next to it.  Note the SAME `fetch=lambda: None` as
+        # arm 5: the only variable between 7e and 5 is the table.
+        f = {"reeflex-demo": {"index_serves": "1.0.0", "ticket": "RFX-DEMO",
+                              "why": "the old wheel does the bad thing"}}
+
+        # 7e. flagged + still unpublished -> PASS, and the ticket is ON the line
+        ok, lines = check(root, fetch=lambda d, v: None, flagged=f)
+        record("flagged lag -> PASS, names the ticket and the served version",
+               ok and any("UNPUBLISHED" in l and "RFX-DEMO" in l and "1.0.0" in l
+                          for l in lines)
+               and any("NOT routine" in l for l in lines))
+
+        # 7f. the control for 7e: an UNPUBLISHED package with NO entry must
+        #     stay plain.  Without this, 7e could pass because every
+        #     UNPUBLISHED line had grown a ticket.
+        ok, lines = check(root, fetch=lambda d, v: None, flagged={})
+        record("an unflagged lag stays a plain UNPUBLISHED line",
+               ok and any("UNPUBLISHED" in l for l in lines)
+               and not any("RFX-DEMO" in l or "NOT routine" in l for l in lines))
+
+        # 7g. THE ONE THAT MATTERS, the mirror of 7c: the package is on the
+        #     index again -- the release happened -- and the entry remains.
+        #     A warning about a lag that ended is a warning nobody can act on.
+        ok, lines = check(root, fetch=lambda d, v: (_fake_wheel("reeflex_demo", tree_files), "t"),
+                          flagged=f)
+        record("flag whose lag is over -> FAIL (self-expiring)",
+               not ok and any("stale lag flag" in l for l in lines))
+
+        # 7h. and an outage must not be read as the lag having ended, for the
+        #     same reason 7d exists for waivers.
+        ok, lines = check(root, fetch=boom, flagged=f)
+        record("outage is not read as a stale lag flag",
+               not ok and any("fails closed" in l for l in lines)
+               and not any("stale lag flag" in l for l in lines))
 
         # 8. discovery finds the package by walking, not by a hardcoded list
         record("discovery finds the package",

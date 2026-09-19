@@ -247,6 +247,34 @@ class WaiverListMatchesTheRealRepo(unittest.TestCase):
             self.assertTrue(waiver.get("why", "").strip(),
                             "waiver for %s must say why" % dist)
 
+    def test_every_lag_flag_names_a_package_that_exists(self):
+        for dist in cpc.UNPUBLISHED_WITH_A_TICKET:
+            self.assertIn(dist, self.declared,
+                          "lag flag for %r names no package in this repo" % dist)
+
+    def test_every_lag_flag_names_a_ticket(self):
+        for dist, flag in cpc.UNPUBLISHED_WITH_A_TICKET.items():
+            self.assertRegex(flag.get("ticket", ""), r"^RFX-\d+$",
+                             "lag flag for %s must name the ticket that owns it" % dist)
+            self.assertTrue(flag.get("why", "").strip(),
+                            "lag flag for %s must say why" % dist)
+
+    def test_every_lag_flag_is_behind_the_tree(self):
+        """The entry claims the index is serving something OLDER than the tree.
+
+        If it names the version the tree itself declares, there is no lag to
+        warn about and the package is not in the UNPUBLISHED state the entry is
+        only evaluated in -- so it could never be exercised and never expire,
+        which is the same dead-data failure the waiver test above guards.
+        """
+        for dist, flag in cpc.UNPUBLISHED_WITH_A_TICKET.items():
+            if dist not in self.declared:
+                continue
+            self.assertNotEqual(
+                flag["index_serves"], self.declared[dist]["version"],
+                "lag flag for %s says the index serves %s, which is what the tree "
+                "declares — there is no lag, so delete it" % (dist, flag["index_serves"]))
+
 
 class TomlReading(unittest.TestCase):
 
