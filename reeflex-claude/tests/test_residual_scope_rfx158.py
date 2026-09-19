@@ -1,7 +1,8 @@
 """RFX-158 -- the declared residual is one row, and its real scope is the whole
 operator-free destruction vocabulary.
 
-`gap-command-substitution` is declared by exactly ONE corpus row:
+Until dev-3--073 `gap-command-substitution` was declared by exactly ONE corpus
+row:
 
     {"id": "gap-command-substitution",
      "input": {"command": "$(echo rm) -rf /srv/prod/data"},
@@ -12,7 +13,7 @@ Read as a SHAPE that row looks narrow and unfixable -- only the word `rm` is
 produced at runtime.  Read as its own stated EFFECT it covers every command
 whose command word comes out of a substitution, which is every operator-free
 destructive row in the corpus, re-spelled.  Measured, the second reading is the
-true one: 41 of 41 such rows fall from `delete` to `execute` with
+true one: every one of those rows falls from `delete` to `execute` with
 `target_ref=null`, including both `ctrl-` rows -- the corpus's own
 always-catch controls -- and all six writer-family rows added by RFX-343.
 
@@ -28,6 +29,17 @@ check stayed green, because a residual's scope was never something a test read.
 So this asserts the SET, not a count -- a count moving tells you something
 changed, a set tells you WHICH row.  Adding a destructive family to the corpus
 now forces its author to look at this list and say so.
+
+WHAT dev-3--073 CHANGED, and it is only about where the truth lives.  The set
+moved out of this module into `conformance.GAP_COMMAND_SUBSTITUTION_SCOPE` and
+is exported into `claude-adapter-bash.json` under `residual_scope`, so the
+PUBLISHED artefact states its own blast radius instead of leaving it in a test
+nobody outside this repo reads; and the two `ctrl-` rows got corpus rows of
+their own (`gap-command-substitution-ctrl-*`) so that "this gate does not stop
+`rm -rf /` when it is spelled through a substitution" is a line somebody can
+read rather than an inference from a ticket id.  Both are residual, so the
+published-wheel score is untouched -- measured: 145 scored before and after,
+37 fail-open both sides.  The measurement below is unchanged.
 
 Direction of failure, both ways:
   * a row JOINS   -> a new destructive shape is bypassable; widen the residual
@@ -63,97 +75,30 @@ from reeflex_claude.classify import classify
 _OPERATORS = re.compile(r"[|&;<>`\n]|\$\(")
 
 
-# Every corpus row that the adapter prices `delete`, carries no shell operator,
-# and stops being a `delete` when its command word comes out of a substitution.
-# Measured on 2026-09-18 against main 5d6b6f0.
-BYPASSABLE_THROUGH_RFX158 = frozenset({
-    # the corpus's own controls -- the rows that must never be missed
-    "ctrl-drop-database",
-    "ctrl-rm-rf-root",
-    # The git ref/output family, added by RFX-358.  WIDENED DELIBERATELY, which
-    # is what this test asks for: all five are priced `delete`, carry no shell
-    # operator, and stop being a `delete` when the command word comes out of a
-    # substitution, so they are inside this residual from the moment they land.
-    #
-    # Worth saying plainly, because it bounds what RFX-358 closed: the fix
-    # moves these five off the READ arm, and `$(echo git) branch -D main` walks
-    # straight back past it -- exactly as it already does for `rm -rf` and for
-    # the RFX-343 writer family below.  That is RFX-158's gap, not a new one,
-    # and RFX-358 neither widens nor narrows it.
-    "destroy-git-branch-force-delete",
-    "destroy-git-branch-delete-force-longform",
-    "destroy-git-branch-force-move",
-    "destroy-git-diff-output-over-a-database",
-    "destroy-git-show-output-over-a-database",
-    # the writer family, added by RFX-343 hours before this was measured
-    "destroy-writer-cp-devnull",
-    "destroy-writer-cp-file",
-    "destroy-writer-install",
-    "destroy-writer-mv",
-    "destroy-writer-sort-o",
-    "destroy-writer-tee",
-    # whole-file destruction already in the table before RFX-343
-    "destroy-dd-over-db",
-    "destroy-truncate-db",
-    # filesystem
-    "destroy-rm-rf-baseline",
-    "destroy-find-delete",
-    "destroy-mkfs",
-    "destroy-node-rmsync",
-    "destroy-sudo-rm-rf-prod",
-    "destroy-sudo-rm-rf-root",
-    "protected-rm-single-file-under-srv",
-    # wrappers that re-enter the classifier
-    "destroy-bare-assign-rm",
-    "destroy-bash-c-kubectl",
-    "destroy-env-rm",
-    "destroy-eval-rm",
-    "destroy-group-bare",
-    "destroy-group-nested",
-    "destroy-group-spaced",
-    "destroy-nested-shell-c",
-    "destroy-sh-c-wrapped",
-    "destroy-timeout-rm",
-    # cloud and cluster control planes
-    "destroy-aws-rds-delete",
-    "destroy-aws-s3-rm-recursive",
-    "destroy-az-group-delete",
-    "destroy-docker-prune",
-    "destroy-docker-volume-rm",
-    "destroy-gcloud-sql-delete",
-    "destroy-gsutil-rm-r",
-    "destroy-helm-uninstall",
-    "destroy-kubectl-delete-ns",
-    "destroy-kubectl-drain",
-    "destroy-pulumi-destroy",
-    "destroy-terraform-destroy",
-    # RFX-353 (qa--248) widened the destruction vocabulary by five rows that
-    # this residual swallows, and they are declared here DELIBERATELY rather
-    # than re-baselined: the substitution re-spelling takes each of them from
-    # `delete` to `execute` with target_ref=null, exactly as it does the
-    # nineteen filesystem rows above. Nothing about RFX-353 narrows RFX-158 --
-    # the fix reads an argv, and under `$(echo ...)` there is no argv to read
-    # until runtime. The four `rm`/`git clean` rows below were destructions the
-    # letter test ALLOWED outright before RFX-353, so their arrival here is a
-    # gap moving from "open, undeclared and unclassified" to "open, declared
-    # and classified", which is the only thing this ticket claims about them.
-    "destroy-rm-recursive-uppercase-R",
-    "destroy-rm-recursive-uppercase-bundled",
-    "destroy-rm-recursive-uppercase-bundled-rev",
-    "destroy-rm-recursive-uppercase-unprotected-path",
-    "destroy-git-clean-global-option-before-subcommand",
-    "destroy-git-clean-require-force-disabled",
-    # ... and its complement row, which is priced `delete` for the same reason
-    # `everyday-rm-one-tmp-file` right below is.
-    "everyday-rm-single-file-name-contains-dash-r",
-    # The nine `git push` rows RFX-353 added are NOT here and must not be: the
-    # adapter prices them `emit`, so `_operator_free_delete_rows` never
-    # considers them. That is a real limit of this list, not an omission --
-    # it reads the delete vocabulary only.
-    # rows outside the destroy family that are nonetheless priced delete
-    "everyday-rm-one-tmp-file",
-    "fp-rm-file-named-truncate",
-})
+# WHERE THIS SET LIVES, and why it moved (dev-3--073).
+#
+# It used to be a literal in this test module.  That made the true scope of a
+# published residual a fact about a file customers never see: the corpus said
+# "one row", the artefact the spec ships said nothing at all, and the other
+# other fifty existed only in a test's frozenset.  The declaration now lives in
+# `conformance.py` beside the row it qualifies and is exported into
+# `claude-adapter-bash.json` under `residual_scope`, so the artefact states its
+# own blast radius.  This module's job is unchanged and is the important half:
+# it MEASURES the set and fails when the declaration and the measurement
+# disagree, in either direction.  A declaration nothing checks is a comment.
+#
+# A SECOND COPY OF THIS LIST WAS WRITTEN HERE AND THEN REMOVED, which is worth
+# a sentence because the reasoning generalises.  The idea was to pin the set as
+# qa--245 measured it, so that moving the declaration could not silently drop a
+# row.  Sabotage says it caught nothing: delete one id from the declaration in
+# `conformance.py` and `test_the_bypassable_set_is_exactly_what_is_declared`
+# fails on its own, because it MEASURES the set and compares.  The pin could
+# only ever fail alongside it, and it would have made every legitimate future
+# change to the scope edit two lists instead of one.  A guard whose complement
+# is empty is a maintenance cost wearing a guard's name.
+BYPASSABLE_THROUGH_RFX158 = frozenset(
+    conformance.GAP_COMMAND_SUBSTITUTION_SCOPE)
+
 
 
 def _respell(command):
@@ -225,6 +170,48 @@ class TestTheResidualScopeIsDeclared(unittest.TestCase):
             classify("Bash", gap[0]["input"]).get("verb"),
             "gap-command-substitution now prices as a delete -- the residual is "
             "stale; close it in the corpus and delete this module")
+
+    def test_the_published_artefact_states_its_own_blast_radius(self):
+        """The corpus JSON is what the spec ships and what an auditor reads. A
+        residual id in a row says THAT something is open; only this says how
+        much. If the export drops it, the artefact goes back to under-stating
+        the gap to a single row -- the whole scope minus one -- and nothing
+        else here would notice."""
+        import json
+        import os
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__)))),
+            "reeflex-spec", "conformance", "claude-adapter-bash.json")
+        with open(path, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+        scope = doc.get("residual_scope", {}).get("RFX-158")
+        self.assertIsNotNone(
+            scope, "the exported corpus does not declare RFX-158's scope")
+        self.assertEqual(
+            sorted(BYPASSABLE_THROUGH_RFX158), sorted(scope["case_ids"]),
+            "the exported artefact and the module disagree about the scope -- "
+            "re-run scripts/export-claude-conformance.py")
+
+    def test_the_two_controls_are_visible_as_rows_not_only_as_a_list(self):
+        """`ctrl-rm-rf-root` falling into a declared gap is the single fact a
+        reader of this corpus most needs to see, and a membership in a tuple in
+        a Python module is not seeing it. These rows put it in the artefact
+        under a name that says what it is."""
+        by_id = {c["id"]: c for c in conformance.CASES}
+        for cid in ("gap-command-substitution-ctrl-rm-rf-root",
+                    "gap-command-substitution-ctrl-drop-database"):
+            with self.subTest(case=cid):
+                row = by_id.get(cid)
+                self.assertIsNotNone(row, "%s is missing from the corpus" % cid)
+                self.assertEqual("RFX-158", row["residual"])
+                # It must really still be open, or the row is describing a
+                # closed hole -- the same trap as the declaring row itself.
+                self.assertNotEqual(
+                    "delete",
+                    classify("Bash", row["input"]).get("verb"),
+                    "%s now prices as a delete; the gap narrowed and this row "
+                    "and the scope list are both stale" % cid)
 
     def test_the_operator_exclusion_is_real_and_not_a_convenience(self):
         """The rows excluded above are excluded because bash does not destroy
