@@ -356,6 +356,58 @@ PUBLISHED_LAG: dict = {
     # for the owner, not decided.
     "destroy-redirect-leading-both-streams":         "RFX-339",
     "destroy-redirect-leading-both-streams-nospace": "RFX-339",
+
+    # RFX-351 -- the DATABASE-CLIENT script file, under each client's own
+    # documented spelling.  The lag these twelve record is RFX-339, the
+    # republish, exactly as every block above.
+    #
+    # MEASURED on this arm, python3.12, real wheel off the real index, and NOT
+    # inferred from the diff:
+    #   code-reports/dev-1--166--20260918-evidence/06-published-default-arm.txt
+    # Published 0.2.0 prices all nine destroy rows execute/recoverable/scoped
+    # -> `allow`, where the checkout now answers execute/irreversible/broad ->
+    # `ask`.
+    #
+    # THE THREE `everyday-*` ROWS ARE DECLARED HERE, AND THAT IS THE DIFFERENCE
+    # FROM THE WRITER AND REDIRECT BLOCKS ABOVE.  Each of those could say "the
+    # published wheel never got the everyday half wrong".  This one cannot:
+    # 0.2.0 reads `-f` as a script flag for mysql, mariadb and sqlcmd, where it
+    # is `--force`, `--force` and the CODEPAGE option, so the wheel answers
+    # `ask` on an inline `SELECT 1` and the checkout answers `allow`.  Those are
+    # fail-NOISY divergences, they are real divergences, and this component
+    # fails an undeclared one in either direction.
+    #
+    # These entries WIDEN WHAT THE REPUBLISH CLEARS and the republish is
+    # OWNER-GATED; nothing here performs or decides RFX-339.  What they record
+    # is that the exposure grew again -- nine more spellings of an unbounded
+    # script against a production database, on top of the writer family's eight
+    # and the leading-redirect two, all in about a day.
+    "destroy-sqlcmd-input-file":          "RFX-339",
+    "destroy-clickhouse-queries-file":    "RFX-339",
+    "destroy-clickhouse-queries-file-eq": "RFX-339",
+    "destroy-redis-eval-script":          "RFX-339",
+    "destroy-mongosh-positional-script":  "RFX-339",
+    "destroy-mongo-positional-script":    "RFX-339",
+    "destroy-sqlite3-dot-read":           "RFX-339",
+    "destroy-mysql-inline-source":        "RFX-339",
+    "destroy-mysql-inline-dot-source":    "RFX-339",
+    "everyday-mysql-force-inline-select": "RFX-339",
+    "everyday-mariadb-force":             "RFX-339",
+    "everyday-sqlcmd-codepage":           "RFX-339",
+
+    # qa--251, landing this branch.  A thirteenth row, same republish.  The
+    # in-client directive was anchored to a statement boundary so that a column
+    # named `source` stops being read as a script (the two `everyday-*-named-
+    # source` rows); this row is the discriminator proving the anchor did not
+    # cost the directive when it legitimately follows a `;`.  Published 0.2.0
+    # has no in-client directive check at all, so it answers `allow` here --
+    # MEASURED on the default arm in this round, not inferred:
+    #   code-reports/qa--251--20260918-evidence/05-published-default-arm.txt
+    # The two everyday rows are deliberately NOT declared: 0.2.0 prices them
+    # `allow` and so does the checkout, so an entry for either would be a STALE
+    # declaration and would redden this component.  That agreement is also the
+    # independent evidence that `allow` is the right answer for them.
+    "destroy-mysql-inline-source-after-statement": "RFX-339",
 }
 
 # --------------------------------------------------------------------------
@@ -504,6 +556,44 @@ SEAT_PUBLISHED_LAG: dict = {
     # whatever reeflex-claude it admits.  Both clear on the same republish.
     "destroy-redirect-leading-both-streams":         "RFX-339",
     "destroy-redirect-leading-both-streams-nospace": "RFX-339",
+
+    # RFX-351, one distribution further out.  MEASURED ON THIS ARM and not
+    # mirrored from the table above -- the rule this block already states, and
+    # mirroring is not free: a copied entry that does not diverge reddens the
+    # gate as STALE.  Measured, python3.12, `--seat` against
+    # reeflex-litellm==0.1.0:
+    #   code-reports/dev-1--166--20260918-evidence/07-published-seat-arm.txt
+    # The two arms were extracted and compared as ID SETS rather than eyeballed,
+    # and they are equal here: the same nine fail-open and the same three
+    # fail-noisy, through the seat's own normaliser.  Equal is a measurement,
+    # not an entailment -- the two resolves are independent.
+    #
+    # Cause is single, as for the writer family: the seat normaliser passes a
+    # Bash `command` through untouched, so the mispricing is entirely
+    # `reeflex-claude==0.2.0`'s and both clear on the same republish.
+    "destroy-sqlcmd-input-file":          "RFX-339",
+    "destroy-clickhouse-queries-file":    "RFX-339",
+    "destroy-clickhouse-queries-file-eq": "RFX-339",
+    "destroy-redis-eval-script":          "RFX-339",
+    "destroy-mongosh-positional-script":  "RFX-339",
+    "destroy-mongo-positional-script":    "RFX-339",
+    "destroy-sqlite3-dot-read":           "RFX-339",
+    "destroy-mysql-inline-source":        "RFX-339",
+    "destroy-mysql-inline-dot-source":    "RFX-339",
+    "everyday-mysql-force-inline-select": "RFX-339",
+    "everyday-mariadb-force":             "RFX-339",
+    "everyday-sqlcmd-codepage":           "RFX-339",
+
+    # qa--251.  MEASURED ON THIS ARM, not mirrored from the table above -- the
+    # rule this block already states, and the first run of this round proved
+    # why it matters: on python3.9 the seat arm SKIPs (reeflex-litellm is not
+    # installable there) and a SKIP is not a pass, so an entry written from the
+    # default arm's result would have been a guess.  Re-run under python3.12 it
+    # installs and answers, and this row diverges there too:
+    #   code-reports/qa--251--20260918-evidence/06-published-seat-arm.txt
+    # reeflex-litellm==0.1.0 answers execute/recoverable/scoped -> `allow`.
+    # Same republish, RFX-339, which is owner-gated; nothing here decides it.
+    "destroy-mysql-inline-source-after-statement": "RFX-339",
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")

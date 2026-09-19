@@ -437,6 +437,52 @@ CASES = [
        "drops a production table with the statement piped in", "ask",
        "destroy", verb="delete", blast_radius="broad"),
 
+    # RFX-351.  The two rows above pin `-init` and `<`, which is why those two
+    # spellings were right and these nine were not: the flag set was shared by
+    # all ten clients, so each client's OWN documented script-file spelling
+    # fell through to the default Bash execute arm -- `moderate`, no danger
+    # signature, no hold.  Each row names the spelling and the client whose
+    # manual documents it; only the sqlite3 rows are executable on the devbox
+    # and `.read` really does empty a canary database (dev-1--166 evidence 02).
+    _c("destroy-sqlcmd-input-file", "sqlcmd -S prod -i /tmp/wipe.sql",
+       "sqlcmd's script flag is -i; -f is its codepage option", "ask",
+       "destroy", verb="execute", blast_radius="broad"),
+    _c("destroy-clickhouse-queries-file",
+       "clickhouse-client --queries-file /tmp/wipe.sql",
+       "clickhouse-client has no -f; its script flag is --queries-file",
+       "ask", "destroy", verb="execute", blast_radius="broad"),
+    _c("destroy-clickhouse-queries-file-eq",
+       "clickhouse-client --queries-file=/tmp/wipe.sql",
+       "the same flag written with an equals sign", "ask", "destroy",
+       verb="execute", blast_radius="broad"),
+    _c("destroy-redis-eval-script", "redis-cli --eval /tmp/flush.lua",
+       "redis-cli runs a Lua script file with --eval", "ask", "destroy",
+       verb="execute", blast_radius="broad"),
+    _c("destroy-mongosh-positional-script", "mongosh prod /tmp/drop.js",
+       "mongosh takes the script as a bare positional argument", "ask",
+       "destroy", verb="execute", blast_radius="broad"),
+    _c("destroy-mongo-positional-script", "mongo prod /tmp/drop.js",
+       "the legacy shell does the same", "ask", "destroy",
+       verb="execute", blast_radius="broad"),
+    _c("destroy-sqlite3-dot-read",
+       "sqlite3 /srv/prod/db.sqlite '.read /tmp/wipe.sql'",
+       "sqlite3's in-client .read directive; measured against a real canary",
+       "ask", "destroy", check=True, verb="execute", blast_radius="broad"),
+    _c("destroy-mysql-inline-source", "mysql prod -e 'source /tmp/wipe.sql'",
+       "the directive is visible inline; the statements it pulls in are not",
+       "ask", "destroy", verb="execute", blast_radius="broad"),
+    _c("destroy-mysql-inline-dot-source", "mysql prod -e '\\. /tmp/wipe.sql'",
+       "the same directive in its one-character spelling", "ask", "destroy",
+       verb="execute", blast_radius="broad"),
+    # qa--251.  Anchoring the directive to a statement boundary (so a column
+    # named `source` stops being a script -- see the two everyday rows) must
+    # not lose the directive when it legitimately follows one.  This row is the
+    # anchor's own discriminator: remove the `;` branch and it goes red.
+    _c("destroy-mysql-inline-source-after-statement",
+       "mysql prod -e 'USE prod; source /tmp/wipe.sql'",
+       "the directive after a statement separator is still a hidden script",
+       "ask", "destroy", verb="execute", blast_radius="broad"),
+
     # ------------------------------------------------------------------
     # destroy, loops and conditionals -- `do`/`then` is a KEYWORD, not a
     # command. Splitting at `;` leaves `do rm -rf X` whose command word is
@@ -651,6 +697,37 @@ CASES = [
     _c("everyday-psql-select", "psql -h db -c 'SELECT count(*) FROM users'",
        "inline SQL that reads", "allow", "everyday",
        verb="execute", blast_radius="scoped"),
+    # RFX-351, the other direction, and these three are the discriminator that
+    # proves the table is answering a per-command question per command: `-f` is
+    # NOT a script file for any of them. Until this fix all three were priced
+    # irreversible/broad/sql_script_unbounded -- the heaviest verdict that
+    # branch can produce -- and the first one is a SELECT. A gate that asks on
+    # a read gets switched off, which is the argument RFX-131/RFX-145 make.
+    _c("everyday-mysql-force-inline-select", "mysql -f -e 'SELECT 1'",
+       "mysql's -f is --force; the SQL is inline and visible", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-mariadb-force", "mariadb -f prod",
+       "the same flag on the mariadb client, with no SQL at all", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-sqlcmd-codepage", "sqlcmd -f 65001 -Q 'SELECT 1'",
+       "sqlcmd's -f sets the codepage; -i is its script flag", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    # RFX-351 / qa--251.  `source` is an ordinary SQL identifier, and the
+    # in-client directive check three rows up first matched it after ANY
+    # whitespace -- so the fix for the three rows above reintroduced the same
+    # fail-noisy one line down, on plain reads.  Both of these came back
+    # irreversible/broad/sql_script_unbounded before the directive was anchored
+    # to a statement boundary.  They are here because the corpus is what the
+    # published-classifier check is sensitive to: without a row, this regression
+    # is invisible to every ledger.
+    _c("everyday-mysql-select-a-column-named-source",
+       "mysql -e 'SELECT source FROM logs'",
+       "a read whose column is called source; the SQL is fully visible",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-psql-select-a-column-named-source",
+       "psql -c 'SELECT count(*) FROM t WHERE source IS NULL'",
+       "the same word mid-statement on the most common client", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
     _c("everyday-node-eval", 'node -e "console.log(1)"',
        "an inline program that destroys nothing", "allow", "everyday",
        verb="execute", blast_radius="scoped"),
