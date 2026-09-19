@@ -46,6 +46,16 @@ assertion. Location is not execution. Three components now close that class:
                 yield tests under the runner its root is ACTUALLY run with, no
                 test body may be empty, and no test may be skipped
                 unconditionally without a ticketed, printed waiver.
+  suite-coverage  scripts/check_suite_coverage.py — `drift` itself made a claim
+                it could not make (RFX-355): it walks five filename spellings,
+                so an `attack-probe-*.py` or a `.php` is invisible to it, and
+                "inside a suite root" only means "something runs it" where the
+                root is run by DIRECTORY DISCOVERY. reeflex-wordpress/tests is
+                run from two hardcoded literals, so a harness dropped there
+                satisfied drift by its LOCATION while nothing invoked it.
+                Enumerates from the directory instead: every artefact is wired
+                (and its invoker still names it), or declared unwired with a
+                reason, or declared not-a-check. A stale declaration FAILS.
   skip-ledger   prints every SKIPPED/DELEGATED component with its reason, and
                 REFUSES an `--allow-skips` key that carries no registered
                 justification (SKIP_REGISTRY) — you cannot silence a skip here
@@ -269,6 +279,7 @@ N8N_PASS_RE = re.compile(r"^(\d+) passed, (\d+) failed, (\d+) total$", re.M)
 MIGRATION_HEADS_RE = re.compile(r"^MIGRATION-HEADS: (PASS|FAIL) \((.*)\)$", re.M)
 DEP_FLOORS_RE = re.compile(r"^DEP-FLOORS: (PASS|FAIL) \((.*)\)$", re.M)
 TEST_CENSUS_RE = re.compile(r"^TEST-CENSUS: (PASS|FAIL) \((.*)\)$", re.M)
+SUITE_COVERAGE_RE = re.compile(r"^SUITE-COVERAGE: (PASS|FAIL) \((.*)\)$", re.M)
 PUBLISHED_CONTENT_RE = re.compile(r"^PUBLISHED-CONTENT: (PASS|FAIL) \((.*)\)$", re.M)
 CORPUS_LIVE_RE = re.compile(r"^CORPUS-LIVE: (PASS|FAIL) \((.*)\)$", re.M)
 CORPUS_SELFTEST_RE = re.compile(r"^SELFTEST: (PASS|FAIL) \((.*)\)$", re.M)
@@ -368,6 +379,21 @@ def parse_test_census(exit_code, text):
         return False, m.group(2)
     if exit_code == 0:
         return False, "exit 0 but no anchored 'TEST-CENSUS: PASS' summary — cannot confirm"
+    return False, "exit %d" % exit_code
+
+
+def parse_suite_coverage(exit_code, text):
+    """PASS iff exit 0 AND the checker's own anchored 'SUITE-COVERAGE: PASS'
+    line — same shape as parse_test_census (DoD 5). Deliberately identical:
+    a coverage checker that cannot say PASS in its own words does not get to
+    flip this component green by exiting 0."""
+    m = SUITE_COVERAGE_RE.search(text)
+    if exit_code == 0 and m and m.group(1) == "PASS":
+        return True, m.group(2)
+    if m and m.group(1) == "FAIL":
+        return False, m.group(2)
+    if exit_code == 0:
+        return False, "exit 0 but no anchored 'SUITE-COVERAGE: PASS' summary — cannot confirm"
     return False, "exit %d" % exit_code
 
 
@@ -1162,6 +1188,42 @@ class Gate:
         self.show(out, full=True)
         self.component(key, "PASS" if ok else "FAIL", detail)
 
+    # -- suite coverage (RFX-355) --------------------------------------------
+
+    def run_suite_coverage_selftest(self):
+        # The instrument before the verdict. A coverage checker that cannot
+        # detect an uncovered file reports a clean tree over anything — this
+        # same defect one layer down, and the reason `drift` was believed for
+        # so long.
+        key = "suite-coverage-selftest"
+        code, out = self.run_cmd(
+            [sys.executable, os.path.join(REPO_ROOT, "scripts",
+                                          "check_suite_coverage.py"), "--selftest"])
+        m = CORPUS_SELFTEST_RE.search(out)
+        ok = code == 0 and bool(m) and m.group(1) == "PASS"
+        detail = m.group(2) if m else \
+            "no anchored 'SELFTEST: PASS' line — cannot confirm"
+        self.show(out, full=not ok, tail=8)
+        self.component(key, "PASS" if ok else "FAIL", detail)
+
+    def run_suite_coverage(self):
+        # `drift` proves a test-LOOKING file is inside a directory some
+        # component names. Measured on caf2cd6, that is two claims short of
+        # the one it makes about itself (RFX-355): it walks five filename
+        # spellings, so a stray attack-probe-*.py or .php is invisible to it;
+        # and "inside a suite root" only implies "something runs it" for the
+        # roots run by DIRECTORY DISCOVERY. reeflex-wordpress/tests is run
+        # from two hardcoded literals, so a .php dropped there satisfies drift
+        # by its location and is invoked by nothing. This enumerates from the
+        # directory instead and requires every artefact to be dispositioned.
+        key = "suite-coverage"
+        code, out = self.run_cmd(
+            [sys.executable, os.path.join(REPO_ROOT, "scripts",
+                                          "check_suite_coverage.py"), REPO_ROOT])
+        ok, detail = parse_suite_coverage(code, out)
+        self.show(out, full=True)
+        self.component(key, "PASS" if ok else "FAIL", detail)
+
     # -- dependency floors (the PR #123 sweep) -------------------------------
 
     def run_dep_floors(self):
@@ -1271,6 +1333,8 @@ class Gate:
             ("migration-heads-selftest  scripts/tests: checker-tool correctness (migration heads, dependency floors)", self.run_migration_heads_selftest),
             ("migration-heads  static alembic graph (reeflex-app, if checked out) — single head, no DB", self.run_migration_heads),
             ("test-census     every enumerated test file must YIELD TESTS (RFX-87)", self.run_test_census),
+            ("suite-coverage-selftest  the coverage detectors, on fixtures, before their verdict is trusted", self.run_suite_coverage_selftest),
+            ("suite-coverage  every check artefact is invoked by something, or says why not (RFX-355)", self.run_suite_coverage),
             ("drift           test files outside every enumerated suite", self.run_drift),
         ]:
             self.emit("--- %s" % header)
@@ -1384,6 +1448,20 @@ def selftest():
           not parse_test_census(0, "note: TEST-CENSUS: PASS (all good) probably\n")[0])
     check("test-census rejects exit 0 with no anchored line",
           not parse_test_census(0, "collected some tests\n")[0])
+
+    # suite-coverage (RFX-355): same anchored discipline, and for the same
+    # reason — this component's whole subject is a check that was reporting a
+    # reassuring word about something it never looked at.
+    check("suite-coverage accepts real PASS",
+          parse_suite_coverage(0, "SUITE-COVERAGE: PASS (9 wp harness file(s), 28 script(s))\n")[0])
+    check("suite-coverage rejects real FAIL even at exit 0",
+          not parse_suite_coverage(0, "SUITE-COVERAGE: FAIL (1 artefact(s) unaccounted)\n")[0])
+    check("suite-coverage rejects nonzero exit despite PASS line",
+          not parse_suite_coverage(1, "SUITE-COVERAGE: PASS (all dispositioned)\n")[0])
+    check("suite-coverage rejects prose mention",
+          not parse_suite_coverage(0, "note: SUITE-COVERAGE: PASS (all good) probably\n")[0])
+    check("suite-coverage rejects exit 0 with no anchored line",
+          not parse_suite_coverage(0, "walked the tree, looked fine\n")[0])
 
     # pypi-content (RFX-300): the artefact is not the tree. Same anchored
     # discipline — the exit code alone cannot flip this component green, because
