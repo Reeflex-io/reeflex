@@ -408,6 +408,38 @@ PUBLISHED_LAG: dict = {
     # declaration and would redden this component.  That agreement is also the
     # independent evidence that `allow` is the right answer for them.
     "destroy-mysql-inline-source-after-statement": "RFX-339",
+    # RFX-353 (qa--248): the three whole-line flag regexes. `reeflex-claude
+    # ==0.2.0` still asks "is there a dash-LETTER anywhere on the line", so the
+    # wheel a customer installs today ALLOWS a recursive tree delete spelled
+    # `rm -R`, every `git push` that rewrites or removes a remote ref without
+    # the literal token `-f`/`--force`, and both git subcommands written behind
+    # a global option -- and HOLDS four lines that destroy nothing, including a
+    # `git clean` DRY RUN priced delete/irreversible/broad.
+    #
+    # MEASURED on this arm: 44 fail-open / 4 fail-noisy against 159 cases, the
+    # eleven below being the ones this ticket adds. Note which rows are NOT
+    # here: destroy-rm-recursive-uppercase-{R,bundled,bundled-rev} use a
+    # /srv/prod path, where R6 holds the call whatever the blast radius says,
+    # so the published wheel reaches `ask` on them for the wrong reason. The
+    # `-unprotected-path` row is the one that shows the decision escape, and it
+    # is the one that diverges.
+    #
+    # Clears on the republish, like everything above it: RFX-339.
+    "destroy-rm-recursive-uppercase-unprotected-path":     "RFX-339",
+    "destroy-git-push-plus-refspec":                       "RFX-339",
+    "destroy-git-push-mirror":                             "RFX-339",
+    "destroy-git-push-delete-remote-branch":               "RFX-339",
+    "destroy-git-push-empty-source-refspec":               "RFX-339",
+    "destroy-git-push-global-option-before-subcommand":    "RFX-339",
+    "destroy-git-clean-global-option-before-subcommand":   "RFX-339",
+    "destroy-git-clean-require-force-disabled":            "RFX-339",
+    # The fail-NOISY half. Same table for the same reason: the component
+    # fails an undeclared divergence in EITHER direction, and a gate that
+    # asks on a dry run is a gate that gets switched off.
+    "everyday-rm-single-file-name-contains-dash-r":        "RFX-339",
+    "everyday-git-clean-dry-run-path-contains-dash-f":     "RFX-339",
+    "everyday-git-push-dry-run-force":                     "RFX-339",
+    "everyday-git-push-force-if-includes":                 "RFX-339",
 }
 
 # --------------------------------------------------------------------------
@@ -594,6 +626,28 @@ SEAT_PUBLISHED_LAG: dict = {
     # reeflex-litellm==0.1.0 answers execute/recoverable/scoped -> `allow`.
     # Same republish, RFX-339, which is owner-gated; nothing here decides it.
     "destroy-mysql-inline-source-after-statement": "RFX-339",
+    # RFX-353 (qa--248), reached one distribution further out. MEASURED on THIS
+    # arm and compared to the other as an ID SET, not mirrored from it:
+    # `--seat` on python3.12 against reeflex-litellm==0.1.0 reports 44
+    # fail-open / 4 fail-noisy over 159 cases and diverges on exactly the same
+    # eleven ids, through the seat's own normaliser. The two resolves are
+    # independent, so the sets coinciding is a measurement and not an
+    # entailment -- the seat passes a Bash `command` through untouched, and its
+    # floor admits whatever reeflex-claude it admits.
+    #
+    # Same republish: RFX-339.
+    "destroy-rm-recursive-uppercase-unprotected-path":     "RFX-339",
+    "destroy-git-push-plus-refspec":                       "RFX-339",
+    "destroy-git-push-mirror":                             "RFX-339",
+    "destroy-git-push-delete-remote-branch":               "RFX-339",
+    "destroy-git-push-empty-source-refspec":               "RFX-339",
+    "destroy-git-push-global-option-before-subcommand":    "RFX-339",
+    "destroy-git-clean-global-option-before-subcommand":   "RFX-339",
+    "destroy-git-clean-require-force-disabled":            "RFX-339",
+    "everyday-rm-single-file-name-contains-dash-r":        "RFX-339",
+    "everyday-git-clean-dry-run-path-contains-dash-f":     "RFX-339",
+    "everyday-git-push-dry-run-force":                     "RFX-339",
+    "everyday-git-push-force-if-includes":                 "RFX-339",
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")

@@ -1109,6 +1109,128 @@ CASES = [
        ">& build.log echo hi",
        "an ordinary file left of a >& stays with the command that wrote it",
        "allow", "everyday", verb="read", blast_radius="single"),
+
+    # ------------------------------------------------------------------
+    # RFX-353 (qa round 248).  The three whole-line flag regexes, which
+    # never read an argv.  Appended at the true tail for the reason the
+    # RFX-344 block above gives: this list generates
+    # `reeflex-spec/conformance/claude-adapter-bash.json`, and two lanes
+    # inserting mid-list is what merges clean and wrong.
+    #
+    # WHAT MADE THESE ESCAPE.  `_RM_RECURSIVE_RE`, `_GIT_CLEAN_RE` and
+    # `_FORCE_PUSH_RE` asked "is there a dash-LETTER anywhere on the line
+    # after the command word", so the answer was wrong in BOTH directions at
+    # once -- the tell that no argv was ever read.  `rm -R` is the POSIX
+    # synonym of `rm -r` and the letter test is lowercase-only, so a recursive
+    # tree delete was ALLOWED; and a caller's FILENAME
+    # (`rm quarterly-report.txt`) supplied the same letter, so a one-file
+    # delete was HELD.  All three also demanded the git subcommand be the very
+    # next word, so `git -C /srv/app push --force` was not even routed to
+    # EMIT.
+    #
+    # GROUND TRUTH for every row below is the real tool against synthetic
+    # canaries under /tmp (a local bare repo for the push rows -- no remote,
+    # no network): `rm -R` / `-fR` / `-Rf` destroyed the tree; `+refspec`
+    # printed "(forced update)" over a ref a plain push had just been REJECTED
+    # for; `--mirror`, `--delete` and `:branch` each printed "- [deleted]";
+    # `git clean -n` printed "Would remove" and left the canary in place, and
+    # `-n` beat `-f` in all four orders tried; `--dry-run --force` and
+    # `--force-if-includes` alone moved no remote ref.
+    _c("destroy-rm-recursive-uppercase-R", "rm -R /srv/prod/data",
+       "the POSIX synonym of `rm -r`: destroyed the canary tree, and the "
+       "lowercase-only letter test priced it single/none",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/data"),
+    _c("destroy-rm-recursive-uppercase-bundled", "rm -fR /srv/prod/data",
+       "the same delete with the flags bundled the way an agent writes them",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/data"),
+    _c("destroy-rm-recursive-uppercase-bundled-rev", "rm -Rf /srv/prod/data",
+       "and in the other order, which the letter test also missed",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/data"),
+    # The row that actually demonstrates the escape at DECISION level, and the
+    # reason it is spelled with a path outside /srv/prod. On a protected path
+    # R6 holds the call whatever the blast radius says, so the three rows above
+    # come out `ask` on the broken classifier too -- they pin the AXES, not the
+    # decision. Measured through core's real pack: `rm -R /home/app/uploads`
+    # was ALLOWED before RFX-353 and is `require_approval` after, while
+    # `rm -R /srv/prod/data` was `require_approval` both times.
+    _c("destroy-rm-recursive-uppercase-unprotected-path",
+       "rm -R /home/app/uploads",
+       "a recursive tree delete outside the protected prefixes, where nothing "
+       "else rescues the misclassification: allowed outright before RFX-353",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/home/app/uploads"),
+    _c("destroy-git-push-plus-refspec", "git push origin +main:main",
+       "`+` on a refspec IS the force spelling -- git printed '(forced "
+       "update)' for the push it had just rejected as non-fast-forward",
+       "ask", "destroy", verb="emit", blast_radius="broad"),
+    _c("destroy-git-push-mirror", "git push --mirror origin",
+       "--mirror force-updates every ref AND deletes the remote refs absent "
+       "locally: '- [deleted] doomed' on a real bare repo",
+       "ask", "destroy", verb="emit", blast_radius="broad"),
+    _c("destroy-git-push-delete-remote-branch",
+       "git push --delete origin release-2026-09",
+       "removes a remote release branch outright", "ask", "destroy",
+       verb="emit", blast_radius="broad"),
+    _c("destroy-git-push-empty-source-refspec",
+       "git push origin :release-2026-09",
+       "an empty SOURCE refspec deletes the remote branch -- the same "
+       "destruction with no flag at all to spot",
+       "ask", "destroy", verb="emit", blast_radius="broad"),
+    _c("destroy-git-push-global-option-before-subcommand",
+       "git -C /srv/app push --force origin main",
+       "a literal, unambiguous force push that scored BELOW a plain `git "
+       "push`: the global option broke `\\bgit\\s+push\\b` and it never "
+       "reached the EMIT arm at all",
+       "ask", "destroy", verb="emit", blast_radius="broad"),
+    _c("destroy-git-clean-global-option-before-subcommand",
+       "git --no-pager clean -fdx /srv/prod",
+       "the same adjacency hole on the delete side", "ask", "destroy",
+       verb="delete", blast_radius="broad"),
+    # dev-1--167 measured this one and handed it over rather than binning it
+    # after losing the claim race by a minute; it is the only shape in that
+    # handover the argv rewrite did not already close, so it is closed here.
+    _c("destroy-git-clean-require-force-disabled",
+       "git -c clean.requireForce=false clean -d /srv/prod",
+       "the config override that removes git's own refusal: with the default "
+       "config `git clean -d` refuses and removes nothing, with this one it "
+       "printed 'Removing probe/' and the canary was gone",
+       "ask", "destroy", verb="delete", blast_radius="broad"),
+
+    # The complement. These four are the half that stops the fix from being
+    # bought with over-blocking -- each one destroys NOTHING, measured, and
+    # each was priced destructive by the letter test.
+    # Deliberately `everyday-rm-one-tmp-file` with ONE character changed: same
+    # directory, same flags, same everything, and it was held while that row
+    # was allowed. The caller's FILENAME was the entire difference.
+    _c("everyday-rm-single-file-name-contains-dash-r",
+       "rm /tmp/quarterly-report.txt",
+       "one scratch file, non-recursive (its sibling tree survived on a real "
+       "shell) -- `-report` supplied the `-r` the whole-line test was looking "
+       "for, so this priced broad/rm_recursive",
+       "allow", "everyday", verb="delete", blast_radius="single",
+       ref="/tmp/quarterly-report.txt"),
+    _c("everyday-git-clean-dry-run-path-contains-dash-f",
+       "git clean -n src/my-fixtures",
+       "a DRY RUN priced delete/irreversible/broad because the pathspec "
+       "contained `-f`; git printed 'Would remove' and removed nothing",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-git-push-dry-run-force",
+       "git push --dry-run --force origin main",
+       "--dry-run dominates: the remote ref did not move", "allow",
+       "everyday", verb="emit", blast_radius="scoped"),
+    _c("everyday-git-clean-require-force-still-required",
+       "git -c clean.requireForce=true clean -d build/",
+       "the same line with the refusal left standing removes nothing -- git "
+       "answers 'clean.requireForce is true and -f not given: refusing to "
+       "clean'", "allow", "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-git-push-force-if-includes",
+       "git push --force-if-includes origin main",
+       "a SAFETY modifier that never forces on its own -- measured: the push "
+       "was still rejected as non-fast-forward",
+       "allow", "everyday", verb="emit", blast_radius="scoped"),
 ]
 
 
