@@ -288,6 +288,23 @@ class TestTheFlagSetIsKeyedByCommand(unittest.TestCase):
                                              _WRITER_DIR_DEST_FLAGS)
         self.assertEqual(set(_WRITER_COMMANDS), set(_WRITER_DIR_DEST_FLAGS))
 
+    def test_every_writer_command_has_a_value_letter_entry(self):
+        """The SIBLING table, for the reason the test above already exists.
+
+        `_WRITER_VALUE_LETTERS` is read with `.get(cmd0, "")`, so a command
+        missing from it also gets a silent empty set -- and the empty set is
+        the FAIL-OPEN direction here: with no value letters, a bundle scan
+        reads an option's VALUE as a flag letter, which is the exact defect
+        RFX-345's second commit closed.
+
+        Added by qa--257 because this guard's twin caught `git` missing from
+        the other table after RFX-358 added it to the family, and nothing
+        would have caught the same omission here.
+        """
+        from reeflex_claude.classify import (_WRITER_COMMANDS,
+                                             _WRITER_VALUE_LETTERS)
+        self.assertEqual(set(_WRITER_COMMANDS), set(_WRITER_VALUE_LETTERS))
+
 
 if __name__ == "__main__":
     unittest.main()

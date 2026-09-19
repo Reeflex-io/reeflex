@@ -1511,6 +1511,16 @@ _WRITER_DIR_DEST_FLAGS = {
     "install": (frozenset(["-t", "--target-directory", "-d", "--directory"]), "td"),
     "tee":     (frozenset(), ""),
     "sort":    (frozenset(), ""),
+    # `git` joined _WRITER_COMMANDS in RFX-358 (`git diff|log|show --output=P`)
+    # AFTER this table was written, and the rebase that brought the two
+    # together merged CLEANLY -- no conflict, and the empty set it would have
+    # defaulted to is invisible.  `test_every_writer_command_has_an_entry` is
+    # what caught it.  Empty is the right answer here and it is recorded as a
+    # DECISION rather than a default: git's writer arm names its destination
+    # with `--output`, a FILE, and git has no directory-destination flag to
+    # bail on.  git also declines abbreviations (`git diff --out` exits 129,
+    # measured), so there is no prefix spelling to admit either.
+    "git":     (frozenset(), ""),
 }
 
 # SHORT OPTIONS THAT CONSUME AN ARGUMENT, per writer command.  This is what
@@ -1536,6 +1546,12 @@ _WRITER_VALUE_LETTERS = {
     "install": "tSmog",    # -t DIR, -S SUFFIX, -m MODE, -o OWNER, -g GROUP
     "tee":     "",         # --output-error is long-only; no short value option
     "sort":    "",
+    # Same decision as the table above, for the same reason and recorded here
+    # rather than left to `.get(cmd0, "")`: the default is correct and silent,
+    # and silence is what let `git` sit in one of these tables and not the
+    # other.  git's writer arm reads `--output=P` / `-o P` through
+    # `_git_output_target`, not through a short-bundle scan.
+    "git":     "",
 }
 
 
