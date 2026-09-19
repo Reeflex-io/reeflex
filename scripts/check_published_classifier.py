@@ -469,6 +469,29 @@ PUBLISHED_LAG: dict = {
     # would fail them.  They are the half of RFX-346 that pins what must STAY
     # allowed -- a no-op in front of an ordinary build is still an ordinary
     # build -- and the published wheel never got that wrong.
+
+    # RFX-358 -- `git diff|show --output=PATH` writes the diff text over PATH.
+    # The lag these two record is RFX-339, the republish, exactly as above.
+    #
+    # Published 0.2.0 prices both read/reversible/single -> `allow`, where the
+    # checkout now answers delete/irreversible/broad -> `ask`.  MEASURED on this
+    # arm, real wheel off the real index, and NOT inferred from the diff:
+    #   code-reports/qa--253--20260918-evidence/60-published-before.txt
+    #     FAIL-OPEN  destroy-git-diff-output-over-a-database
+    #     FAIL-OPEN  destroy-git-show-output-over-a-database
+    #
+    # THE `everyday-git-*-output-ordinary` AND `everyday-git-branch-*` ROWS ARE
+    # DELIBERATELY NOT HERE.  `git branch -a`, `git branch --show-current`,
+    # `git diff --output=/tmp/build.diff` and `git log --output=out.log` answer
+    # `allow` on 0.2.0 AND on the checkout -- the published wheel never got
+    # those wrong, so declaring them would be STALE on arrival and `audit` would
+    # fail them.  They are the half of RFX-358 that pins what must STAY allowed.
+    #
+    # THE THREE `destroy-git-branch-*` ROWS ARE NOT HERE EITHER, for a different
+    # reason: they carry residual=RFX-153 and this arm excludes residual rows,
+    # so they are never scored here at all.  That is not a claim that the
+    # published wheel gets them right -- it does not, it prices them
+    # read/benign.  It is a statement about which ledger is allowed to see them.
     #
     # These entries WIDEN WHAT THE REPUBLISH CLEARS, and the republish is
     # OWNER-GATED.  Nothing here performs or decides RFX-339.  What they record
@@ -479,6 +502,10 @@ PUBLISHED_LAG: dict = {
     "destroy-noop-prefix-redirect-brace":    "RFX-339",
     "destroy-noop-prefix-truncate":          "RFX-339",
     "destroy-noop-prefix-control-unwrapped": "RFX-339",
+
+    # two more spellings.  Flagged for the owner, not decided.
+    "destroy-git-diff-output-over-a-database":       "RFX-339",
+    "destroy-git-show-output-over-a-database":       "RFX-339",
 }
 
 # --------------------------------------------------------------------------
@@ -711,6 +738,22 @@ SEAT_PUBLISHED_LAG: dict = {
     "destroy-noop-prefix-redirect-brace":    "RFX-339",
     "destroy-noop-prefix-truncate":          "RFX-339",
     "destroy-noop-prefix-control-unwrapped": "RFX-339",
+
+    # RFX-358, one distribution further out.  MEASURED ON THIS ARM and not
+    # mirrored from the table above, for the reason the RFX-344 block states:
+    # the checker FAILS a declaration that does not actually diverge, so a
+    # copied entry reddens the gate as STALE instead of quieting it.
+    #   code-reports/qa--253--20260918-evidence/62-seat-before.txt
+    # `--seat` against reeflex-litellm==0.1.0 fails open on the same two rows,
+    # and on NONE of the `everyday-git-*` rows -- measured before this entry was
+    # written, with the arm named, because the default arm cannot see this table
+    # and a run without `--seat` proves nothing about it.
+    #
+    # Cause here is single, as with the RFX-344 pair above: the seat normaliser
+    # passes a Bash `command` through untouched, so the mispricing is entirely
+    # `reeflex-claude==0.2.0`'s.  Both clear on the same republish.
+    "destroy-git-diff-output-over-a-database":       "RFX-339",
+    "destroy-git-show-output-over-a-database":       "RFX-339",
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")
