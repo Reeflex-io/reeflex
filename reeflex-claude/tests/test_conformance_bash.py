@@ -499,18 +499,38 @@ class TestRFX145StrictModeMovesADecision(unittest.TestCase):
         The README tells an operator that strict mode is the only lever they
         have over the commands the classifier cannot read (RFX-158). That is a
         claim about behaviour, so it is asserted here rather than only written
-        down: five of the six `gap-` cases reach a human under strict mode
-        because they are unrecognised EXECUTE commands, and
-        `gap-remote-execution` does not because it is classified `emit`.
+        down: the `gap-` cases that are unrecognised EXECUTE commands reach a
+        human under strict mode.
+
+        TWO KINDS OF UNCOVERED, AND THE DISTINCTION IS THE POINT.
+        `gap-remote-execution` is uncovered because strict does not reach it --
+        it is classified `emit`, so the lever misses it and the operator should
+        know.  The three `gap-command-substitution*` rows are uncovered because
+        they are already DENIED without the lever (RFX-158, dev-3--141): strict
+        cannot "cover" a row that no longer needs covering.  Lumping the two
+        together under one list would have let the second kind hide the first.
         """
         os.environ["REEFLEX_CLAUDE_STRICT"] = "1"
-        covered, uncovered = [], []
+        covered, already_refused, uncovered = [], [], []
         for case in conformance.cases(family="gap"):
             verdict = policy_oracle(classify(case["tool"], case["input"]))
-            (covered if verdict == "ask" else uncovered).append(case["id"])
+            if verdict == "ask":
+                covered.append(case["id"])
+            elif verdict == "deny":
+                already_refused.append(case["id"])
+            else:
+                uncovered.append(case["id"])
         self.assertEqual(["gap-remote-execution"], uncovered,
                          "the strict-mode claim in README.md no longer holds: "
-                         f"covered={covered} uncovered={uncovered}")
+                         f"covered={covered} already_refused={already_refused} "
+                         f"uncovered={uncovered}")
+        self.assertEqual(
+            ["gap-command-substitution",
+             "gap-command-substitution-ctrl-rm-rf-root",
+             "gap-command-substitution-ctrl-drop-database"],
+            already_refused,
+            "the set of gap rows refused WITHOUT the lever moved; if a row "
+            "joined, say so in the corpus, and if one left, RFX-158 regressed")
 
     def test_strict_sends_an_unknown_production_command_to_a_human(self):
         os.environ["REEFLEX_CLAUDE_STRICT"] = "1"

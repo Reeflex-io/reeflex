@@ -163,13 +163,29 @@ DESTRUCTIVE_FORMS = [
 BENIGN_TWINS = [
     ("dollar_paren",      "echo $(ls -la /tmp)"),
     ("backticks",         "echo `ls -la /tmp`"),
-    ("bare_substitution", "$(ls /tmp)"),
     ("process_read",      "cat <(ls -la /tmp)"),
     ("process_write",     "echo hi > >(cat > /tmp/out.log)"),
     ("double_quoted",     'echo "listing: $(ls -la /tmp)"'),
     ("nested",            "echo $(echo $(ls /tmp))"),
     ("after_separator",   "true && echo $(ls /tmp)"),
     ("in_argument",       "tar -czf /tmp/b.tgz $(ls /tmp)"),
+]
+
+# WHAT RFX-158 TOOK OUT OF THE LIST ABOVE, and it should be read as a price
+# rather than as an omission.  `$(ls /tmp)` used to be a benign twin: the
+# substitution is the whole command, it lists a directory, and the gate let it
+# through.  It is now refused in production, because the adapter cannot tell it
+# from `$(echo rm) -rf /srv/prod/data` -- the word that will run is not in the
+# text in either case.  THAT is what "refuse rather than guess" costs, spelled
+# out in a row instead of buried in a rate: 472 of 57,027 real shell command
+# lines are shaped like this one (dev-3--141 `02-fp-cost.json`).
+#
+# The other eight twins above still pass, and they are the reason this is not
+# "a gate that refuses `$(`": `cat <(ls -la /tmp)`, `echo $(ls -la /tmp)` and
+# `tar -czf /tmp/b.tgz $(ls /tmp)` all have a command word the adapter CAN
+# resolve, and none of them is touched.
+REFUSED_BECAUSE_THE_WORD_IS_UNRESOLVABLE = [
+    ("bare_substitution", "$(ls /tmp)"),
 ]
 
 # Text that LOOKS like a substitution and is not.  These are the reason the
@@ -244,12 +260,32 @@ class TestWhatIsStillUnread(_HookPlaneCase):
     corpus residual is stale -- which is its own defect.
     """
 
-    def test_the_command_word_form_is_still_open(self):
-        decision, _ = self.hook("$(echo rm) -rf /srv/prod/data")
-        self.assertEqual(
-            "allow", decision,
-            "gap-command-substitution now reaches a human -- good, but the "
-            "corpus still marks it residual=RFX-158; update the corpus.")
+    def test_the_command_word_form_is_closed_in_production(self):
+        """RFX-158, the half the console decided to close (dev-3--141).
+
+        RFX-301 does not close this and never could -- it reads what a
+        substitution RUNS, and here the substitution runs a read while the
+        destruction is the word it PRINTS.  What closed it is refusing to price
+        the line at all.  Kept in this module, next to the shape it is not, so
+        the distinction between "read the body" and "refuse the word" stays
+        legible.
+        """
+        decision, envelope = self.hook("$(echo rm) -rf /srv/prod/data")
+        self.assertEqual("deny", decision)
+        self.assertEqual("irreversible", envelope["axes"]["reversibility"])
+        self.assertEqual("systemic", envelope["axes"]["blast_radius"])
+        self.assertIsNone(
+            envelope["target"]["ref"],
+            "a target we cannot name must not be invented")
+
+    def test_the_cost_of_closing_it_is_stated_and_not_hidden(self):
+        """The benign shape the fix refuses. It is one row and it is the whole
+        false-positive class: a command word that is a substitution, benign or
+        not, is refused because the adapter cannot tell which."""
+        for name, command in REFUSED_BECAUSE_THE_WORD_IS_UNRESOLVABLE:
+            with self.subTest(case=name):
+                decision, _ = self.hook(command)
+                self.assertEqual("deny", decision)
 
     def test_variable_indirection_is_still_open(self):
         decision, _ = self.hook("RM=rm; $RM -rf /srv/prod/data")
