@@ -1476,9 +1476,118 @@ _WRITER_COMMANDS = frozenset([
 # destroyed cannot be resolved without touching the filesystem -- and this
 # classifier never does.  Bail rather than name the directory, which would
 # report a destruction of the wrong thing.
-_WRITER_DIR_DEST_FLAGS = frozenset([
-    "-t", "--target-directory", "-d", "--directory",
-])
+#
+# PER COMMAND, AND CASE-SENSITIVE.  One shared set applied to all five writer
+# commands failed OPEN three different ways, each one EXECUTED against a real
+# /bin/bash over a synthetic canary (RFX-345, and the two beyond it found while
+# fixing it -- evidence in the dev-2--080 report):
+#
+#   1. the set was tested against the LOWERCASED argument list, so `-T`
+#      (`--no-target-directory`, whose destination is emphatically a FILE) read
+#      as `-t`, and `install -D` read as `install -d`.  Four destroying shapes
+#      switched their own pricing off.  The LONG spelling was priced and the
+#      SHORT one was not, for the same command with the same effect.
+#   2. `-d` does not mean "directory destination" in `cp`: it is
+#      `--no-dereference --preserve=links`, and `cp -d /dev/null P` empties P.
+#   3. `-t` and `-d` mean nothing of the sort in `sort`: they are
+#      `--field-separator` and `--dictionary-order`.  `sort -t : -o P in` empties
+#      P, and the SPACED spelling bailed while the attached `-t:` was priced --
+#      which is the tell that this was a token match and never a fact about the
+#      command.
+#
+# So the flags are keyed by command word and compared against `args`, never
+# `low`.  `tee` and `sort` have no directory-destination flag at all and get an
+# empty set rather than a shared one.  Short flags are case-sensitive, and
+# folding case here fails OPEN -- the same sentence `_short_bundle_has` carries
+# two functions down for `tee -a`, which is where the class was first caught.
+_WRITER_DIR_DEST_FLAGS = {
+    # `-T`/`--no-target-directory` is the OPPOSITE of these and must never be
+    # in here: it asserts the destination is a file.
+    "cp":      (frozenset(["-t", "--target-directory"]), "t"),
+    "mv":      (frozenset(["-t", "--target-directory"]), "t"),
+    # `install -d` really does treat every operand as a directory to create.
+    # `install -D` creates the LEADING directories and writes DEST as a FILE --
+    # measured, not read off the man page.
+    "install": (frozenset(["-t", "--target-directory", "-d", "--directory"]), "td"),
+    "tee":     (frozenset(), ""),
+    "sort":    (frozenset(), ""),
+    # `git` joined _WRITER_COMMANDS in RFX-358 (`git diff|log|show --output=P`)
+    # AFTER this table was written, and the rebase that brought the two
+    # together merged CLEANLY -- no conflict, and the empty set it would have
+    # defaulted to is invisible.  `test_every_writer_command_has_an_entry` is
+    # what caught it.  Empty is the right answer here and it is recorded as a
+    # DECISION rather than a default: git's writer arm names its destination
+    # with `--output`, a FILE, and git has no directory-destination flag to
+    # bail on.  git also declines abbreviations (`git diff --out` exits 129,
+    # measured), so there is no prefix spelling to admit either.
+    "git":     (frozenset(), ""),
+}
+
+# SHORT OPTIONS THAT CONSUME AN ARGUMENT, per writer command.  This is what
+# separates a flag LETTER from an option's VALUE, and it is needed in two
+# places below for the same reason.
+#
+# getopt reads a bundle left to right and the FIRST letter that takes an
+# argument swallows the whole rest of the token as its value.  So in `cp -St`
+# the `t` is the backup SUFFIX, not `--target-directory`; in
+# `install -oroot` the `t` of `root` is part of an owner's name.  A substring
+# test over the bundle cannot tell those from `cp -at DIR`, and it fails OPEN
+# exactly the way the shared lowercased set above did -- it matches a token
+# instead of reading a fact about the command.  Measured, not reasoned: `cp -St
+# /dev/null P`, `cp -S.tmp /dev/null P`, `mv -St src P`, `install -oroot
+# /dev/null P` and `install -groot /dev/null P` each emptied a real canary in a
+# real /bin/bash (dev-1--170 evidence, 03-ground-truth-rev2.txt).
+#
+# `-Z` is NOT here: in GNU cp, mv and install the short spelling takes no
+# argument (only the long `--context[=CTX]` does).
+_WRITER_VALUE_LETTERS = {
+    "cp":      "tS",       # -t DIR, -S SUFFIX
+    "mv":      "tS",
+    "install": "tSmog",    # -t DIR, -S SUFFIX, -m MODE, -o OWNER, -g GROUP
+    "tee":     "",         # --output-error is long-only; no short value option
+    "sort":    "",
+    # Same decision as the table above, for the same reason and recorded here
+    # rather than left to `.get(cmd0, "")`: the default is correct and silent,
+    # and silence is what let `git` sit in one of these tables and not the
+    # other.  git's writer arm reads `--output=P` / `-o P` through
+    # `_git_output_target`, not through a short-bundle scan.
+    "git":     "",
+}
+
+
+def _short_bundle_flag_set(arg: str, letters: str, value_letters: str) -> bool:
+    """Is any of `letters` set as a FLAG -- not as part of a VALUE -- in `arg`?
+
+    Reads the bundle the way getopt does: left to right, stopping at the first
+    letter that takes an argument, because everything after that letter belongs
+    to it.  `-at` -> `a`, then `t` is a flag.  `-St` -> `S` takes an argument,
+    so the `t` is its value and nothing is set.
+    """
+    if not arg.startswith("-") or arg.startswith("--") or arg == "-":
+        return False
+    for ch in arg[1:]:
+        if ch in letters:
+            return True
+        if ch in value_letters:
+            return False    # the rest of this token is that option's value
+    return False
+
+
+def _writer_dest_is_a_directory(cmd0: str, args: list) -> bool:
+    """Does this invocation say, in its own flags, that DEST is a directory?"""
+    exact, letters = _WRITER_DIR_DEST_FLAGS.get(cmd0, (frozenset(), ""))
+    if not exact and not letters:
+        return False
+    values = _WRITER_VALUE_LETTERS.get(cmd0, "")
+    for a in args:
+        if a in exact or a.split("=", 1)[0] in exact:
+            return True
+        # `cp -at DIR src` is the bundled spelling of `cp -a -t DIR src`.
+        # Case-sensitive by construction, so `-aT` -- which destroys -- does
+        # NOT match and keeps its pricing.
+        if _short_bundle_flag_set(a, letters, values):
+            return True
+    return False
 
 
 def _short_bundle_has(arg: str, letter: str) -> bool:
@@ -1549,8 +1658,7 @@ def _writer_overwrite_targets(cmd0: str, args: list, low: list):
     """
     if cmd0 not in _WRITER_COMMANDS:
         return None
-    if any(a in _WRITER_DIR_DEST_FLAGS or a.split("=", 1)[0] in _WRITER_DIR_DEST_FLAGS
-           for a in low):
+    if _writer_dest_is_a_directory(cmd0, args):
         return None
 
     targets: list = []
@@ -1575,8 +1683,22 @@ def _writer_overwrite_targets(cmd0: str, args: list, low: list):
         # invocation, so there is nothing to price.
         positional = _positional_args(
             args, value_flags=("-S", "--suffix", "--backup", "-Z", "--context",
-                               "-m", "--mode", "-o", "--owner", "-g", "--group"))
+                               "-m", "--mode", "-o", "--owner", "-g", "--group"),
+            value_letters=_WRITER_VALUE_LETTERS.get(cmd0, ""))
         if len(positional) < 2:
+            return None
+        # THREE OR MORE POSITIONALS SAY "DEST IS A DIRECTORY" WITHOUT A FLAG,
+        # and the answer is the same as for `-t DIR`: bail rather than name the
+        # wrong thing.  Both sub-cases were EXECUTED (RFX-345):
+        #   `cp a.sql b.sql DIR/`  -> exit 0, DIR and its contents intact
+        #   `cp a.sql b.sql FILE`  -> exit 1, "target 'FILE' is not a
+        #                             directory", FILE intact
+        # so there is no spelling of this shape that destroys the last
+        # positional.  Taking it as the destroyed file reported a destruction
+        # of `/var/lib/pgsql/data/` -- a resource that measurably survived.
+        # Fail-CLOSED, so not exposure; but a record naming a resource nothing
+        # touched is not a record an auditor can check.
+        if len(positional) > 2:
             return None
         targets = [positional[-1]]
 
@@ -3231,8 +3353,19 @@ def _peel_wrappers(tokens: list):
     return tokens[i:], unbounded, truncated
 
 
-def _positional_args(args: list, value_flags: tuple = ()) -> list:
-    """Positional arguments only: drops flags and the values they consume."""
+def _positional_args(args: list, value_flags: tuple = (),
+                     value_letters: str = "") -> list:
+    """Positional arguments only: drops flags and the values they consume.
+
+    `value_flags` are whole tokens (`-m`, `--mode`).  `value_letters` is for
+    BUNDLES: in `install -Dm 755`, `-m` never appears as its own token, so
+    without it the `755` is counted as a positional.  That miscount is not
+    cosmetic -- it is what puts `install -Dm 755 /dev/null P` over the
+    three-positional bail below and takes a destruction out of the verdict.
+    Only the LAST letter of a bundle can consume the next word; if the value is
+    attached (`-Dm755`) there is nothing to skip.  Callers that pass no
+    `value_letters` are unaffected.
+    """
     out: list = []
     skip = False
     for a in args:
@@ -3242,6 +3375,11 @@ def _positional_args(args: list, value_flags: tuple = ()) -> list:
         if a.startswith("-"):
             if a in value_flags:
                 skip = True
+            elif value_letters and not a.startswith("--") and len(a) > 1:
+                for i, ch in enumerate(a[1:]):
+                    if ch in value_letters:
+                        skip = (i == len(a) - 2)   # nothing attached after it
+                        break
             continue
         out.append(a)
     return out
