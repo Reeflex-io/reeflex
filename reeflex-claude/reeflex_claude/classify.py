@@ -545,12 +545,201 @@ def _git_branch_flags(branch_args: list):
     delete as the spelling git refuses -- the same fail-open direction that
     `tee`'s bundle test documents above.
     """
-    names = [a.split("=", 1)[0] for a in branch_args]
+    # `--del`, `--de` and `--d` are all `--delete` (measured: "Deleted branch
+    # doomed"), and unresolved they left `mutates` False, so the line went to
+    # the READ arm and priced reversible / single -- BELOW the `--delete`
+    # spelling's recoverable / scoped.  `--fo` is ambiguous for this
+    # subcommand (--force or --format) and stays unpriced (RFX-361).
+    names = [a.split("=", 1)[0]
+             for a in _canonical_long_flags("git branch", branch_args)]
     mutates = any(n in _GIT_BRANCH_MUTATE_FLAGS for n in names)
     forces = (any(n in _GIT_BRANCH_FORCE_FLAGS for n in names)
               # `--delete --force` / `-d --force` is `-D` spelled out.
               or (mutates and any(n in ("-f", "--force") for n in names)))
     return mutates, forces
+
+# ---------------------------------------------------------------------------
+# LONG-OPTION PREFIX RESOLUTION  (RFX-366, RFX-361)
+# ---------------------------------------------------------------------------
+#
+# A caller picks their own verdict by choosing HOW FAR TO SPELL A FLAG.  Both
+# argv parsers this module reads -- GNU getopt_long and git's parse-options --
+# resolve an unambiguous ABBREVIATION of a long option, while every flag test
+# in here compared a token to one LITERAL spelling.  Measured against the real
+# binaries on 2026-09-19 (coreutils 8.32, git 2.52.0), scored by survival of
+# five canary lines: `sort --o /srv/prod/db.sqlite in.txt` truncates the file
+# exactly as `sort --output` does, and priced execute / recoverable / scoped
+# with target_ref null, while the fully spelled flag priced an irreversible
+# broad overwrite of the named path.  Twenty shapes failed OPEN that way and
+# ten failed NOISY -- the fail-noisy half matters on its own, because a gate
+# that asks on an append is a gate that gets switched off (RFX-131, RFX-145).
+#
+# A BLANKET `startswith` IS NOT THE FIX, and was measured wrong in both
+# directions before this table was written:
+#
+#     cp --targ DIR SRC     -> --target-directory,    SRC survives 5/5
+#     cp --no-t SRC FILE    -> --no-target-directory, FILE destroyed 0/5
+#
+# Two tokens that mean opposite things, and `startswith("--t")` folds the
+# second into the first.  In the other direction `git push --forc` is NOT a
+# force push: git exits 129 with "ambiguous option: forc (could be
+# --force-with-lease or --force-if-includes)" and no ref moves, so pricing it
+# as one would state something the binary refuses to do.
+#
+# So the resolver mirrors what the parsers actually do.  That needs each
+# command's OWN COMPLETE long-option list, because ambiguity is a property of
+# the whole list and not of the flags this module happens to price:
+#
+#   * an EXACT match wins even when it is a prefix of longer options
+#     (`git push --force` forces; `--forc` is refused)
+#   * otherwise exactly one option carrying that prefix wins
+#   * zero matches, or two or more -> the tool refuses, so the token changes
+#     nothing and neither does the verdict
+#   * matching is CASE-SENSITIVE (`sort --OUT` is "unrecognized option")
+#   * `--flag=VALUE` abbreviates too (`sort --o=P` truncates P)
+#   * a bare `--` ends option parsing (`sort -- --out P` reads `--out` as a
+#     FILE NAME, and P survives)
+#
+# THE KEY IS PER COMMAND, AND FOR GIT PER SUBCOMMAND, because the same
+# abbreviation resolves differently: `--f` is `--force` for `git clean` and is
+# AMBIGUOUS for `git push` (--follow-tags/--force/--force-if-includes/
+# --force-with-lease).  One shared table would be wrong for one of them.
+#
+# The lists are harvested from the binaries' own option tables rather than
+# from a manual -- `<cmd> --help` for coreutils and `git <sub> -h` for git,
+# reading only option-DEFINITION lines, since a `--flag` mentioned in prose is
+# not an option of the command.  git's `--[no-]x` entries are recorded as
+# `--x`, because git's own ambiguity report lists only the positive forms
+# ("could be --delete or --dry-run", never "--no-delete"), and no flag priced
+# here is reachable by a `--no-` prefix in any case.
+#
+# WHAT THIS TABLE DOES NOT COVER, each an exclusion that was measured:
+#
+# * `git diff|log|show --output` does NOT abbreviate.  `--outpu`, `--outp`,
+#   `--out`, `--ou` and `--o` all exit 128 with the canary intact 5/5, because
+#   those options are read by the revision parser and not by parse-options.
+#   So `_git_output_target` is deliberately left alone and those three
+#   subcommands get no entry here.  The set of parsers that abbreviate is
+#   itself a measurement, not an assumption about "tools".
+# * The lists are those of the versions above.  A host carrying a coreutils or
+#   git that has ADDED an option can make a prefix this table calls unique
+#   ambiguous there -- which prices a destruction the binary refuses (noisy),
+#   not the reverse.  A host that has REMOVED one is the fail-open direction;
+#   no such removal is known in either project.
+# * SHORT flags are untouched.  Neither parser abbreviates them, and the
+#   case-sensitivity the bundle tests rely on is unchanged.
+_LONG_OPTIONS_BY_COMMAND = {
+    "sort":       frozenset([
+        "--batch-size", "--buffer-size", "--check", "--compress-program",
+        "--debug", "--dictionary-order", "--field-separator",
+        "--files0-from", "--general-numeric-sort", "--help",
+        "--human-numeric-sort", "--ignore-case", "--ignore-leading-blanks",
+        "--ignore-nonprinting", "--key", "--merge", "--month-sort",
+        "--numeric-sort", "--output", "--parallel", "--random-sort",
+        "--random-source", "--reverse", "--sort", "--stable",
+        "--temporary-directory", "--unique", "--version", "--version-sort",
+        "--zero-terminated",
+    ]),
+    "tee":        frozenset([
+        "--append", "--help", "--ignore-interrupts", "--output-error",
+        "--version",
+    ]),
+    "cp":         frozenset([
+        "--archive", "--attributes-only", "--backup", "--context",
+        "--copy-contents", "--dereference", "--force", "--help",
+        "--interactive", "--link", "--no-clobber", "--no-dereference",
+        "--no-preserve", "--no-target-directory", "--one-file-system",
+        "--parents", "--preserve", "--reflink", "--remove-destination",
+        "--sparse", "--strip-trailing-slashes", "--suffix",
+        "--symbolic-link", "--target-directory", "--update", "--verbose",
+        "--version",
+    ]),
+    "mv":         frozenset([
+        "--backup", "--context", "--force", "--help", "--interactive",
+        "--no-clobber", "--no-target-directory", "--strip-trailing-slashes",
+        "--suffix", "--target-directory", "--update", "--verbose",
+        "--version",
+    ]),
+    "install":    frozenset([
+        "--backup", "--compare", "--context", "--directory", "--group",
+        "--help", "--mode", "--no-target-directory", "--owner",
+        "--preserve-context", "--preserve-timestamps", "--strip",
+        "--strip-program", "--suffix", "--target-directory", "--verbose",
+        "--version",
+    ]),
+    "truncate":   frozenset([
+        "--help", "--io-blocks", "--no-create", "--reference", "--size",
+        "--version",
+    ]),
+    "git push":   frozenset([
+        "--all", "--atomic", "--branches", "--delete", "--dry-run",
+        "--exec", "--follow-tags", "--force", "--force-if-includes",
+        "--force-with-lease", "--ipv4", "--ipv6", "--mirror", "--no-verify",
+        "--porcelain", "--progress", "--prune", "--push-option", "--quiet",
+        "--receive-pack", "--recurse-submodules", "--repo",
+        "--set-upstream", "--signed", "--tags", "--thin", "--verbose",
+        "--verify",
+    ]),
+    "git clean":  frozenset([
+        "--dry-run", "--exclude", "--force", "--interactive", "--quiet",
+    ]),
+    "git branch": frozenset([
+        "--abbrev", "--all", "--color", "--column", "--contains", "--copy",
+        "--create-reflog", "--delete", "--edit-description", "--force",
+        "--format", "--ignore-case", "--list", "--merged", "--move",
+        "--no-contains", "--no-merged", "--omit-empty", "--points-at",
+        "--quiet", "--recurse-submodules", "--remotes", "--set-upstream-to",
+        "--show-current", "--sort", "--track", "--unset-upstream",
+        "--verbose",
+    ]),
+}
+
+
+def _resolve_long_flag(command_key: str, token: str) -> Optional[str]:
+    """
+    The long option `token` abbreviates for `command_key`, or None.
+
+    None means "this token names no single option of this command", which is
+    what the tool itself concludes: it exits non-zero and does nothing.  A
+    command with no table here is never resolved.
+    """
+    options = _LONG_OPTIONS_BY_COMMAND.get(command_key)
+    if not options or not token.startswith("--") or token == "--":
+        return None
+    name = token.split("=", 1)[0]
+    if name in options:
+        return name
+    matches = [o for o in options if o.startswith(name)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _canonical_long_flags(command_key: str, args: list) -> list:
+    """
+    `args` with every abbreviated long option rewritten to its full spelling.
+
+    TOKEN FOR TOKEN: positions, operands and the values flags consume are all
+    unchanged, so every literal membership test downstream keeps working and
+    keeps reading the same index it always did.  An unresolvable token is left
+    exactly as written rather than dropped -- the tool refuses it, and a token
+    the tool refuses must not silently become a different flag.
+    """
+    if command_key not in _LONG_OPTIONS_BY_COMMAND:
+        return args
+    out: list = []
+    ended = False
+    for a in args:
+        if ended or not a.startswith("--"):
+            out.append(a)
+            continue
+        if a == "--":
+            ended = True                 # measured: ends option parsing
+            out.append(a)
+            continue
+        name, sep, value = a.partition("=")
+        full = _resolve_long_flag(command_key, name)
+        out.append(full + sep + value if full else a)
+    return out
+
 
 # ---------------------------------------------------------------------------
 # Bash EMIT patterns
@@ -585,8 +774,15 @@ _EMIT_RE = re.compile(
 #   git push --dry-run --force   -> remote ref did not move,      held
 # All five spellings reach the same `git_force_push` signature rather than a new
 # one: the audit line's signature vocabulary is a closed allowlist core-side.
+#
+# `--prune` joined the set on RFX-361 rather than by prefix resolution: it was
+# absent altogether, and it deletes a remote ref on its own.  Measured against
+# a local bare repo, reading the remote's refs before and after rather than
+# git's stdout -- `git push --prune origin 'refs/heads/*'` took the upstream
+# from [doomed main] to [main], rc=0, "- [deleted] doomed".  It reached
+# `default_allow`.
 _GIT_PUSH_FORCE_LONG = frozenset([
-    "--force", "--force-with-lease", "--mirror", "--delete",
+    "--force", "--force-with-lease", "--mirror", "--delete", "--prune",
 ])
 # `--force-if-includes` is deliberately absent: it is a SAFETY modifier that only
 # has meaning alongside a force flag, and never forces on its own.
@@ -1612,7 +1808,13 @@ def _overwrite_targets(cmd0: str, args: list, low: list):
         targets = [a.split("=", 1)[1] for a in args if a.lower().startswith("of=")]
         return targets or None
     if cmd0 == "truncate":
-        return _positional_args(args, value_flags=("-s", "--size", "-r", "--reference")) or None
+        # `--siz`/`--s` resolve to `--size` (RFX-366).  Unresolved, the SIZE was
+        # read as a second path: `truncate --s 0 /srv/prod/db.sqlite` priced a
+        # TWO-file destruction of `0` and the database, which drops target_ref
+        # to null -- the audit line then names no file at all.
+        targs = _canonical_long_flags("truncate", args)
+        return _positional_args(
+            targs, value_flags=("-s", "--size", "-r", "--reference")) or None
     return (_writer_overwrite_targets(cmd0, args, low)
             or _inplace_edit_targets(cmd0, args))
 
@@ -1818,7 +2020,22 @@ def _writer_overwrite_targets(cmd0: str, args: list, low: list):
     """
     if cmd0 not in _WRITER_COMMANDS:
         return None
-    if _writer_dest_is_a_directory(cmd0, args):
+
+    # Resolve abbreviated long options against THIS command's own option list
+    # before any literal flag test below (RFX-366).  `cp --targ DIR SRC` is
+    # `--target-directory` and destroys nothing SRC-side; unresolved it fell
+    # past the bail below and named SRC -- a file measured to survive 5/5 --
+    # as an irreversible broad destruction.  `git` has no table (its only
+    # subcommand reaching this function is measured NOT to abbreviate), so for
+    # `git` these two lists are `args` and `low` unchanged.
+    cargs = _canonical_long_flags(cmd0, args)
+    clow = [a.lower() for a in cargs]
+
+    # The directory-destination test reads the RESOLVED list, so `cp --targ DIR`
+    # bails here exactly as `cp --target-directory DIR` does.  Its short-bundle
+    # arm is unaffected: `_canonical_long_flags` rewrites only `--` tokens and
+    # leaves every short flag byte-for-byte, case included.
+    if _writer_dest_is_a_directory(cmd0, cargs):
         return None
 
     targets: list = []
@@ -1833,17 +2050,35 @@ def _writer_overwrite_targets(cmd0: str, args: list, low: list):
         # carrying an uppercase `A` would read as --append and switch the
         # destruction pricing off.  (The same fold read `tar -C` as `tar -c`
         # while tar was still in this set, which is how it was caught.)
-        if "--append" in low or any(_short_bundle_has(a, "a") for a in args):
+        #
+        # `--append` is read off the RESOLVED list: `--a`, `--ap`, `--app` and
+        # `--appen` all append, and all five canary lines survived every one of
+        # them, while this function priced each as an irreversible broad
+        # destruction of the file it had just left intact.
+        if "--append" in clow or any(_short_bundle_has(a, "a") for a in args):
             return None
-        targets = _positional_args(args, value_flags=("--output-error",))
+        # `--output-error` carries an OPTIONAL value, which getopt_long accepts
+        # only attached: `tee --output-error VICTIM` truncated VICTIM (0/5),
+        # `--output-error=warn VICTIM` likewise.  Listing it as a value flag
+        # made the next word disappear, so the operand that was destroyed was
+        # not priced at all -- a fail-open that had nothing to do with
+        # abbreviation and was found beside it (RFX-366).  The `=` spelling
+        # needs no entry: it is one token and starts with `-`.
+        targets = _positional_args(cargs)
 
     elif cmd0 in ("cp", "install", "mv"):
         # `SRC... DEST` -- the LAST positional is the destination and the only
         # thing destroyed.  Fewer than two positionals is not a valid
         # invocation, so there is nothing to price.
+        #
+        # The value flags are matched on the RESOLVED list too, because an
+        # abbreviation moves the destination: `cp src /srv/prod/db.sqlite
+        # --suf .bak` left `--suf` unrecognised, so `.bak` counted as the last
+        # positional and the audit line named `.bak` as the destroyed file
+        # while the database was the one overwritten.
         positional = _positional_args(
-            args, value_flags=("-S", "--suffix", "--backup", "-Z", "--context",
-                               "-m", "--mode", "-o", "--owner", "-g", "--group"),
+            cargs, value_flags=("-S", "--suffix", "--backup", "-Z", "--context",
+                                "-m", "--mode", "-o", "--owner", "-g", "--group"),
             value_letters=_WRITER_VALUE_LETTERS.get(cmd0, ""))
         if len(positional) < 2:
             return None
@@ -1864,7 +2099,11 @@ def _writer_overwrite_targets(cmd0: str, args: list, low: list):
 
     elif cmd0 == "sort":
         # Only `-o` writes in place; a bare `sort P` writes to stdout.
-        out = _flag_value(args, "-o", "--output")
+        # `--o`, `--ou`, `--out`, `--outp` and `--outpu` are all `--output`
+        # and all truncated the file 0/5 -- the five shapes RFX-366 was filed
+        # for, every one of them priced execute / recoverable / scoped with a
+        # null target_ref before this list was resolved.
+        out = _flag_value(cargs, "-o", "--output")
         targets = [out] if out else []
 
     elif cmd0 == "git":
@@ -4020,6 +4259,12 @@ def _git_clean_destroys(command: str) -> bool:
     args = _git_subcommand_args(command, "clean")
     if args is None:
         return False
+    # RFX-366/RFX-361.  `git clean`'s option list is short enough that `--f` is
+    # unambiguously `--force` here -- the same token git push refuses -- and
+    # `--forc`/`--fo`/`--f` each removed the file.  In the other direction
+    # `--dry`/`--dr`/`--d` are `--dry-run` and left it in place while this
+    # function priced an irreversible broad `rm_recursive`.
+    args = _canonical_long_flags("git clean", args)
     force = _git_clean_force_not_required(command)
     for t in args:
         if t == "--":
@@ -4046,6 +4291,12 @@ def _git_push_forces(command: str) -> bool:
     args = _git_subcommand_args(command, "push")
     if args is None:
         return False
+    # RFX-361.  `--del`, `--de`, `--mir`, `--m`, `--pru` and `--force-with` all
+    # rewrite or remove a remote ref and all reached `default_allow`; `--d`,
+    # `--pr`, `--p`, `--forc`, `--for`, `--fo` and `--f` are AMBIGUOUS to git
+    # (exit 129, no ref moves) and must stay unpriced.  Both halves are the
+    # same table: see `_LONG_OPTIONS_BY_COMMAND`.
+    args = _canonical_long_flags("git push", args)
     forces = False
     for t in args:
         if t == "--":

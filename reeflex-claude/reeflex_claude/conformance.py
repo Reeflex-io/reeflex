@@ -279,6 +279,24 @@ GAP_COMMAND_SUBSTITUTION_SCOPE = (
     # `everyday-rm-one-tmp-file` above is.
     "everyday-rm-single-file-name-contains-dash-r",
     "fp-rm-file-named-truncate",
+    # RFX-366 + RFX-361 (dev-1--180).  WIDENED DELIBERATELY, which is what this
+    # declaration asks of whoever adds a destructive shape.  Six of that
+    # round's new rows are operator-free and priced `delete`, so they are
+    # inside this residual from the moment they land -- `$(echo sort) --out
+    # /srv/prod/db.sqlite in.txt` walks past the new resolver exactly as
+    # `$(echo rm) -rf` already walks past `rm`.  That is RFX-158's gap, not a
+    # new one, and closing the abbreviation hole neither widens nor narrows it.
+    # Re-measured by the round that added them, by re-spelling every
+    # operator-free `delete` row: 59 of 59 against main `e7e4ecd`.
+    # The `git push --del/--m/--prune` rows are NOT here: they are priced
+    # `emit`, not `delete`, so the filter that defines this set does not
+    # reach them -- an exclusion that is measured, not an oversight.
+    "destroy-cp-no-target-directory-abbreviated",
+    "destroy-git-clean-force-abbreviated",
+    "destroy-sort-output-abbreviated",
+    "destroy-sort-output-shortest-prefix",
+    "destroy-tee-output-error-operand",
+    "destroy-truncate-size-abbreviated",
 )
 
 
@@ -1083,8 +1101,11 @@ CASES = [
     # commands this classifier cannot read.
     #
     # MEASURED 2026-09-18 (dev-3--073), because "closes five of these six" was
-    # about the six DECLARING rows and said nothing about the 41 they cover:
-    # strict mode lifts all 41 re-spelled rows to irreversible+broad too, and
+    # about the six DECLARING rows and said nothing about the rows they cover
+    # (41 when this was measured; the live count is the length of
+    # GAP_COMMAND_SUBSTITUTION_SCOPE, which grows with the destruction
+    # vocabulary -- RFX-372):
+    # strict mode lifts the re-spelled rows to irreversible+broad too, and
     # core's real pack then decides `require_approval`
     # (`reeflex.policy/irreversible_broad_prod`) instead of `allow`.  So the
     # lever does reach them.  TWO THINGS IT DOES NOT DO, both measured: the
@@ -1919,6 +1940,132 @@ CASES = [
        "git show takes --output too, and destroys the same file",
        "ask", "destroy", check=True,
        verb="delete", blast_radius="broad"),
+
+    # RFX-366 + RFX-361 (dev-1 round 180).  THE CALLER CHOSE THE VERDICT BY HOW
+    # FAR THEY SPELLED THE FLAG.
+    #
+    # Appended at the true tail, for the reason the RFX-346 block above states:
+    # `reeflex-spec/conformance/claude-adapter-bash.json` is GENERATED from this
+    # list, and two lanes inserting at one interior point is the shape that
+    # merges clean and wrong.
+    #
+    # Both parsers this corpus exercises -- GNU getopt_long and git's
+    # parse-options -- resolve an unambiguous ABBREVIATION of a long option,
+    # while every flag test in `classify.py` compared a token to one LITERAL
+    # spelling.  So `sort --out DB` and `sort --output DB` are the same
+    # truncation, and only the second was priced.  Ground truth is five canary
+    # lines read off disk and a LOCAL bare repo's own refs, never git's stdout:
+    # coreutils 8.32, git 2.52.0.
+    #
+    # The rows come in DISCRIMINATING PAIRS on purpose.  A table that answered
+    # by string membership is wrong in both directions at once, and the
+    # fail-noisy half matters on its own -- a gate that asks on an append is a
+    # gate that gets switched off (RFX-131, RFX-145).
+    _c("destroy-sort-output-abbreviated",
+       "sort --out /srv/prod/db.sqlite /tmp/in.txt",
+       "`--out` IS `--output`: canary 0/5, identical to the spelled-out flag, "
+       "and it scored execute/recoverable/scoped with a null target_ref",
+       "ask", "destroy", check=True,
+       verb="delete", blast_radius="broad", ref="/srv/prod/db.sqlite"),
+    _c("destroy-sort-output-shortest-prefix",
+       "sort --o /srv/prod/db.sqlite /tmp/in.txt",
+       "one letter is still unambiguous for sort -- canary 0/5",
+       "ask", "destroy",
+       verb="delete", blast_radius="broad", ref="/srv/prod/db.sqlite"),
+    _c("destroy-cp-no-target-directory-abbreviated",
+       "cp --no-t /tmp/replacement.dat /srv/prod/db.sqlite",
+       "`--no-t` is --no-target-directory, three characters from --targ and "
+       "the OPPOSITE meaning: the destination IS the file, canary 0/5",
+       "ask", "destroy",
+       verb="delete", blast_radius="broad", ref="/srv/prod/db.sqlite"),
+    _c("destroy-truncate-size-abbreviated",
+       "truncate --s 0 /srv/prod/db.sqlite",
+       "unresolved, the SIZE counted as a second path and the record named "
+       "neither file: target_ref null on a database truncation",
+       "ask", "destroy",
+       verb="delete", blast_radius="broad", ref="/srv/prod/db.sqlite"),
+    _c("destroy-tee-output-error-operand",
+       "tee --output-error /srv/prod/db.sqlite",
+       "--output-error takes its optional value ATTACHED only, so the operand "
+       "is truncated (0/5) -- it was being dropped as a consumed value",
+       "ask", "destroy",
+       verb="delete", blast_radius="broad", ref="/srv/prod/db.sqlite"),
+    _c("destroy-git-clean-force-abbreviated",
+       "git clean --f /srv/prod/data",
+       "`--f` is unambiguously --force for git clean -- the same token git "
+       "push refuses as ambiguous; the file was removed",
+       "ask", "destroy", check=True,
+       verb="delete", blast_radius="broad"),
+    _c("destroy-git-push-delete-abbreviated",
+       "git push --del origin release-2026-09",
+       "the bare repo went from [doomed main] to [main]: same deletion as "
+       "--delete, and it reached default_allow",
+       "ask", "destroy", verb="emit", blast_radius="broad"),
+    _c("destroy-git-push-mirror-abbreviated",
+       "git push --m origin",
+       "one letter is unambiguous for --mirror; '- [deleted] doomed'",
+       "ask", "destroy", verb="emit", blast_radius="broad"),
+    _c("destroy-git-push-prune",
+       "git push --prune origin refs/heads/*",
+       "--prune deletes the remote refs absent locally and was ABSENT from the "
+       "force set altogether -- not an abbreviation defect, found beside one",
+       "ask", "destroy", verb="emit", blast_radius="broad"),
+    # A non-force branch delete is `execute`, not `delete` -- the corpus
+    # already prices `git branch -d feature/x` that way, because charging
+    # ordinary branch hygiene to R5's cumulative delete budget is the RFX-249
+    # over-blocking cost.  So this row belongs with the everyday half, and
+    # what it pins is the ARM: before the resolver, `--del` left `mutates`
+    # False and the line took the READ arm at `_READ_GIT_SUBCOMMANDS`, coming
+    # out read / reversible / single -- BELOW the spelled-out flag.
+    _c("everyday-git-branch-delete-abbreviated",
+       "git branch --del release/1",
+       "'Deleted branch': --del is --delete, and unresolved it was priced a "
+       "READ -- a lower tier than the same deletion spelled in full",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+
+    # The half that pins what must STAY allowed.  Each of these was executed
+    # and measurably destroyed nothing, and each was priced an irreversible
+    # broad destruction before the resolver landed.
+    _c("everyday-tee-append-abbreviated",
+       "echo hi | tee --app /srv/prod/db.sqlite",
+       "--app is --append: five of five canary lines survived, and it was held",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-cp-target-directory-abbreviated",
+       "cp --targ /srv/prod/ /tmp/replacement.dat",
+       "the destination is a DIRECTORY -- the source survived 5/5, and the "
+       "record named the SOURCE as the destroyed file",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-git-clean-dry-run-abbreviated",
+       "git clean -f --d /srv/prod/data",
+       "--d is --dry-run: git printed 'Would remove' and removed nothing",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-git-push-dry-run-abbreviated",
+       "git push --dry --force origin main",
+       "--dry is --dry-run and stays dominant: the remote ref did not move",
+       "allow", "everyday", verb="emit", blast_radius="scoped"),
+    _c("everyday-git-push-ambiguous-force-prefix",
+       "git push --forc origin main",
+       "git exits 129 -- 'ambiguous option: forc (could be --force-with-lease "
+       "or --force-if-includes)' -- and no ref moves.  RFX-361 filed this as a "
+       "force-push escape; it is not one, and pricing it would state something "
+       "the binary refuses to do",
+       "allow", "everyday", verb="emit", blast_radius="scoped"),
+    _c("everyday-sort-output-case-folded",
+       "sort --OUT /srv/prod/db.sqlite /tmp/in.txt",
+       "long-option matching is case-sensitive: sort answers 'unrecognized "
+       "option' and the canary survived 5/5",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-sort-output-after-double-dash",
+       "sort -- --out /srv/prod/db.sqlite",
+       "a bare -- ends option parsing, so `--out` is a FILE NAME and sort "
+       "writes to stdout",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-git-diff-output-abbreviated",
+       "git diff --out /srv/prod/db.sqlite HEAD",
+       "git diff does NOT abbreviate: --output is read by the revision parser "
+       "and `--out` exits 128 with the canary intact.  The row exists so a "
+       "later round cannot 'finish the job' by resolving it",
+       "allow", "everyday", verb="read", blast_radius="single"),
 ]
 
 
