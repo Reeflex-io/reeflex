@@ -250,7 +250,27 @@ def _hold_field(value) -> str:
         if len(text) > _MAX_HOLD_FIELD_LEN else text
 
 
-def hold_clause(decision_resp: dict, core_url: str, gate_id: str) -> str:
+#: The consequence sentence for THIS seat -- Claude Code's local confirmation
+#: dialog -- and the reason it is a parameter of `hold_clause` rather than a
+#: line inside it (RFX-365).
+#:
+#: The FACTS in the clause (which hold, what deadline, where it is decided) are
+#: true wherever they are read, which is why `hold_clause` is shared.  This
+#: sentence is not: it describes a dialog, a terminal, and a person answering
+#: one.  `reeflex-litellm` has none of the three, and there the same string is
+#: reused on refusals that describe a LATER state of the hold and is pushed onto
+#: the inbox row a human reads next to an Approve button -- where "it does not
+#: resolve that hold" is the opposite of what their click does.  So the seat
+#: that owns a dialog passes this; a seat without one passes its own sentence,
+#: or none.
+LOCAL_DIALOG_CONSEQUENCE = (
+    "Answering this dialog decides only whether this terminal runs the "
+    "action; it does not resolve that hold."
+)
+
+
+def hold_clause(decision_resp: dict, core_url: str, gate_id: str,
+                *, consequence: str = LOCAL_DIALOG_CONSEQUENCE) -> str:
     """The sentence that tells the human a Reeflex hold exists and where it is.
 
     PUBLIC because `reeflex-litellm` reuses it.  That package duplicates this
@@ -305,11 +325,11 @@ def hold_clause(decision_resp: dict, core_url: str, gate_id: str) -> str:
     # ast-scan), so answering here does not resolve the hold and the hold does
     # not gate this terminal.  Stated for the ask case only, because that is the
     # only one where a human is about to answer something.
-    if decision_resp.get("decision") == "require_approval":
-        clause += (
-            " Answering this dialog decides only whether this terminal runs the "
-            "action; it does not resolve that hold."
-        )
+    #
+    # Supplied BY THE SEAT (RFX-365): what answering does is a fact about the
+    # seat, not about the hold, and the caller is the only one who knows it.
+    if consequence and decision_resp.get("decision") == "require_approval":
+        clause += " " + consequence
 
     decision_id = decision_resp.get("decision_id")
     if decision_id:

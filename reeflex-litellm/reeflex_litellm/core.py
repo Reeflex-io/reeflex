@@ -302,12 +302,30 @@ def _map(body: dict, http_status=None) -> Verdict:
     from reeflex_claude.enforce import hold_clause
 
     gate_id = os.environ.get("REEFLEX_GATE_ID", "").strip()
+    # NO CONSEQUENCE SENTENCE IN THIS SEAT (RFX-365).  The FACTS in the clause
+    # are shared; reeflex-claude's "Answering this dialog decides only whether
+    # this terminal runs the action; it does not resolve that hold" is not, and
+    # emitting it here was measured wrong in three places:
+    #   * there is no dialog and no terminal -- this seat asks nobody, it
+    #     withholds the response and polls the hold;
+    #   * this string is composed ONCE, when the hold is raised, and every
+    #     ask-path refusal in enforce.py concatenates it onto a sentence
+    #     describing a LATER state, so "it does not resolve that hold" is
+    #     appended to "a human reviewed this action and rejected it";
+    #   * evidence.hold_record carries it onto the `POST /api/v1/holds` row --
+    #     "the sentence a human reads in the inbox next to an Approve button"
+    #     in that module's own words -- where the reader IS the person
+    #     resolving the hold and the button IS what resolves it.
+    # Each ask-path refusal already states its own consequence accurately for
+    # the status it actually saw, so the honest value here is no sentence at
+    # all rather than a second, staler one.
     common = dict(decision=decision, rule=rule, obligations=obligations,
                   core_reachable=True, http_status=http_status,
                   hold_id=body.get("hold_id"), expires_ts=body.get("expires_ts"),
                   decision_id=body.get("decision_id"),
                   reason="Reeflex: %s [rule=%s]%s" % (
-                      reason, rule, hold_clause(body, core_url(), gate_id)))
+                      reason, rule,
+                      hold_clause(body, core_url(), gate_id, consequence="")))
     if decision == "allow":
         return Verdict("allow", **common)
     if decision == "deny":
