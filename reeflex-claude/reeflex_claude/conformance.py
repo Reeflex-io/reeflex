@@ -155,6 +155,32 @@ GAP_COMMAND_SUBSTITUTION_SCOPE = (
     "destroy-writer-mv",
     "destroy-writer-sort-o",
     "destroy-writer-tee",
+    # RFX-345 -- the six spellings the writer family's directory-destination
+    # bail was failing open on.  WIDENED DELIBERATELY, not re-baselined: the
+    # guard JOINED them the moment they were priced, which is the mechanism
+    # working, and the honest reading is that RFX-345 closes six direct
+    # spellings while handing all six straight to this residual.  A customer on
+    # a wheel with the RFX-345 fix is protected against `cp -T /dev/null P` and
+    # is NOT protected against `$(echo cp) -T /dev/null P`.  That is the same
+    # trade the six RFX-343 rows above already record, and it is stated here
+    # rather than left for the next reader to rediscover.
+    "destroy-writer-cp-no-dereference",
+    "destroy-writer-cp-no-target-dir-short",
+    "destroy-writer-install-create-leading-dirs",
+    "destroy-writer-install-no-target-dir-short",
+    "destroy-writer-mv-no-target-dir-short",
+    "destroy-writer-sort-field-separator",
+    # RFX-345 second pass (dev-1--170): the four shapes where a short option's
+    # VALUE was being read as a flag letter.  They join this residual for
+    # exactly the same reason and on the same terms -- declared because this
+    # guard reported them, not re-baselined to make it quiet.  The honest
+    # reading is unchanged and now covers four more spellings: a customer is
+    # protected against `cp -St /dev/null P` and is NOT protected against
+    # `$(echo cp) -St /dev/null P`.
+    "destroy-writer-cp-suffix-value-not-a-flag",
+    "destroy-writer-install-bundled-mode-value",
+    "destroy-writer-install-owner-value-not-a-flag",
+    "destroy-writer-mv-suffix-value-not-a-flag",
     # whole-file destruction already in the table before RFX-343
     "destroy-dd-over-db",
     "destroy-truncate-db",
