@@ -22,6 +22,16 @@ return, it asserts `_map()` agrees with `enforce.call_core_and_map()` run
 against the same stub body.  If reeflex-claude's fail-closed mapping changes,
 that test goes red here rather than the two seats drifting silently.
 
+That tripwire fired for real on 2026-09-18 (RFX-318): reeflex-claude's reason
+string grew a clause naming an open hold, its deadline and where it is being
+decided, and this seat -- which has the hold id in hand and was still printing
+the old silent sentence -- went red.  The remedy was NOT to re-type the clause
+here.  `_map()` now imports `enforce.hold_clause()`, so the sentence a human
+reads has one source across both seats, on the same argument that already makes
+`classify.classify` and `envelope.build_envelope` shared rather than copied.
+What stays duplicated is the decision-value mapping itself, for the
+second-hold reason above.
+
 CONCURRENCY
 ===========
 The HTTP calls are stdlib-blocking (`urllib`), so the async entry points hand
@@ -283,11 +293,39 @@ def _map(body: dict, http_status=None) -> Verdict:
     obligations = body.get("obligations", [])
     if not isinstance(obligations, list):
         obligations = list(obligations) if obligations else []
+    # RFX-318.  The hold sentence is reeflex-claude's, IMPORTED rather than
+    # re-typed.  This seat already carried hold_id/expires_ts/decision_id as
+    # structured fields, but its human-facing `reason` was as silent about them
+    # as reeflex-claude's was.  Two seats composing the same sentence from two
+    # copies is exactly the drift `test_enforce_contract` exists to catch -- and
+    # it did catch it, which is why this line is here rather than a duplicate.
+    from reeflex_claude.enforce import hold_clause
+
+    gate_id = os.environ.get("REEFLEX_GATE_ID", "").strip()
+    # NO CONSEQUENCE SENTENCE IN THIS SEAT (RFX-365).  The FACTS in the clause
+    # are shared; reeflex-claude's "Answering this dialog decides only whether
+    # this terminal runs the action; it does not resolve that hold" is not, and
+    # emitting it here was measured wrong in three places:
+    #   * there is no dialog and no terminal -- this seat asks nobody, it
+    #     withholds the response and polls the hold;
+    #   * this string is composed ONCE, when the hold is raised, and every
+    #     ask-path refusal in enforce.py concatenates it onto a sentence
+    #     describing a LATER state, so "it does not resolve that hold" is
+    #     appended to "a human reviewed this action and rejected it";
+    #   * evidence.hold_record carries it onto the `POST /api/v1/holds` row --
+    #     "the sentence a human reads in the inbox next to an Approve button"
+    #     in that module's own words -- where the reader IS the person
+    #     resolving the hold and the button IS what resolves it.
+    # Each ask-path refusal already states its own consequence accurately for
+    # the status it actually saw, so the honest value here is no sentence at
+    # all rather than a second, staler one.
     common = dict(decision=decision, rule=rule, obligations=obligations,
                   core_reachable=True, http_status=http_status,
                   hold_id=body.get("hold_id"), expires_ts=body.get("expires_ts"),
                   decision_id=body.get("decision_id"),
-                  reason="Reeflex: %s [rule=%s]" % (reason, rule))
+                  reason="Reeflex: %s [rule=%s]%s" % (
+                      reason, rule,
+                      hold_clause(body, core_url(), gate_id, consequence="")))
     if decision == "allow":
         return Verdict("allow", **common)
     if decision == "deny":
