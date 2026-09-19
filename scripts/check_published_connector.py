@@ -298,7 +298,15 @@ def evaluate(tree: Channel, published: dict[str, Channel]) -> tuple[list[Finding
             continue
 
         for channel_name in prop.channels:
-            channel = published[channel_name]
+            # A channel that was not fetched is not scored here (RFX-360). This
+            # used to index `published[channel_name]` unconditionally, so
+            # `--channel github` — the documented way to take a verdict when one
+            # index is unreadable — raised KeyError('npm') and exited 1, the
+            # code this script reserves for "a fix is missing". The flag exists
+            # precisely for the case the docstring separates exit 3 for.
+            channel = published.get(channel_name)
+            if channel is None:
+                continue
             path = paths.get(channel_name)
             if path is None:
                 continue
@@ -340,6 +348,12 @@ def evaluate(tree: Channel, published: dict[str, Channel]) -> tuple[list[Finding
 
     for key, lag in declared.items():
         if key in seen:
+            continue
+        if key[1] not in published:
+            # Its channel was not read this run, so of course nothing scored it.
+            # Without this, `--channel github` reports every npm row as an
+            # orphan and invites the reader to delete live declarations
+            # (RFX-360). A row nobody READ is not a row nobody scores.
             continue
         findings.append(Finding(
             "ORPHAN-DECLARATION",
