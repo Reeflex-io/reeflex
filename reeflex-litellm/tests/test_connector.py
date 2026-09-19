@@ -452,6 +452,41 @@ def test_the_server_never_answers_502_503_or_504(server, stub, tenancy_map):
     assert seen == {200, 404, 401}
 
 
+def test_an_internal_error_in_the_HANDLER_blocks_over_real_HTTP(server,
+                                                                monkeypatch):
+    """The WIRING of the fail-closed posture, not the payload builder.
+
+    `test_our_own_bug_blocks_in_the_BODY_and_not_with_a_5xx` calls
+    `blocked_for_internal_error()` directly. That proves the payload this
+    connector WOULD send; it never goes through `_Handler`, so it says nothing
+    about whether the handler sends it. Measured (RFX-333, filed by qa--227,
+    reproduced round dev-1--168 on `caf2cd6`): replacing the one line
+    `answer = blocked_for_internal_error(exc)` with `{"action": ACTION_NONE}`
+    releases a governed `rm -rf /var/lib/pgsql` over real HTTP and the whole
+    suite still reports 399 passed, 2 skipped, exit 0 -- byte-identical to the
+    control.
+
+    The `except` branch is only reachable through the transport, so this test
+    drives the running server with `decide_payload` raising. `rule` is asserted
+    rather than just `action`, because tenancy and core-unreachable refusals are
+    also 200 + BLOCKED and would satisfy a weaker assertion.
+    """
+    def raise_our_own_bug(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(connector, "decide_payload", raise_our_own_bug)
+
+    status, body = post(server, payload([wire_tool_call()]))
+
+    # Never 5xx: litellm classes {502, 503, 504} as "unreachable", and that is
+    # the class `unreachable_fallback: fail_open` releases.
+    assert status == 200
+    assert body["action"] == connector.ACTION_BLOCKED
+    [refusal] = refusals_in(body)
+    assert refusal["rule"] == "reeflex.core/fail_closed"
+    assert refusal["stage"] == "refused_at_gateway"
+
+
 def test_a_body_larger_than_the_cap_is_413_not_a_decision(server):
     big = payload([wire_tool_call(arguments={"command": "x" * 200})])
     big["texts"] = ["y" * (connector.DEFAULT_MAX_BODY + 10)]
