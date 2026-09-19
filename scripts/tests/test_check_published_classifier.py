@@ -230,6 +230,62 @@ class TestTheAuditOnTheRealCorpusShape(unittest.TestCase):
                             for line in lines),
                         "the failing line must name the case: %s" % lines)
 
+    def test_an_r6_shaped_regression_over_the_real_corpus_fails_it(self):
+        """RFX-327's second consequence, which only the R2 shape was pinning.
+
+        RFX-327 said the component was "blind to the entire R6 family": with an
+        oracle that cannot produce `ask` for a protected-asset delete, a wheel
+        that genuinely under-prices one scores PASS. 447b954 closed it by
+        importing the shared oracle -- and the test above does NOT pin that,
+        because it rewrites a case to `read/reversible/single`, which R2 catches.
+        Remove R6 from the oracle and it still fails, on arithmetic: the R6 cases
+        also go fail-open, so `fail_open` is 3 and not 1. A guard that reddens
+        for the wrong reason is not measuring the thing it is named after.
+
+        THE REGRESSION SHAPE IS NOT INVENTED. R6 reads `target_ref` and nothing
+        else, so a wheel loses the whole family the moment it stops carrying the
+        ref -- with every other axis still correct. That is RFX-342 exactly:
+        reeflex-claude priced every NotebookEdit with no path at all because it
+        never read `notebook_path`, and core saw `target.ref=null`. Here the
+        classification is left otherwise untouched and only the ref is dropped,
+        so nothing but R6 can account for the verdict moving.
+
+        Measured pre-fix (dev-2--081): under the R1-R4 copy 447b954 replaced,
+        this arm and the correct-wheel arm return the SAME verdicts -- allow on
+        both R6 cases either way -- so the component could not tell them apart.
+        """
+        from reeflex_claude.classify import classify
+        rows = {c["id"]: {"cls": classify(c["tool"], c["input"])}
+                for c in conformance.CASES}
+
+        # Enumerate the family from the ORACLE, not from a hand-listed set of
+        # ids: a case added later that R6 decides joins this test by itself,
+        # and a corpus that stops exercising R6 makes it fail loudly rather
+        # than pass over an empty set (RFX-217).
+        from policy_oracle import policy_oracle_rule
+        r6_ids = [c["id"] for c in conformance.CASES
+                  if not c["residual"]
+                  and policy_oracle_rule(rows[c["id"]]["cls"])[1]
+                  == "reeflex.policy/irreversible_protected_asset_prod"]
+        self.assertTrue(
+            r6_ids,
+            "no corpus case is decided by R6, so this test would be vacuous -- "
+            "the family RFX-327 is about is no longer exercised at all")
+
+        for cid in r6_ids:
+            rows[cid]["cls"]["target_ref"] = None
+
+        ok, lines, stats = cpc.audit(rows, conformance.CASES,
+                                     tree_oracle, lag={})
+        self.assertFalse(
+            ok, "a wheel that lost the ref on every R6 case scored PASS -- the "
+                "component is blind to the family again (RFX-327)")
+        self.assertEqual(len(r6_ids), stats["fail_open"])
+        for cid in r6_ids:
+            self.assertTrue(any(cid in line and "FAIL-OPEN" in line
+                                for line in lines),
+                            "the failing line must name %s: %s" % (cid, lines))
+
 
 if __name__ == "__main__":
     unittest.main()
