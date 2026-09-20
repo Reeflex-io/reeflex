@@ -1565,9 +1565,10 @@ def _overwrite_targets(cmd0: str, args: list, low: list):
     """
     Return the paths a whole-file content destruction targets, or None.
 
-    Covers `dd ... of=PATH`, `truncate ... PATH`, and the WRITER FAMILY below
-    (`tee`, `cp`, `install`, `mv`, `sort -o`, `tar -cf`).  The file survives;
-    all of its previous content does not.
+    Covers `dd ... of=PATH`, `truncate ... PATH`, the WRITER FAMILY below
+    (`tee`, `cp`, `install`, `mv`, `sort -o`, `tar -cf`) and the UNBACKED
+    IN-PLACE EDIT family (`sed -i`, `perl -i`).  The file survives; all of its
+    previous content does not.
 
     Redirections are NOT handled here -- they are not a property of the
     command word.  See `_redirect_overwrite_targets`.
@@ -1577,7 +1578,8 @@ def _overwrite_targets(cmd0: str, args: list, low: list):
         return targets or None
     if cmd0 == "truncate":
         return _positional_args(args, value_flags=("-s", "--size", "-r", "--reference")) or None
-    return _writer_overwrite_targets(cmd0, args, low)
+    return (_writer_overwrite_targets(cmd0, args, low)
+            or _inplace_edit_targets(cmd0, args))
 
 
 # Commands whose ORDINARY use is writing a file, and which destroy whatever was
@@ -1756,6 +1758,11 @@ def _writer_overwrite_targets(cmd0: str, args: list, low: list):
     * `sed -i 1d P` -- 4 of 5 canary lines survived.  It is a PARTIAL edit, and
       this function is contracted to whole-file destruction.  Pricing it here
       would make the contract false.
+      RFX-384: that measurement describes `sed -i 1d`, and the exclusion it
+      justifies was applied to the command word `sed`.  Four other spellings of
+      `sed -i` lose ALL FIVE canaries.  They are priced by
+      `_inplace_edit_targets`, on reversibility rather than on whole-file loss,
+      so this function's contract is unchanged.
     * `gzip P` -- P is gone, but its bytes are not: `gunzip` returns them.
       `_classify_path_delete` hardcodes reversibility="irreversible", so
       routing gzip through it would state something measurably untrue.
@@ -1846,6 +1853,171 @@ def _writer_overwrite_targets(cmd0: str, args: list, low: list):
     # device, a system path or a secret is not ordinary output.  This is the
     # SAME predicate `_redirect_overwrite_targets` applies, reused deliberately
     # so the redirect family and the writer family cannot drift apart.
+    weighty = [t for t in targets
+               if t and not _is_null_sink(t) and _redirect_target_is_weighty(t)]
+    return weighty or None
+
+
+# The IN-PLACE EDIT family (RFX-384).  `sed -i` and `perl -i` rewrite their
+# operand where it lies: the editor writes a temporary file and renames it over
+# the original, so whatever was there is gone the moment the command returns.
+#
+# Short-flag letters that consume the REST of their token as a value.  A naive
+# `"i" in bundle` test reads `perl -Mstrict` as in-place with backup suffix
+# "ct", which is the same shape as the `tar -C`/`tar -c` fold RFX-343 recorded:
+# a bundle test must stop at the first letter that takes a value, because
+# everything after it is data, not flags.
+_SED_VALUE_LETTERS = frozenset("efl")
+_PERL_VALUE_LETTERS = frozenset("eEFIMmDlSx0")
+
+_SED_SCRIPT_FLAGS = frozenset(["-e", "--expression", "-f", "--file"])
+_SED_LONG_VALUE_FLAGS = frozenset(["--expression", "--file", "--line-length"])
+
+
+def _scan_bundle(bundle: str, letter: str, value_letters: frozenset):
+    """
+    Walk a short-flag bundle left to right looking for `letter`.
+
+    Returns (found, rest) where `rest` is whatever was attached after it --
+    `-i.bak` gives (True, ".bak") and `-i` gives (True, "").  Scanning STOPS at
+    the first value-taking letter, so `-Mstrict` reports not-found rather than
+    finding the `i` inside the module name.
+    """
+    for idx, ch in enumerate(bundle):
+        if ch == letter:
+            return True, bundle[idx + 1:]
+        if ch in value_letters:
+            return False, ""
+    return False, ""
+
+
+def _inplace_edit_flag(args: list, value_letters: frozenset, long_flag: str):
+    """
+    (in_place, backed_up) for a sed/perl argv.
+
+    `backed_up` is the whole decision.  `sed -i.bak P` leaves every prior byte
+    on disk in P.bak, so `recoverable` is TRUE and the line is not a
+    destruction; `sed -i P` leaves nothing.  Measured both ways -- see the
+    RFX-384 evidence, 5 canary lines per shape.
+    """
+    in_place = False
+    backed_up = False
+    for a in args:
+        if a == long_flag:
+            in_place = True
+        elif a.startswith(long_flag + "="):
+            in_place = True
+            backed_up = bool(a.split("=", 1)[1])
+        elif a.startswith("-") and not a.startswith("--") and len(a) > 1:
+            found, rest = _scan_bundle(a[1:], "i", value_letters)
+            if found:
+                in_place = True
+                backed_up = backed_up or bool(rest)
+    return in_place, backed_up
+
+
+def _inplace_operands(args: list, value_letters: frozenset,
+                      long_value_flags: frozenset) -> list:
+    """
+    Positional operands of a sed/perl argv.
+
+    `_positional_args` cannot be reused here: it drops flags but keeps the
+    VALUE of a bundle whose last letter takes one, so `perl -pe 'PROG' FILE`
+    hands back `PROG` as if it were a path.  The weightiness gate would reject
+    it, but only by accident -- a program text that happened to contain a
+    `/srv/prod/...` path would be priced as the thing destroyed.
+    """
+    out: list = []
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a.startswith("--"):
+            skip = a in long_value_flags
+            continue
+        if a.startswith("-") and len(a) > 1:
+            for idx, ch in enumerate(a[1:]):
+                if ch in value_letters:
+                    # a value letter with nothing attached eats the NEXT word
+                    skip = not a[idx + 2:]
+                    break
+            continue
+        out.append(a)
+    return out
+
+
+def _inplace_edit_targets(cmd0: str, args: list):
+    """
+    Paths destroyed by an UNBACKED in-place edit, or None.
+
+    WHY THIS IS NOT THE `sed` EXCLUSION ABOVE.  `_writer_overwrite_targets`
+    excludes sed because `sed -i 1d P` leaves 4 of 5 canary lines alive, and
+    that function is contracted to WHOLE-FILE destruction.  That measurement is
+    right, and it describes `sed -i 1d`.  It was applied to the command word
+    `sed`, which is wider: `sed -i 's/.*//' P`, `sed -i 'd' P`, `sed -i '1,$d' P`
+    and `sed --in-place 's/.*//' P` each lose all five, and so do
+    `perl -pi -e 's/.*//' P`, `perl -i -pe 's/.*//' P` and
+    `perl -ni -e 'print if 0' P`.
+
+    So this function prices a different axis and says so.  The claim is not
+    that every in-place edit empties the file -- it is that an UNBACKED
+    in-place edit makes the prior contents unrecoverable AT THAT PATH, which is
+    what `reversibility` reports and what R2/R3 read.  `sed -i.bak` is excluded
+    by measurement, not by caution: all five canaries are on disk in P.bak.
+
+    STILL OPEN, and each is a measurement rather than an oversight:
+
+    * `python3 -c "open('P','w').close()"` and `awk 'BEGIN{print "" > "P"}"`
+      destroy all five and are still priced moderate.  The inline-interpreter
+      reason above holds -- there is no path to hand the weightiness gate --
+      and widening `_INLINE_DESTRUCTIVE_RE`, which models UNLINKING, would not
+      reach a truncating `open`.  Filed as its own ticket.
+    * `ex -sc '%d|x' P` destroys all five.  Deciding whether an `ex`/`ed`
+      script writes means reading that script's own language, which is a
+      bigger change than this one and is not attempted here.
+    * `ruby -i` is UNMEASURED, not cleared: ruby is not installed on the
+      devbox, so its rows exited 127 and the file was simply never touched.
+    """
+    if cmd0 == "sed":
+        in_place, backed_up = _inplace_edit_flag(
+            args, _SED_VALUE_LETTERS, "--in-place")
+        if not in_place or backed_up:
+            return None
+        operands = _inplace_operands(
+            args, _SED_VALUE_LETTERS, _SED_LONG_VALUE_FLAGS)
+        # sed takes its script as the FIRST OPERAND unless -e/-f supplied one.
+        if not any(a in _SED_SCRIPT_FLAGS or a.split("=", 1)[0] in _SED_SCRIPT_FLAGS
+                   for a in args):
+            has_e = any(a.startswith("-") and not a.startswith("--")
+                        and _scan_bundle(a[1:], "e", frozenset("fl"))[0]
+                        for a in args)
+            if not has_e:
+                operands = operands[1:]
+        targets = operands
+
+    elif cmd0 == "perl":
+        in_place, backed_up = _inplace_edit_flag(
+            args, _PERL_VALUE_LETTERS, "--in-place")
+        if not in_place or backed_up:
+            return None
+        # Without an inline program the first operand is a SCRIPT FILE to run,
+        # not a file to edit.  Every measured in-place shape carries -e/-E.
+        has_program = any(
+            a.startswith("-") and not a.startswith("--")
+            and (_scan_bundle(a[1:], "e", _PERL_VALUE_LETTERS - set("eE"))[0]
+                 or _scan_bundle(a[1:], "E", _PERL_VALUE_LETTERS - set("eE"))[0])
+            for a in args)
+        if not has_program:
+            return None
+        targets = _inplace_operands(args, _PERL_VALUE_LETTERS, frozenset())
+
+    else:
+        return None
+
+    # THE GATE, and it is the same one the writer family and the redirect
+    # family apply.  `sed -i 's/DEBUG/INFO/' src/app.py` is ordinary developer
+    # work; a data container, a block device, a system path or a secret is not.
     weighty = [t for t in targets
                if t and not _is_null_sink(t) and _redirect_target_is_weighty(t)]
     return weighty or None
