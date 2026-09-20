@@ -33,7 +33,7 @@
         "count": "={{$json.count}}",
         "targetSystem": "={{$json.table}}",
         "sessionId": "={{$workflow.id}}",
-        "agentId": "agent:n8n-demo1-bulk-delete-guard",
+        "agentId": "=agent:n8n-demo1-bulk-delete-guard/{{$execution.id}}",
         "additionalFields": {}
       },
       "id": "d1000001-0003-4001-8001-000000000003",

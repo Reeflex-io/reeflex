@@ -322,7 +322,12 @@ class VerdictLine(unittest.TestCase):
         code, out = self._run_main(["check_published_connector.py"])
         self.assertEqual(0, code, out)
         text = _norm(out)
-        self.assertIn("PASS — of the 12 (subject, channel) probe(s)", text, text)
+        # 17, not 12, since RFX-371 made all five demo workflows subjects of
+        # demo-agent-id-per-run. The literal is deliberately still a literal:
+        # deriving it from cpc.PROPERTIES would assert the script's arithmetic
+        # against itself, and the point of this line is that a human notices
+        # when the scored set moves. It moved, and this is the notice.
+        self.assertIn("PASS — of the 17 (subject, channel) probe(s)", text, text)
         self.assertIn("A difference in a file no Property names is NOT scored", text)
         self.assertNotIn(
             "every gap between this tree and the published connector is declared",
@@ -339,7 +344,10 @@ class VerdictLine(unittest.TestCase):
             0, code,
             "--channel github exited %s — the exit code that means 'a fix is "
             "missing' (RFX-360)\n%s" % (code, out))
-        self.assertIn("scoring 5 properties as 9 (subject, channel) probes on "
+        # 6 properties / 14 github probes after RFX-371 (was 5 / 9): the new
+        # demo-agent-id-per-run is github-only, because the npm tarball ships
+        # dist/ and README.md and no examples/ directory.
+        self.assertIn("scoring 6 properties as 14 (subject, channel) probes on "
                       "github", _norm(out))
         self.assertNotIn("Traceback", out)
 
