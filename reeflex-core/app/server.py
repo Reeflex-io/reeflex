@@ -10,12 +10,17 @@ Routes:
   GET  /v1/holds?status=&limit=&cursor=   -> JSON list (paged)             200/401
   GET  /v1/holds/{id}                -> full hold detail                   200/401/404
   POST /v1/holds/{id}/resolve        -> resolve a pending hold             200/401/403/404/409
-  GET  /healthz            -> {"status":"ok","ledger":{...},"holds":{...},
+  GET  /healthz            -> {"status":"ok","revision":"<sha>",
+                               "ledger":{...},"holds":{...},
                                "server":{...}}                             200
                               `holds` (RFX-309) reports whether this
                               deployment can accept an APPROVAL at all --
                               see principal.approval_capability() for what
                               `resolvable` does and does not promise.
+                              `revision` (RFX-89) is the commit this build
+                              was built from, omitted when the build did not
+                              say -- see buildinfo.py. Both are read by
+                              scripts/check_core_deployment.py.
 
 All other paths/methods -> HTTP 404 or 405.
 
@@ -439,7 +444,33 @@ class _DecideHandler(http.server.BaseHTTPRequestHandler):
                 # first and the image's HEALTHCHECK depends on it. An absent
                 # "holds" key is honest; a fabricated resolvable:true is not.
                 _holds_health = {}
+            # RFX-89 (core half): report WHICH BUILD is answering.
+            #
+            # Fourth time the same shape as the three blocks above, and the
+            # one that has cost the most: a core 44 commits / ~34 days behind
+            # main (RFX-88) answered /healthz identically to a fresh one, so
+            # the fleet red-teamed a build nobody was shipping and a human
+            # found it late. reeflex-app's daily deploy-drift job (RFX-90)
+            # exists for precisely this and DELIBERATELY DOES NOT WATCH
+            # api-dev, because there was nothing here to read.
+            #
+            # A SELF-REPORT, not an attestation, and the key is omitted
+            # entirely when the build did not say — see buildinfo.py for both
+            # limits and for why this is not CORE_VERSION.
+            _revision: str = ""
+            try:
+                from .buildinfo import build_revision  # local: import cost
+                _revision = build_revision()
+            except Exception:  # noqa: BLE001
+                # Same rule as every block here: /healthz is a liveness probe
+                # first and the image's HEALTHCHECK depends on it. An absent
+                # `revision` is honest, and the consumer reads absent as
+                # drift rather than as a pass.
+                _revision = ""
+
             _health: dict = {"status": "ok"}
+            if _revision:
+                _health["revision"] = _revision
             if _ledger_health:
                 _health["ledger"] = _ledger_health
             if _holds_health:

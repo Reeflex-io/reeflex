@@ -4,6 +4,16 @@ FROM python:3.12-slim
 
 ARG OPA_VERSION=1.18.0
 
+# RFX-89 (core half): the commit this image was built from, served on
+# /healthz so a check with no shell access can ask "is the deployed build the
+# build we test?" (RFX-90). It is a BUILD ARG and not a recomputation because
+# the image carries no `.git` — and on .118 the image is built from an
+# rsynced tree that may have none at all, so the build step is the only place
+# that knows. Unset is deliberately left EMPTY rather than defaulted to
+# something plausible: /healthz then omits `revision` and the checker reports
+# DRIFT, which is the honest reading of a build that will not say what it is.
+ARG GIT_SHA=
+
 # OCI metadata — associates this image with its source repo (GHCR auto-links via image.source).
 LABEL org.opencontainers.image.source="https://github.com/Reeflex-io/reeflex" \
       org.opencontainers.image.description="Reeflex — deterministic governance engine (reeflex-core)" \
@@ -41,7 +51,8 @@ RUN useradd --uid 10001 --user-group --home-dir /app --shell /usr/sbin/nologin r
 #       approver and the record says decided_by_verified=false.
 #
 # See CHANGELOG 0.2.0 and docs/reference/configuration.md.
-ENV REEFLEX_HOST=0.0.0.0 \
+ENV REEFLEX_BUILD_REVISION=$GIT_SHA \
+    REEFLEX_HOST=0.0.0.0 \
     REEFLEX_PORT=8080 \
     REEFLEX_OPA_BIN=/usr/local/bin/opa \
     REEFLEX_POLICY_DIR=/app/policy \
