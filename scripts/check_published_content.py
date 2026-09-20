@@ -64,11 +64,17 @@ THE THREE OUTCOMES, and why the middle one is the whole design
                line indistinguishable from the two packages merely waiting for
                a tag.  `UNPUBLISHED_WITH_A_TICKET` below is what keeps the
                ticket on the line until the release actually happens, and
-               fails once it has.
+               reports the entry as EXPIRED once it has (RFX-377: it used to
+               FAIL, which reddened `main` for whoever merged after a release).
 
   COLLISION    the version is on the index AND the contents differ.  FAIL.
-               This is the only failing outcome and it is the RFX-300 shape
-               exactly.
+               This is the only failing outcome of the comparison itself, and
+               it is the RFX-300 shape exactly.  The one other way this
+               component fails is a declaration that is STALE -- an entry
+               naming the artefact still under test that no longer describes
+               anything.  An entry naming an artefact NO LONGER under test is
+               EXPIRED: printed, counted on the anchored line, and not a
+               failure, because the event that expired it is the remedy.
 
 WHAT COUNTS AS A DIFFERENCE.  Every file the wheel ships under its top-level
 package directory, not only `*.py`.  reeflex-mcp ships three `mappings/*.yaml`
@@ -205,25 +211,39 @@ WAIVED_COLLISIONS = {
 #   3. IT SELF-EXPIRES.  The entry applies only while the package is
 #      UNPUBLISHED.  The moment the tree's version IS on the index -- i.e. the
 #      release happened, which is the remedy -- the entry stops describing
-#      reality and this component FAILS until it is deleted.
+#      reality and this component says so, in full, on every run, until it is
+#      deleted.
 #
 # It does NOT fail the gate while the lag is real, for the reason the module
 # docstring already gives about UNPUBLISHED: a check that reddens on the state
 # the remedy passes through gets switched off, and the remedy here (cut a tag)
 # is an owner decision this component is not entitled to force.  What it is
 # entitled to do is refuse to be quiet.
+#
+# AND IT DOES NOT FAIL THE GATE WHEN IT EXPIRES EITHER, WHICH IS A REVERSAL OF
+# THE ORIGINAL DESIGN (RFX-377).  Expiry is caused by the release -- the very
+# remedy the paragraph above declines to force -- so failing on it reddens the
+# gate on the state the remedy passes through, one step later.  It does not
+# even redden the release round: that round's gate runs before the upload, so
+# it goes green, and the red lands on `main` afterwards and on whoever merges
+# next.  Measured on 2026-09-20: publishing v0.2.2 at 00:40Z expired the
+# `reeflex-mcp` entry that used to live here, this component went red on an
+# unchanged `main` (run 35478969213, green on the same sha at 00:31Z), and six
+# open pull requests were blocked behind it under the main-CI-green-between-
+# merges rule.  The entry excused nothing in either state, so nothing was
+# hidden by letting it pass -- it is now printed as EXPIRED and counted on the
+# anchored line instead.
 # ---------------------------------------------------------------------------
 
 UNPUBLISHED_WITH_A_TICKET = {
-    "reeflex-mcp": {
-        "index_serves": "0.1.3",
-        "ticket": "RFX-300",
-        "why": "the 0.1.3 wheel on the index classifies an unmapped production "
-               "tool from the upstream server's own `readOnlyHint`, so the "
-               "governed component moves core's verdict; the tree's fix "
-               "(RFX-173 trust_annotations, RFX-174/175, RFX-138, RFX-129/214) "
-               "reaches a customer only once this version is published",
-    },
+    # reeflex-mcp / RFX-300 lived here, flagged at `index_serves: 0.1.3`: the
+    # wheel `pip install reeflex-mcp` served classified an unmapped production
+    # tool from the upstream server's own `readOnlyHint`, so the governed
+    # component moved core's verdict, and the tree's fix (RFX-173
+    # trust_annotations, RFX-174/175, RFX-138, RFX-129/214) reached no customer.
+    # The v0.2.2 tag published reeflex-mcp 0.1.4 on 2026-09-20T00:40:40Z; the
+    # wheel now MATCHes the tree, so the lag this entry warned about is over and
+    # the entry is deleted rather than left to report EXPIRED forever.
 }
 
 
@@ -474,38 +494,68 @@ def check(repo_root: str, fetch=fetch_wheel, only=None, waivers=None, flagged=No
                    "that did not run is not a green one)" % ", ".join(unreachable))
         return False, out
 
-    # A waiver that no longer describes a real collision is itself a failure.
-    # This is what stops the list above from becoming permanent: the entry dies
-    # with the defect, not whenever someone remembers to prune it.  Only
-    # evaluated when the index WAS reachable and the package was actually
-    # examined, so an outage cannot fake an expiry.
+    # A declaration that no longer describes anything splits two ways, and
+    # RFX-377 is the measurement that made the split necessary.  Both branches
+    # are only evaluated when the index WAS reachable and the package was
+    # actually examined, so an outage cannot fake either one.
+    #
+    #   STALE    the version the entry names is STILL the version under
+    #            examination, and there is no collision.  The entry is a lie
+    #            about an artefact that is still out there -> FAIL.
+    #
+    #   EXPIRED  the version the entry names is not the one under examination
+    #            any more -- the tree was bumped, or the release happened.  The
+    #            entry's subject is gone.  It excuses nothing (the pin already
+    #            guarantees that: `is_waived` requires an exact version match),
+    #            so it cannot hide a collision, and it does not fail -> it is
+    #            reported, loudly, on every run until someone deletes it.
+    #
+    # The reversal is paid for.  Until 2026-09-20 both branches failed, by
+    # design -- "a waiver list that does not self-expire is how a gate rots
+    # into a checkbox".  Publishing v0.2.2 at 00:40Z expired the one live entry
+    # in `UNPUBLISHED_WITH_A_TICKET` and this component went red on `main`,
+    # AFTER the release round had finished green, blocking six open pull
+    # requests behind a tree nobody had changed.  The pressure to delete is
+    # kept and moved onto the PASS line, where it is visible every run instead
+    # of being a surprise that blocks a merge queue.
     examined = {p["dist"] for p in packages}
-    stale = []
+    tree_version = {p["dist"]: p["version"] for p in packages}
+    stale, expired = [], []
     for dist, waiver in sorted(waivers.items()):
         if dist not in examined or dist in used_waivers:
             continue
-        stale.append("%s (waived at %s for %s)" % (dist, waiver["version"], waiver["ticket"]))
+        where = ("%s (waived at %s for %s; the tree now declares %s)"
+                 % (dist, waiver["version"], waiver["ticket"], tree_version.get(dist)))
+        if waiver["version"] == tree_version.get(dist):
+            stale.append("%s (waived at %s for %s)"
+                         % (dist, waiver["version"], waiver["ticket"]))
+        else:
+            expired.append(where)
     if stale:
-        out.append("PUBLISHED-CONTENT: FAIL (stale waiver: %s — the collision it "
+        out.append("PUBLISHED-CONTENT: FAIL (stale waiver: %s — the version it names "
+                   "is the version the tree still declares, and the collision it "
                    "excuses is gone, so the entry now hides nothing and excuses "
                    "nothing. Delete it from WAIVED_COLLISIONS)" % "; ".join(stale))
         return False, out
+    for line in expired:
+        out.append("  EXPIRED WAIVER: %s — the tree moved off the version this "
+                   "waiver pins, so it excuses nothing on any artefact under test. "
+                   "Delete it from WAIVED_COLLISIONS" % line)
 
     # Same rule, one state over: an UNPUBLISHED_WITH_A_TICKET entry for a
     # package that is no longer UNPUBLISHED means the release happened, which
-    # is the whole remedy.  The entry is then a warning about a lag that ended.
-    stale_flags = []
+    # is the whole remedy.  The entry is then a warning about a lag that ended
+    # -- EXPIRED, not stale, and it is the exact case RFX-377 measured.
+    expired_flags = []
     for dist, flag in sorted(flagged.items()):
         if dist not in examined or dist in used_flags:
             continue
-        stale_flags.append("%s (flagged at %s for %s)" % (dist, flag["index_serves"],
-                                                          flag["ticket"]))
-    if stale_flags:
-        out.append("PUBLISHED-CONTENT: FAIL (stale lag flag: %s — the package is no "
-                   "longer ahead of the index, so the lag this entry warns about is "
-                   "over. Delete it from UNPUBLISHED_WITH_A_TICKET)"
-                   % "; ".join(stale_flags))
-        return False, out
+        expired_flags.append("%s (flagged at %s for %s)" % (dist, flag["index_serves"],
+                                                            flag["ticket"]))
+    for line in expired_flags:
+        out.append("  EXPIRED LAG FLAG: %s — the package is no longer ahead of the "
+                   "index, so the lag this entry warns about is over and it warns "
+                   "about nothing. Delete it from UNPUBLISHED_WITH_A_TICKET" % line)
 
     if collisions:
         out.append("PUBLISHED-CONTENT: FAIL (%s published under a version string the "
@@ -525,6 +575,13 @@ def check(repo_root: str, fetch=fetch_wheel, only=None, waivers=None, flagged=No
         detail += (", %d of those lag(s) NOT routine — the index still serves a "
                    "wheel a ticket is open on (%s)"
                    % (len(flagged_lags), ", ".join(flagged_lags)))
+    # The expiry debt rides on the anchored line, not only in the body: this is
+    # the sentence gate.py shows as the component detail, and an expired entry
+    # only visible to someone scrolling the log is the quiet rot these tables'
+    # rules exist to prevent.
+    if expired or expired_flags:
+        detail += (", %d EXPIRED declaration(s) describing an artefact no longer "
+                   "under test — delete them" % (len(expired) + len(expired_flags)))
     out.append("PUBLISHED-CONTENT: PASS (%s)" % detail)
     return True, out
 
@@ -626,18 +683,55 @@ def selftest() -> int:
         record("waiver pinned to a version does not cover another version",
                not ok and any("COLLISION" in l and "WAIVED" not in l for l in lines))
 
-        # 7c. THE ONE THAT MATTERS: the collision is fixed, the waiver remains
-        #     -> FAIL. A waiver that outlives its defect is a checkbox.
+        # 7c. THE ONE THAT MATTERS: the collision is fixed at the version the
+        #     waiver names, and the waiver remains -> FAIL. A waiver that
+        #     outlives its defect on the artefact still under test is a checkbox.
         ok, lines = check(root, fetch=lambda d, v: (_fake_wheel("reeflex_demo", tree_files), "t"),
                           waivers=w)
-        record("waiver whose collision is gone -> FAIL (self-expiring)",
+        record("waiver whose collision is gone at the version it names -> FAIL",
                not ok and any("stale waiver" in l for l in lines))
 
-        # 7d. an index outage must not be read as a waiver expiring
+        # 7c-ii. RFX-377, the other half: the waiver names a version the tree
+        #     has moved OFF. Its subject is gone, it excuses nothing (7b proves
+        #     the pin), so it EXPIRES -- reported, counted, and NOT a failure.
+        ok, lines = check(root, fetch=lambda d, v: (_fake_wheel("reeflex_demo", tree_files), "t"),
+                          waivers=w_other)
+        record("waiver pinned to a version the tree left -> EXPIRED, not FAIL",
+               ok and any("EXPIRED WAIVER" in l for l in lines)
+               and not any("stale waiver" in l for l in lines))
+        record("...and the expiry is counted on the anchored PASS line",
+               any("PUBLISHED-CONTENT: PASS" in l and "EXPIRED declaration" in l
+                   for l in lines))
+
+        # 7c-iii. and it still excuses NOTHING: the same expired waiver over a
+        #     REAL collision fails, undeclared, by name. This is the fail-closed
+        #     corner -- without it, "expired is not a failure" would be a way to
+        #     make the component quieter rather than more correct.
+        ok, lines = check(root, fetch=lambda d, v: (_fake_wheel("reeflex_demo", drifted), "t"),
+                          waivers=w_other)
+        record("an EXPIRED waiver excuses no collision",
+               not ok and any("COLLISION" in l and "WAIVED" not in l for l in lines))
+
+        # 7d. an index outage must not be read as a waiver expiring.
+        #     WHAT ACTUALLY PROTECTS THIS IS THE EARLY RETURN on `unreachable`,
+        #     not the `dist not in examined` clause below it -- measured by
+        #     removing that clause and watching this arm stay green at 23/23.
+        #     Both arms are kept, and 7d-ii is the one that covers the clause.
         ok, lines = check(root, fetch=boom, waivers=w)
         record("outage is not read as a stale waiver",
                not ok and any("fails closed" in l for l in lines)
-               and not any("stale waiver" in l for l in lines))
+               and not any("stale waiver" in l or "EXPIRED WAIVER" in l for l in lines))
+
+        # 7d-ii. a declaration naming a package THIS RUN DID NOT EXAMINE -- a
+        #     `--only` filter, or a dist that has left the repo -- must not be
+        #     judged at all. Judging it would report an expiry for an artefact
+        #     nobody compared, and under `--only` that is a verdict about a
+        #     package the run deliberately skipped.
+        w_absent = {"reeflex-absent": {"version": "1.2.3", "ticket": "RFX-DEMO", "why": "x"}}
+        ok, lines = check(root, fetch=lambda d, v: (_fake_wheel("reeflex_demo", tree_files), "t"),
+                          waivers=w_absent)
+        record("a waiver for a package this run did not examine is not judged",
+               ok and not any("EXPIRED WAIVER" in l or "stale waiver" in l for l in lines))
 
         # --- the flagged-lag arms -------------------------------------------
         # An UNPUBLISHED line that a ticket is open on must not read like the
@@ -661,20 +755,46 @@ def selftest() -> int:
                ok and any("UNPUBLISHED" in l for l in lines)
                and not any("RFX-DEMO" in l or "NOT routine" in l for l in lines))
 
-        # 7g. THE ONE THAT MATTERS, the mirror of 7c: the package is on the
-        #     index again -- the release happened -- and the entry remains.
-        #     A warning about a lag that ended is a warning nobody can act on.
+        # 7g. THE ONE RFX-377 IS ABOUT: the package is on the index again --
+        #     the release happened, which is the entry's own remedy -- and the
+        #     entry remains. A warning about a lag that ended is a warning
+        #     nobody can act on, but it is also not a reason to redden a gate
+        #     that blocks every open PR. EXPIRED: reported, counted, not a FAIL.
         ok, lines = check(root, fetch=lambda d, v: (_fake_wheel("reeflex_demo", tree_files), "t"),
                           flagged=f)
-        record("flag whose lag is over -> FAIL (self-expiring)",
-               not ok and any("stale lag flag" in l for l in lines))
+        record("flag whose lag is over -> EXPIRED, not FAIL",
+               ok and any("EXPIRED LAG FLAG" in l for l in lines))
+        record("...and it names both the ticket and the version it flagged",
+               any("EXPIRED LAG FLAG" in l and "RFX-DEMO" in l and "1.0.0" in l
+                   for l in lines))
+        record("...and the expiry is counted on the anchored PASS line",
+               any("PUBLISHED-CONTENT: PASS" in l and "EXPIRED declaration" in l
+                   for l in lines))
+
+        # 7g-ii. the fail-closed corner for the flag table: an expired entry
+        #     must not soften a REAL collision on the republished wheel. The
+        #     flag table never excused a collision in the first place, and this
+        #     arm is what stops a future edit from making it do so quietly.
+        ok, lines = check(root, fetch=lambda d, v: (_fake_wheel("reeflex_demo", drifted), "t"),
+                          flagged=f)
+        record("an EXPIRED lag flag does not soften a collision on the new wheel",
+               not ok and any("COLLISION" in l for l in lines))
 
         # 7h. and an outage must not be read as the lag having ended, for the
-        #     same reason 7d exists for waivers.
+        #     same reason 7d exists for waivers -- and with the same caveat:
+        #     the early return on `unreachable` is what carries this one.
         ok, lines = check(root, fetch=boom, flagged=f)
-        record("outage is not read as a stale lag flag",
+        record("outage is not read as an expired lag flag",
                not ok and any("fails closed" in l for l in lines)
-               and not any("stale lag flag" in l for l in lines))
+               and not any("EXPIRED LAG FLAG" in l for l in lines))
+
+        # 7h-ii. the mirror of 7d-ii, for the flag table.
+        f_absent = {"reeflex-absent": {"index_serves": "1.0.0", "ticket": "RFX-DEMO",
+                                       "why": "x"}}
+        ok, lines = check(root, fetch=lambda d, v: (_fake_wheel("reeflex_demo", tree_files), "t"),
+                          flagged=f_absent)
+        record("a lag flag for a package this run did not examine is not judged",
+               ok and not any("EXPIRED LAG FLAG" in l for l in lines))
 
         # 8. discovery finds the package by walking, not by a hardcoded list
         record("discovery finds the package",
