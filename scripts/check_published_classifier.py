@@ -217,7 +217,44 @@ MIN_SCORED_CASES = 40
 # scores 191 corpus cases with 0 fail-open and 0 fail-noisy. The entries are
 # deleted rather than left to report EXPIRED forever; `git log -- ` this file
 # at e175e4e for the measurements behind each one.
-PUBLISHED_LAG: dict = {}
+#
+# WHAT IT HOLDS AGAIN, AND WHY THE TABLE DID NOT STAY EMPTY (RFX-158, this PR).
+# This change makes the adapter refuse a command word it cannot resolve, and it
+# re-prices one row that was already scored. Four cases therefore start
+# diverging from `reeflex-claude==0.2.1` — the wheel the index serves now, which
+# does NOT carry this fix — and an undeclared divergence FAILS the component:
+#
+#   gap-command-substitution                     was `residual: RFX-158`, now scored
+#   gap-command-substitution-ctrl-rm-rf-root     was `residual: RFX-158`, now scored
+#   gap-command-substitution-ctrl-drop-database  was `residual: RFX-158`, now scored
+#   destroy-subst-bare                           already scored; `ask` -> `deny`
+#
+# `destroy-subst-bare` IS THE ONE THAT IS EASY TO MISS, and it is the reason
+# this block is four entries and not the three the PR was opened with. It was
+# covered by the ten-entry `destroy-subst-*` RFX-301 family, and #196 deleted
+# that family as expired the same morning — correctly, because 0.2.1 closed it.
+# Re-pricing it `ask` -> `deny` makes the published wheel diverge again, on a
+# case id whose declaration no longer exists. Measured on the rebased tree
+# (dev-1--191 `03-pypi-behaviour-rebased.txt`): 4 fail-open, 0 declared, FAIL.
+# It is not visible in a conflict — the rebase of this file conflicted on the
+# surrounding prose, not on this line — and it is not visible in the unit
+# suites either.
+#
+# THE TICKET IS RFX-339, NOT RFX-158, and the distinction is dev-3's: what
+# clears these is the republish, not the fix. RFX-158's production half is
+# closed by this very commit, so a reader who follows RFX-158 from here lands
+# on a ticket that says "fixed", which is not what an entry in this table
+# means.
+PUBLISHED_LAG: dict = {
+    "gap-command-substitution":
+        {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "gap-command-substitution-ctrl-rm-rf-root":
+        {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "gap-command-substitution-ctrl-drop-database":
+        {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "destroy-subst-bare":
+        {"ticket": "RFX-339", "index_serves": "0.2.1"},
+}
 
 # --------------------------------------------------------------------------
 # THE SEAT ARM (RFX-326): the same corpus, one DISTRIBUTION out.
@@ -268,7 +305,27 @@ SEAT_ANCHOR = "PUBLISHED-LITELLM-SEAT"
 # describe an artefact nobody can install any more. Deleted, not left to
 # report EXPIRED forever; `git log -- ` this file at e175e4e for the
 # per-family evidence paths.
-SEAT_PUBLISHED_LAG: dict = {}
+#
+# WHAT IT HOLDS AGAIN (RFX-158, this PR): the same four cases as the arm above,
+# reached one distribution further out, and MEASURED ON THIS ARM rather than
+# mirrored from the other — `reeflex-litellm==0.2.0` installed from the index,
+# its floor resolving `reeflex-claude==0.2.1`, scored through the seat's own
+# normaliser. Same four ids, same four published verdicts (dev-1--191
+# `04-pypi-litellm-seat-rebased.txt`: 4 fail-open, 0 declared, FAIL). They are
+# listed separately rather than aliased for the reason stated above, and
+# `index_serves` names `reeflex-litellm`'s version because that is the
+# distribution THIS arm installs — the two tables expire on different clocks
+# and a republish of one does not clear the other.
+SEAT_PUBLISHED_LAG: dict = {
+    "gap-command-substitution":
+        {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "gap-command-substitution-ctrl-rm-rf-root":
+        {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "gap-command-substitution-ctrl-drop-database":
+        {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "destroy-subst-bare":
+        {"ticket": "RFX-339", "index_serves": "0.2.0"},
+}
 
 TICKET_RE = re.compile(r"RFX-\d+")
 
