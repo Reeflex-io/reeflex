@@ -158,6 +158,42 @@ class TheSelftestIsItselfRun(unittest.TestCase):
             code = chk.selftest()
         self.assertEqual(code, 0, buf.getvalue())
 
+    def test_the_cross_check_says_out_loud_whether_it_ran(self):
+        """...and that report must survive INTO THE LOG.
+
+        MEASURED ON THE RUNNER, and it is the reason this test exists. In
+        gate.yml's dep-floors job (no `pip install`) the checker's own step
+        printed `cross-check against PyYAML SKIPPED (PyYAML not importable
+        here)` — exactly as designed. In the preflight-gate job, where the
+        package installs mean PyYAML probably IS importable, the line appeared
+        nowhere: `redirect_stdout` above swallows it, so the one plane that
+        might have run the cross-check reported nothing either way.
+
+        That is the defect this whole ticket is about, committed by its own
+        instrument: a check whose result is invisible is indistinguishable
+        from a check that did not run. So the status is asserted to exist —
+        the selftest cannot quietly stop reporting it — and re-emitted to
+        stderr, which the discovery runner does not capture.
+        """
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            chk.selftest()
+        out = buf.getvalue()
+
+        ran = "cross-checked" in out
+        skipped = "cross-check against PyYAML SKIPPED" in out
+        self.assertNotEqual(
+            ran,
+            skipped,
+            "the selftest must report EXACTLY ONE of 'cross-checked ...' or "
+            f"'cross-check ... SKIPPED'. It reported neither or both:\n{out}",
+        )
+        print(
+            "  [RFX-134] PyYAML cross-check in this environment: "
+            + ("RAN" if ran else "SKIPPED (PyYAML not importable)"),
+            file=sys.stderr,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
