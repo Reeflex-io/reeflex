@@ -146,6 +146,7 @@ WIRED = {
     "check_diagram_contrast.py": ".github/workflows/docs.yml",
     "check_migration_heads.py": "gate.py",
     "check_published_classifier.py": "gate.py",
+    "check_published_connector.py": ".github/workflows/smoke-npm.yml",
     "check_published_content.py": "gate.py",
     "check_suite_coverage.py": "gate.py",
     "check_test_census.py": "gate.py",
