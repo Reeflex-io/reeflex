@@ -44,6 +44,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
   **The one deliberate weakening, stated rather than buried:** four stems whose bare form is an ordinary noun (`commit`, `run`, `set`, `merge`) veto only in coordinator position, each justified by a real tool name (`get_commit`, `get_workflow_run`, `describe_change_set`, `get_merge_base`) and pinned by a test so growing the set stays a decision. **Residual:** one of those four spelled as a genuine verb with no coordinator — `query_commit`, `fetch_set` — is not vetoed and lands in the read bucket. That is the price of `get_commit`, it is four stems wide, and the answer for a tool named like that is a tier-1 declarative mapping, not a longer word list. The module comment claiming a false veto is merely "fail-noisy, visible" — true as a mechanism, never measured against real names — is replaced by what was measured.
 
 - **`reeflex-mcp` moves to 0.1.5.** The index has served 0.1.4 since 2026-09-20T00:40:40Z, so any edit to `reeflex_mcp/**` under the same version string is a content COLLISION for a customer running `pip install -U` (RFX-382); `scripts/check_published_content.py` reports it correctly and the remedy it names is a higher version. **A bump is not a publication:** until the owner cuts the next tag the index keeps serving 0.1.4 and every installed seat keeps the over-block. That tag is an owner gate and is flagged here, not taken.
+### Changed
+
+- **`reeflex-claude` 0.2.1 → 0.2.2 (unpublished).** RFX-356: among candidates a
+  bash line destroys whose severity key is EXACTLY equal, the adapter no longer
+  lets POSITION ON THE LINE decide which `target_ref` the envelope carries.
+  Measured on today's `main` before the fix: over a 5 ephemeral × 5 protected ×
+  3 wrapper grid, **21 of 75 pairs named a different ref when the same two
+  commands were reordered**, including the ticket's own headline pair — a
+  `/srv/prod/secrets.env` destruction reported as `/tmp/x` purely because it was
+  written second. After: **0 of 75**. The tie-break prefers a ref that is not
+  FHS-temporary, which needs no site knowledge and can only add protection.
+  No axis, tier, verb or magnitude moves.
+- The version string moves because the **content** moves: the v0.2.2 tag put
+  `reeflex-claude` 0.2.1 on the index at 00:40:27Z, so any further edit to that
+  package under the same number is an RFX-300 content collision. **This is a
+  bump, not a publication** — until the owner cuts the next tag the index still
+  serves 0.2.1 and installed seats do not have this fix.
 
 ## [0.2.2] - 2026-09-20 — reeflex-core 0.2.2 + reeflex-claude 0.2.1 + reeflex-litellm 0.2.0 + reeflex-mcp 0.1.4
 
