@@ -115,11 +115,17 @@ RFX-175) -- read this before trusting the paragraph above:
     `count_and_compact`, `fetch_and_apply_migration`, `get_or_create_index`.
     That is the same defect class as reeflex-claude's `_bash_verb()` reading
     only the first shell token (RFX-144). `_has_mutating_stem()` now vetoes
-    the read bucket when any later token in the name is a known mutating
-    stem; the call falls to the floor. The veto can only ever make a call
-    STRICTER, so it does not reopen BUG 2's false-positive-deny gap for
-    genuine reads (`get_user`, `list_issues`, `read_text_file` are
-    untouched).
+    the read bucket when a later token in the name is a known mutating
+    stem IN VERB POSITION; the call falls to the floor.
+
+    RFX-249: "can only ever make a call STRICTER" was true as a mechanism and
+    was never measured against real tool names. Matched as an OPEN PREFIX of a
+    token, the stems also matched noun and participle forms, so 11 ordinary
+    reads -- `get_settings` (`set`), `list_commits` (`commit`),
+    `get_installed_packages` (`install`), `get_workflow_run` (`run`) and the
+    rest -- reached the floor and, at `environment: production`, R3 deny. That
+    shipped in 0.1.4 and is what `_has_mutating_stem` now narrows; the eleven
+    compounds above are unchanged and still fall to the floor.
 
 This module is pure: no network, no I/O, no side effects. (`mcp.types` is
 imported ONLY for the `ToolAnnotations` type hint -- no SDK behavior used.)
@@ -221,12 +227,20 @@ _EXECUTE_AXES = {
 # own tokens (snake_case segments AND camelCase humps), so `selectAllAndDelete`
 # and `select_all_and_delete` are treated identically.
 #
-# Stems only -- matched as a PREFIX of a token, so "delete" covers "deletes"/
-# "deleted", "replace" covers "replaces"/"replacement". Deliberately generous:
-# a false veto costs a genuine read the floor (fail-noisy, visible, fixable
-# with a one-line declarative mapping), a missed veto costs a customer their
-# data.
-_MUTATING_STEMS = (
+# RFX-249: matched as a WHOLE TOKEN, not as an open prefix. The open prefix was
+# chosen so that "delete" would also cover "deletes"/"deleted"; what it actually
+# covered was every noun and participle built on the same stem, and those are
+# what ordinary read tools are named after -- `settings` (set), `commits`
+# (commit), `installed` (install), `running` (run), `deployments` (deploy),
+# `publisher` (publish), `moved` (move), `deletion`/`deleted` (delete).
+# Measured on the published 0.1.4 wheel: 11 of 11 of RFX-249's names, plus 8
+# more real tool names, priced execute/irreversible/systemic and DENIED by the
+# deployed production core.
+#
+# The open prefix is still used in coordinator position ("get_and_deleted_rows",
+# "search_or_replacing_text"), where the token cannot be anything but a verb --
+# see `_has_mutating_stem`.
+_MUTATING_STEMS = frozenset({
     "delete",
     "del",
     "remove",
@@ -278,7 +292,44 @@ _MUTATING_STEMS = (
     "grant",
     "create",
     "set",
-)
+})
+
+# RFX-249. A token that is a mutating stem is only a VERB when something in the
+# name puts it in verb position. Two things do:
+#
+#   * it follows a coordinator -- `search_and_replace`, `get_or_create_index`,
+#     `selectAllAndDelete`. Nothing but a verb follows "and"/"or"/"then" in a
+#     tool name, so an inflected form counts here too.
+#   * it is a bare stem that has no ordinary noun sense -- `query_write`,
+#     `search_replace`. "a write" and "a replace" are not things a read tool
+#     enumerates, so a bare `write` after a read prefix is a second verb.
+#
+# _NOUN_SENSE_STEMS is the exception to the second rule and therefore the ONLY
+# deliberate weakening in this change. Every entry is here because a REAL tool
+# name needs it, not because the word felt noun-ish:
+#
+#   commit  get_commit, list_commits, get_pull_request_commits  (GitHub MCP)
+#   run     get_workflow_run, list_workflow_runs                (GitHub Actions)
+#   set     describe_change_set, get_change_set                 (AWS CFN)
+#   merge   get_merge_base                                      (git)
+#
+# RESIDUAL, stated rather than closed: one of those four spelled as a genuine
+# verb with no coordinator in front of it -- `query_commit`, `fetch_set` -- is
+# NOT vetoed and lands in the read bucket. That is the price of `get_commit`,
+# it is four stems wide, and the answer for a tool like that is tier 1, a
+# declarative mapping, not a longer word list. Every other stem in
+# `_MUTATING_STEMS` still vetoes anywhere in the name.
+_NOUN_SENSE_STEMS = frozenset({"commit", "run", "set", "merge"})
+
+_COORDINATORS = frozenset({"and", "or", "then"})
+
+# In coordinator position the OLD open-prefix match is kept -- widened, not
+# narrowed, by the `e`-dropping form (`replace` -> `replacing`), which the
+# shipped prefix match never caught either. Where the grammar already
+# guarantees a verb, generosity costs nothing: there is no read tool named
+# `..._and_<anything>`.
+_MUTATING_STEM_PREFIXES = tuple(sorted(
+    set(_MUTATING_STEMS) | {s[:-1] for s in _MUTATING_STEMS if s.endswith("e")}))
 
 # RFX-174: when the annotation tier IS trusted, a `destructiveHint: true`
 # keeps the FLOOR's blast radius. The server told us the tool is destructive;
@@ -304,15 +355,29 @@ def _name_tokens(tool_name: str) -> list[str]:
 
 
 def _has_mutating_stem(tool_name: str) -> bool:
-    """RFX-175: True when any token AFTER the first is a known mutating stem.
+    """RFX-175 + RFX-249: True when a token AFTER the first is a known mutating
+    stem IN VERB POSITION.
 
     The first token is skipped on purpose -- it is the token the read prefix
     already matched, and a name whose FIRST token is a mutating stem never
     reaches the read bucket anyway (`delete_*`/`remove_*`/`drop_*` are matched
     earlier, and anything else falls to the floor).
+
+    Verb position, either of:
+      * the previous token is a coordinator (`..._and_delete`, `getOrCreate`);
+        there the old open-prefix match is kept, because nothing but a verb
+        follows "and"/"or"/"then" in a tool name;
+      * the token is the bare stem and the stem has no noun sense
+        (`query_write`). A bare `_NOUN_SENSE_STEMS` member on its own
+        (`get_commit`) is an object, not a verb, and does NOT veto.
     """
-    for token in _name_tokens(tool_name)[1:]:
-        if token.startswith(_MUTATING_STEMS):
+    tokens = _name_tokens(tool_name)
+    for i, token in enumerate(tokens[1:], start=1):
+        if tokens[i - 1] in _COORDINATORS:
+            if token.startswith(_MUTATING_STEM_PREFIXES):
+                return True
+            continue
+        if token in _MUTATING_STEMS and token not in _NOUN_SENSE_STEMS:
             return True
     return False
 
