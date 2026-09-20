@@ -142,6 +142,11 @@ WIRED = {
     # scripts/ — invoked by the gate or by a registered workflow
     "attack-probe-rfx144-agent-prices-own-action.py": "gate.py",
     "build-wp-zips.py": ".github/workflows/release.yml",
+    # RFX-309/RFX-89 (#197), landed under this branch. Named in five files;
+    # only core-deployment.yml names it in an executed `run:` block (104, 108).
+    # buildinfo.py and server.py name it inside a comment and a docstring, and
+    # the Python reader below counts neither.
+    "check_core_deployment.py": ".github/workflows/core-deployment.yml",
     "check_dependency_floors.py": ".github/workflows/gate.yml",
     "check_diagram_contrast.py": ".github/workflows/docs.yml",
     "check_migration_heads.py": "gate.py",
@@ -150,6 +155,12 @@ WIRED = {
     "check_published_content.py": "gate.py",
     "check_suite_coverage.py": "gate.py",
     "check_test_census.py": "gate.py",
+    # RFX-134 (#200), landed under this branch. Three files in the tree name
+    # this script; only gate.yml does so in an executed `run:` block (lines
+    # 111 and 113). ci.yml and ci-reeflex-mcp.yml name it in a COMMENT
+    # pointing readers at the guard, and the reader below excludes comments —
+    # so this is the sole invoker, not merely the first one found.
+    "check_workflow_concurrency.py": ".github/workflows/gate.yml",
     "probe_diagrams.py": ".github/workflows/docs.yml",
     "verify_release_artifacts.py": ".github/workflows/release.yml",
 }
