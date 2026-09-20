@@ -43,7 +43,7 @@
         "count": "={{$json.count}}",
         "targetSystem": "={{$json.table}}",
         "sessionId": "={{$workflow.id}}",
-        "agentId": "agent:n8n-demo3-approval-loop",
+        "agentId": "=agent:n8n-demo3-approval-loop/{{$execution.id}}",
         "additionalFields": {}
       },
       "id": "d3000003-0003-4003-8003-000000000003",

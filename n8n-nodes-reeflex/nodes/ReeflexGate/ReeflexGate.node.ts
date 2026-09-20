@@ -358,13 +358,30 @@ export class ReeflexGate implements INodeType {
 				// resubmitted from execution B, even by the same workflow. That is
 				// the tightening this fix exists for, and it is a real behaviour
 				// change for a loop that resumes in a NEW execution. The documented
-				// approval loop (examples/n8n/demo3) is unaffected twice over: it
-				// resubmits by spreading `reeflex.envelope`, so it replays the
-				// ORIGINAL agent block verbatim, and it pins Agent ID explicitly
-				// rather than taking this default. An operator whose loop does end
-				// its execution should pin Agent ID to something stable across the
-				// resume, and accept that any agent able to set that value can then
-				// spend the approval.
+				// approval loop (examples/n8n/demo3) is unaffected: it resubmits by
+				// spreading `reeflex.envelope`, so it replays the ORIGINAL agent
+				// block verbatim. An operator whose loop does end its execution
+				// should pin Agent ID to something stable across the resume, and
+				// accept that any agent able to set that value can then spend the
+				// approval.
+				//
+				// RFX-371 — AND "IT PINS AGENT ID EXPLICITLY" WAS NOT A SECOND
+				// REASON IT WAS SAFE. This comment used to say demo3 was unaffected
+				// "twice over", the second reason being that it pinned Agent ID
+				// rather than taking this default. Pinning was what made it unsafe:
+				// the pinned value was the CONSTANT `agent:n8n-demo3-approval-loop`,
+				// identical in every copy anyone imported, so every importer of that
+				// demo presented core with one actor key and the check above became
+				// vacuous for exactly the artefact most people run. Measured through
+				// core's decide.process() over the real OPA pack: importer B spent
+				// the approval a human granted importer A (allow,
+				// reeflex.policy/approved_resubmission) and A was then refused
+				// reeflex_hold_consumed. The five demos now pin
+				// `=agent:n8n-demo<N>-.../{{$execution.id}}` and
+				// scripts/tests/test_n8n_demo_agent_identity_rfx371.py scores them,
+				// enumerated from the examples directory rather than from a list.
+				// A correct default and an override nothing reads is one guarded
+				// plane and one unguarded one.
 				default: '=agent:n8n/{{$execution.id}}',
 				// eslint-disable-next-line n8n-nodes-base/node-param-description-miscased-id -- "agent.id" is a literal Action Envelope JSON field name (lowercase by SPEC), not prose.
 				description: 'Identifier of the agent performing the action (Action Envelope agent.id). Defaults to a per-execution value: two concurrent runs must not share one identity, or a human approval granted to one can be spent by the other.',

@@ -43,7 +43,7 @@
         "count": "={{$json.count}}",
         "targetSystem": "={{$json.table}}",
         "sessionId": "={{$workflow.id}}",
-        "agentId": "agent:n8n-demo4-nothing-gets-through",
+        "agentId": "=agent:n8n-demo4-nothing-gets-through/{{$execution.id}}",
         "additionalFields": {}
       },
       "id": "d4000004-0003-4004-8004-000000000003",

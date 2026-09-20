@@ -100,6 +100,10 @@ ARTEFACTS = {
         "tree": "n8n-nodes-reeflex/examples/n8n/demo1-bulk-delete-guard.workflow.json",
         "github": "examples/n8n/demo1-bulk-delete-guard.workflow.json",
     },
+    "demo2-workflow": {
+        "tree": "n8n-nodes-reeflex/examples/n8n/demo2-fragmentation-doesnt-work.workflow.json",
+        "github": "examples/n8n/demo2-fragmentation-doesnt-work.workflow.json",
+    },
     "demo3-workflow": {
         "tree": "n8n-nodes-reeflex/examples/n8n/demo3-the-approval-loop.workflow.json",
         "github": "examples/n8n/demo3-the-approval-loop.workflow.json",
@@ -127,10 +131,14 @@ ARTEFACTS = {
 # read as covered (RFX-359 is that shape one level down).
 UNSCORED_WORKFLOWS = {
     "demo2-fragmentation-doesnt-work.workflow.json":
-        "its session id is generated in a Code node (`frag-demo-${$execution.id}-…`) "
-        "and passed as `={{$json.sessionId}}` on purpose — the demo isolates R5's "
-        "session delete budget and needs one id shared by ten items, so the "
-        "workflow-scoped default does not apply to it.",
+        "excluded from session-id-per-workflow ONLY. Its session id is generated "
+        "in a Code node (`frag-demo-${$execution.id}-…`) and passed as "
+        "`={{$json.sessionId}}` on purpose — the demo isolates R5's session "
+        "delete budget and needs one id shared by ten items, so the "
+        "workflow-scoped default does not apply to it. It IS a subject of "
+        "demo-agent-id-per-run (RFX-371): the reason its session id is special "
+        "says nothing about its agent id, and the row that excused one was read "
+        "as excusing both.",
 }
 
 
@@ -180,6 +188,16 @@ class Property:
 # the expression cannot satisfy it.
 _WORKFLOW_SESSION_ID = re.compile(r'"sessionId":\s*"=\{\{\$workflow\.id\}\}"')
 
+# The agent id as it is spelled in an exported workflow, anchored on the
+# parameter NAME for the same reason: demo3's README and the node's own
+# docstring both discuss agent ids in prose, and a probe prose can satisfy
+# measures the prose. Requires the leading `=` (an n8n expression) AND a
+# per-run token, because `"agentId": "=agent:n8n-demo3-approval-loop"` is an
+# expression that still evaluates to one string for every importer — the same
+# defect wearing an equals sign.
+_WORKFLOW_AGENT_ID_PER_RUN = re.compile(
+    r'"agentId":\s*"=[^"]*\{\{\$(?:execution|workflow)\.id\}\}[^"]*"')
+
 PROPERTIES: list[Property] = [
     Property(
         id="agent-id-per-execution",
@@ -191,16 +209,49 @@ PROPERTIES: list[Property] = [
         # makes that comparison vacuous.
         #
         # ONE subject, and that is measured rather than assumed: the demo
-        # workflows do NOT inherit this default — each pins its own constant
-        # (`agent:n8n-demo1-bulk-delete-guard` and so on), so f9c2977 did not
-        # land in them and they are not subjects of this property. (Whether a
-        # shipped demo SHOULD carry a constant agent id is a separate question
-        # and not one this script answers.)
+        # workflows do NOT inherit this default — each pins its own value, so
+        # f9c2977 did not land in them and they are not subjects of THIS row.
+        #
+        # RFX-371 ANSWERED THE QUESTION THIS COMMENT USED TO PARK. It read:
+        # "(Whether a shipped demo SHOULD carry a constant agent id is a
+        # separate question and not one this script answers.)" It is answered —
+        # measured through core's own decide.process() over the real OPA pack,
+        # with the ids read out of the shipped JSON: with the constant, importer
+        # B spends the approval a human granted importer A (allow,
+        # reeflex.policy/approved_resubmission) and A is then locked out
+        # (reeflex_hold_consumed); with a per-run id, B is refused
+        # reeflex_hold_actor_mismatch and A keeps its approval. The demos are
+        # now scored, by `demo-agent-id-per-run` below — a separate property
+        # because it closes on a DIFFERENT commit than f9c2977 and a republish
+        # can land one without the other.
         subjects=(
             Subject("node", re.compile(r"agent:n8n/\{\{\$execution\.id\}\}"),
                     "the node's Agent ID parameter default"),
         ),
         what="agent.id default is per-execution, not a constant every workflow shares",
+    ),
+    Property(
+        id="demo-agent-id-per-run",
+        ticket="RFX-371",
+        # github only: the npm tarball ships dist/ and README.md, no examples/.
+        channels=("github",),
+        # An explicit value in an imported workflow BEATS the node default, so
+        # for anyone importing a demo the correct default above is not the thing
+        # that decides. All five demos pinned a constant, which means every
+        # importer of a demo presented core with the SAME actor key —
+        # indistinguishable, by construction, from one agent that restarted.
+        #
+        # All FIVE are subjects, including demo2: its exclusion in
+        # UNSCORED_WORKFLOWS is about its session id and says nothing about its
+        # agent id.
+        subjects=(
+            Subject("demo1-workflow", _WORKFLOW_AGENT_ID_PER_RUN, "demo1's gate node"),
+            Subject("demo2-workflow", _WORKFLOW_AGENT_ID_PER_RUN, "demo2's gate node"),
+            Subject("demo3-workflow", _WORKFLOW_AGENT_ID_PER_RUN, "demo3's gate node"),
+            Subject("demo4-workflow", _WORKFLOW_AGENT_ID_PER_RUN, "demo4's gate node"),
+            Subject("demo5-workflow", _WORKFLOW_AGENT_ID_PER_RUN, "demo5's gate node"),
+        ),
+        what="an imported demo's agent.id varies per run, so two importers cannot spend each other's approvals",
     ),
     Property(
         id="session-id-per-workflow",
@@ -304,6 +355,15 @@ LAG: list[Lag] = [
         "the publish repo carries 25a98040"),
     Lag("demo3-readme-warns", "github", "RFX-182", "2026-09-18",
         "the publish repo carries 25a98040"),
+    # Declared 2026-09-20 (dev-2 round 097, RFX-371), measured on the published
+    # bytes that day: all five demos in the publish repo still pin the constant.
+    # This row is the point of the fix as much as the tree change is — a
+    # customer imports from the PUBLISH REPO, so until it is republished the
+    # exposure measured in RFX-371 is still what an importer gets. The tree
+    # being right is not the delivery.
+    Lag("demo-agent-id-per-run", "github", "RFX-371", "2026-09-20",
+        "the publish repo carries the commit that made every demo's agentId "
+        "a per-run expression"),
 ]
 
 

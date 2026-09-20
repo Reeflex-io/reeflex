@@ -73,8 +73,24 @@ in the workflow.
    with `agent` or `automation` there returns `403 principal_type_not_allowed`
    unless the operator has allowed that type for this rule via
    `REEFLEX_RESOLUTION_POLICY`; and (b) the id (`demo3-approver`) **must
-   differ from the acting agent** (`agent:n8n-demo3-approval-loop`) or core
-   returns `403 actor_is_approver` — the approver can never be the actor.
+   differ from the acting agent** (`agent:n8n-demo3-approval-loop/<execution
+   id>`) or core returns `403 actor_is_approver` — the approver can never be
+   the actor.
+
+   > **Why the Agent ID carries the execution id** (RFX-371). It used to be
+   > the bare constant `agent:n8n-demo3-approval-loop`, the same string in
+   > every copy of this demo anyone imported. Core binds a human's approval to
+   > the actor by comparing `agent.id` (with `agent.on_behalf_of`) against the
+   > held envelope, and it deliberately does **not** bind `agent.session_id` —
+   > a hold lives hours and an agent that restarts before resubmitting gets a
+   > new session. So two people running this demo against the shared `api-dev`
+   > endpoint were, to core, one agent that had restarted. Measured: the
+   > second importer's resubmission of the first's approved hold came back
+   > `allow`, and the importer the human actually approved was then refused
+   > `reeflex_hold_consumed`. With the execution id in the agent id the second
+   > importer is refused `reeflex_hold_actor_mismatch` and the first keeps its
+   > approval. If you pin your own Agent ID, keep it unique to you and stable
+   > across the resubmission.
 
    **Against a reeflex-core 0.2.0+ default deployment this node also needs a
    credential bound to `human:demo3-approver`.** Core now defaults to

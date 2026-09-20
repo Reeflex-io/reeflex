@@ -33,7 +33,7 @@
         "count": "={{$json.count}}",
         "targetSystem": "={{$json.table}}",
         "sessionId": "={{$workflow.id}}",
-        "agentId": "agent:n8n-demo5-observe-posture",
+        "agentId": "=agent:n8n-demo5-observe-posture/{{$execution.id}}",
         "additionalFields": {}
       },
       "id": "d5000005-0003-4005-8005-000000000003",
