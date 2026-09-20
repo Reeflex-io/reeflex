@@ -70,8 +70,15 @@ on:
   # on a PR would paint every PR red for a deploy state the PR did not cause.
 
 concurrency:
+  # NOT `true`. This workflow's only automatic trigger is `schedule`, and a
+  # cancelled scheduled run is a verdict nothing reissues — tomorrow's 06:55
+  # is a different commit and a different deploy state, so the answer for
+  # today is simply lost. That is RFX-134, and scripts/check_workflow_concurrency.py
+  # (#200) fails this file on `true` for exactly that reason. The group is kept
+  # so a manual workflow_dispatch queues behind the daily run instead of
+  # racing it against the same target.
   group: core-deployment-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
