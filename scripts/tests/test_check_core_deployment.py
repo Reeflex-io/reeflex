@@ -19,6 +19,9 @@ not against a mocked `git`: the arm's whole job is to ask a clone a question,
 and a mock would assert the question rather than the answer.
 """
 
+import contextlib
+import http.server
+import io
 import json
 import os
 import pathlib
@@ -26,7 +29,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -232,6 +237,126 @@ class ErrorIsNeverAPass(unittest.TestCase):
         with self.assertRaises(ccd.CheckError):
             ccd.check(target="http://127.0.0.1:1", repo=pathlib.Path("."),
                       run_drift=False, run_capability=False)
+
+
+class TheExitCodeTheDailyJobActuallyReads(unittest.TestCase):
+    """RFX-396: everything above this line tests the arms, or `check()`, or the
+    ERROR path. Until these tests existed the suite reached `main()` in exactly
+    ONE place — `test_unreachable_target_is_ERROR_exit_2` — and the `return 2`
+    it pins sits ABOVE `return 0 if ok else 1`. So exit 2 was pinned and exit 1
+    was not: `return 0 if ok else 1` -> `return 0` left all 194 tests green
+    while the tool printed CORE-DEPLOYMENT: FAIL against the live production
+    core and told the daily workflow it had succeeded.
+
+    That is this tool's own subject matter one level up — a verdict computed
+    and not read — so it is pinned here on the same mechanism the workflow
+    uses: the integer `main()` returns.
+
+    The serve-a-body fixture is ~15 lines of `http.server` on 127.0.0.1:0. It
+    is NOT Reeflex and nothing Reeflex is started by this suite; it exists
+    because exit 1 is only reachable through a target that ANSWERS, and a
+    refused connection is exit 2 by design.
+    """
+
+    def _serving(self, body):
+        """A localhost endpoint returning `body` as JSON. Torn down by the
+        test, not by the process exiting."""
+        payload = json.dumps(body).encode()
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 - stdlib's spelling
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass  # keep the suite's output readable
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        return "http://127.0.0.1:%d" % srv.server_port
+
+    def test_a_FAIL_verdict_leaves_main_returning_1(self):
+        """The arm RFX-396 is about. api-dev's own measured body, capability
+        red: the workflow must see a non-zero exit, not just read the word
+        FAIL in a log nobody parses."""
+        target = self._serving(HEALTHZ_API_DEV_20260920)
+        rc = ccd.main(["--target", target, "--skip-drift", "--timeout", "5"])
+        self.assertEqual(rc, 1)
+
+    def test_a_PASS_verdict_leaves_main_returning_0(self):
+        """The control, and it is not optional. Without it the test above is
+        satisfied by a tool that returns 1 unconditionally — which would break
+        the daily job in the other direction and still look guarded."""
+        target = self._serving(HEALTHZ_CAN_APPROVE)
+        rc = ccd.main(["--target", target, "--skip-drift", "--timeout", "5"])
+        self.assertEqual(rc, 0)
+
+    def test_the_FAIL_exit_code_and_the_FAIL_word_travel_together(self):
+        """Pinned separately from the exit code on purpose: a tool that prints
+        PASS and exits 1, or prints FAIL and exits 0, is wrong in a way a
+        single combined assertion would report as one failure and hide half
+        of."""
+        target = self._serving(HEALTHZ_API_DEV_20260920)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ccd.main(["--target", target, "--skip-drift", "--timeout", "5"])
+        self.assertIn(ccd.VERDICT_FAIL, buf.getvalue())
+        self.assertNotIn(ccd.VERDICT_PASS, buf.getvalue())
+
+
+class BothArmsAreActuallyInvoked(unittest.TestCase):
+    """RFX-396, the half that is worse than a lost verdict: a dropped arm does
+    not merely fail to run, it makes `check()` assert a clean result NAMING the
+    arm that never ran ("capability+drift arm(s) clean"), because the summary
+    label is derived from the --skip flags rather than from what executed.
+
+    So the flags are not the thing to assert. These record whether the arm
+    functions were CALLED.
+    """
+
+    def setUp(self):
+        self.called = []
+
+        def recorder(name):
+            def arm(*args, **kwargs):
+                self.called.append(name)
+                return True, [], []
+            return arm
+
+        for name in ("capability_arm", "drift_arm"):
+            patcher = unittest.mock.patch.object(ccd, name, recorder(name))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.fetch = unittest.mock.patch.object(
+            ccd, "fetch_healthz",
+            lambda target, timeout: (HEALTHZ_CAN_APPROVE, target + "/healthz"),
+        )
+        self.fetch.start()
+        self.addCleanup(self.fetch.stop)
+
+    def test_neither_flag_passed_runs_both_arms(self):
+        ok, _lines, _detail = ccd.check(target="http://127.0.0.1:1",
+                                        repo=pathlib.Path("."))
+        self.assertTrue(ok)
+        self.assertEqual(sorted(self.called), ["capability_arm", "drift_arm"])
+
+    def test_skip_capability_runs_only_drift(self):
+        """The other side of the same claim: the flags must still WORK. A
+        guard that only asserts 'both ran' is satisfied by a tool that has
+        stopped honouring --skip-capability entirely."""
+        ccd.check(target="http://127.0.0.1:1", repo=pathlib.Path("."),
+                  run_capability=False)
+        self.assertEqual(self.called, ["drift_arm"])
+
+    def test_skip_drift_runs_only_capability(self):
+        ccd.check(target="http://127.0.0.1:1", repo=pathlib.Path("."),
+                  run_drift=False)
+        self.assertEqual(self.called, ["capability_arm"])
 
 
 class SelftestProvesItsOwnRedness(unittest.TestCase):
