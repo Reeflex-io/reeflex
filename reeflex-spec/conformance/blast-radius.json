@@ -514,6 +514,53 @@
           }
         }
       }
+    },
+    {
+      "name": "predicate/enumeration-is-of-parameters-not-entities",
+      "given": {
+        "target_shape": "predicate",
+        "predicate": "every row in one table; the `ids` array is a parameter the call carries, not the affected set",
+        "note": "THE RFX-131 RESIDUAL, measured dev-1--207 on main 3d097c3. `predicate/whole-table` covers this ability with NO ids and expects broad. The input is supplied by the agent being governed, so if a non-empty `ids` array is honoured unconditionally the agent chooses which branch of SPEC 4.2 judges its own call: the same table wipe came out `single` and reeflex-core's real pack answered allow/default_allow. Cardinality is read off the AFFECTED SET; a container operation has none to read."
+      },
+      "expect": {
+        "blast_radius": "broad"
+      },
+      "bindings": {
+        "claude": {
+          "tool": "Bash",
+          "tool_input": {
+            "command": "psql -c 'TRUNCATE TABLE wp_postmeta' -v id=1"
+          }
+        },
+        "wordpress": {
+          "ability": "core/truncate-postmeta",
+          "input": {
+            "ids": [
+              1
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "predicate/enumeration-may-not-lower-a-no-target-list",
+      "given": {
+        "target_shape": "predicate",
+        "note": "Sibling of `predicate/no-target-list-at-all` with one array added. That vector is THE RFX-131 DEFAULT -- the case both adapters used to report as `single` -- and it is asserted only in the shape where the agent sends nothing. An adapter that passes it and fails this one has not closed the fail-open, it has moved it one keystroke away."
+      },
+      "expect": {
+        "blast_radius": "broad"
+      },
+      "bindings": {
+        "wordpress": {
+          "ability": "core/empty-trash",
+          "input": {
+            "ids": [
+              1
+            ]
+          }
+        }
+      }
     }
   ]
 }
