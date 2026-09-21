@@ -14,8 +14,16 @@
 #     `Release v0.2.0`, two of these three were skipped as already-existing;
 #     a green smoke afterwards was measuring 0.1.7 and 0.1.3, which is exactly
 #     what it should measure and is not evidence about 0.2.0.
-#   * It asserts `--help` exits 0. That catches import-time death and nothing
-#     else. A gate that fails to REFUSE exits 0 on `--help`.
+#   * It asserts `--help` exits 0 AND prints that package's own anchored
+#     `usage:` banner (RFX-149). Until 2026-09-21 it asserted only the exit
+#     code, and `reeflex-holds==0.1.2` -- still on the index -- answers `--help`
+#     with exit 0 and ZERO bytes, because any argv fell through to the stdio MCP
+#     transport. On that wheel `reeflex-holds approve <hold-id>` also exits 0, in
+#     silence, opening no TCP connection: the operator is told the hold was
+#     approved and it was not. A dead console script and a silent one are the
+#     same exit code, and this job could not tell them apart.
+#   * It still says nothing about what the entry point DECIDES. A gate that
+#     fails to REFUSE prints a perfectly good usage banner.
 #
 # It is the right instrument for "did an upstream release break what customers
 # already have", and the wrong one for "is this release healthy".
@@ -91,6 +99,19 @@ jobs:
           smoke-venv/bin/pip freeze
 
       - name: Invoke the published entry point
+        # RFX-149: the exit code is not the observation. All three of these
+        # packages ship argparse, so all three owe an anchored `usage: <name>`
+        # line on `--help`; a silent success is now red. `set -o pipefail` keeps
+        # the binary's own nonzero exit fatal through the pipe, and the grep is
+        # gated on its status rather than on anything parsed out of the text.
         run: |
-          smoke-venv/bin/${{ matrix.package }} --help
-          echo "OK: ${{ matrix.package }} --help exited 0"
+          set -o pipefail
+          smoke-venv/bin/${{ matrix.package }} --help | tee help.txt
+          if ! grep -qE "^usage: ${{ matrix.package }}\b" help.txt; then
+            echo "FAIL: ${{ matrix.package }} --help exited 0 but printed no anchored" \
+                 "'usage: ${{ matrix.package }}' banner ($(wc -c < help.txt) bytes)."
+            echo "That is the reeflex-holds 0.1.2 shape: a console script that resolves," \
+                 "imports, exits 0 and does nothing. See RFX-149."
+            exit 1
+          fi
+          echo "OK: ${{ matrix.package }} --help exited 0 with its anchored usage banner"
