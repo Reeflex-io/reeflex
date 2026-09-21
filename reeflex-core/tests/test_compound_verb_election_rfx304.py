@@ -223,9 +223,29 @@ class TestVerbFirstConventionPreserved(unittest.TestCase):
     ]
 
     def test_names_that_resolved_correctly_before_still_do(self):
+        # RFX-350: the rows expecting `read` are scored on the REVERSIBLE arm,
+        # which is the envelope a read carries.  `_env` defaults to
+        # irreversible, and on that arm core no longer elects `read` at all --
+        # it does not hand out the one value that unlocks R1 as its own GUESS
+        # about an action the caller says cannot be undone.  The non-read rows
+        # are unaffected by that clause and stay on the default arm, so this
+        # table still covers both.
         for raw, expected in self.UNCHANGED:
             with self.subTest(verb=raw):
-                self.assertEqual(_verb(raw, ability=None), expected)
+                kw = {"ability": None}
+                if expected == "read":
+                    kw["reversibility"] = "reversible"
+                self.assertEqual(_verb(raw, **kw), expected)
+
+    def test_and_on_the_irreversible_arm_the_read_rows_land_on_the_default(self):
+        # RFX-350's cost, pinned rather than discovered.  Every row this table
+        # calls a read is a COMPOUND, so every one of them is an election and
+        # every one of them moves.
+        for raw, expected in self.UNCHANGED:
+            if expected != "read":
+                continue
+            with self.subTest(verb=raw):
+                self.assertEqual(_verb(raw, ability=None), "delete")
 
     def test_a_single_word_verb_is_never_touched_by_the_election(self):
         # The election only runs on a compound; one word is a lookup, and an
@@ -312,12 +332,16 @@ class TestAReadIsOnlyElectedFromTheLEADINGWord(unittest.TestCase):
 
     def test_a_leading_read_word_is_still_the_operation(self):
         # The verb-first names this election exists to serve, including the
-        # three-word forms where the later words are unknown.
+        # three-word forms where the later words are unknown.  On the
+        # REVERSIBLE arm since RFX-350 — a leading read word is still the
+        # operation, but an ELECTED read no longer survives an envelope that
+        # says the action cannot be undone.
         for raw in ("GetObject", "ListBuckets", "query_status",
                     "list_deleted_objects", "get_pull_request_comments",
                     "list_directory_with_sizes", "search_files"):
             with self.subTest(verb=raw):
-                self.assertEqual(_verb(raw, ability=None), "read")
+                self.assertEqual(
+                    _verb(raw, ability=None, reversibility="reversible"), "read")
 
     def test_a_known_non_read_word_still_wins_wherever_it_sits(self):
         # The guard only suppresses a non-leading READ; it does not touch the
@@ -465,9 +489,10 @@ class TestDeletionsBudgetActuallyCharges(unittest.TestCase):
 
     tearDown = setUp
 
-    def _append(self, verb, count=1):
+    def _append(self, verb, count=1, reversibility="irreversible"):
         ledger.append_entry(self.SESSION, validate_and_fill_defaults(
-            _env(verb, count=count, ability=None, session=self.SESSION)))
+            _env(verb, count=count, ability=None, session=self.SESSION,
+                 reversibility=reversibility)))
 
     def _delete_count(self):
         return ledger.compute_cumulative(
@@ -489,9 +514,19 @@ class TestDeletionsBudgetActuallyCharges(unittest.TestCase):
                 self.assertEqual(trip, 21)
 
     def test_a_genuine_read_still_charges_the_deletions_budget_nothing(self):
+        # On the REVERSIBLE arm since RFX-350: a read that declares itself
+        # irreversible now lands on the guarded default and DOES charge, which
+        # is the next test rather than a silent change to this one.
         for _ in range(25):
-            self._append("list_deleted_objects")
+            self._append("list_deleted_objects", reversibility="reversible")
         self.assertEqual(self._delete_count(), 0)
+
+    def test_but_a_read_that_declares_itself_irreversible_now_charges(self):
+        # RFX-350 measured as the number R5 actually compares, not as a verb
+        # string: this is what the fix buys and what it costs, in one place.
+        for _ in range(25):
+            self._append("get_subject_erasure")
+        self.assertEqual(self._delete_count(), 25)
 
     def test_the_arm_accumulated_under_the_canonical_key_not_its_own(self):
         for _ in range(5):

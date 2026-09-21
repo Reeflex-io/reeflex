@@ -34,22 +34,24 @@ from app.envelope import validate_and_fill_defaults, ValidationError
 from app import ledger
 
 
-def _env(verb, count=1, ability="eval/synthetic", environment="dev"):
+def _env(verb, count=1, ability="eval/synthetic", environment="dev",
+         reversibility="irreversible"):
     return {
         "agent": {"id": "agent:test", "session_id": "s-verb-1"},
         "action": {"namespace": "t", "verb": verb, "ability": ability},
         "target": {"environment": environment},
         "magnitude": {"count": count},
         "axes": {
-            "reversibility": "irreversible",
+            "reversibility": reversibility,
             "blast_radius": "single",
             "externality": "internal",
         },
     }
 
 
-def _verb(raw, ability="eval/synthetic"):
-    return validate_and_fill_defaults(_env(raw, ability=ability))["action"]["verb"]
+def _verb(raw, ability="eval/synthetic", reversibility="irreversible"):
+    return validate_and_fill_defaults(
+        _env(raw, ability=ability, reversibility=reversibility))["action"]["verb"]
 
 
 class TestDeleteSpellingsCanonicalize(unittest.TestCase):
@@ -192,6 +194,11 @@ class TestNonDeleteVerbsPreserved(unittest.TestCase):
         # AWS/S3-style operation names carried in action.verb. Without camel
         # splitting these all hit the conservative default and every GetObject
         # would be billed to the deletions budget -- a wrong-DENY at scale.
+        # RFX-350: the `read` rows are scored on the REVERSIBLE arm.  The
+        # comment above is still exactly right about camel splitting -- without
+        # it `GetObject` never reaches the election at all -- but an ELECTED
+        # read no longer survives an envelope declaring the action
+        # irreversible, so that arm is asserted separately below.
         for raw, expected in (
             ("DeleteObject", "delete"), ("DeleteBucket", "delete"),
             ("GetObject", "read"), ("ListObjects", "read"),
@@ -199,7 +206,15 @@ class TestNonDeleteVerbsPreserved(unittest.TestCase):
             ("listDeletedObjects", "read"), ("RunInstances", "execute"),
         ):
             with self.subTest(verb=raw):
-                self.assertEqual(_verb(raw), expected)
+                rev = "reversible" if expected == "read" else "irreversible"
+                self.assertEqual(_verb(raw, reversibility=rev), expected)
+
+    def test_and_a_camelcase_read_that_declares_itself_irreversible_does_not(self):
+        # RFX-350's cost on exactly the names this class exists to protect.
+        for raw in ("GetObject", "ListObjects", "listDeletedObjects"):
+            with self.subTest(verb=raw):
+                self.assertEqual(_verb(raw, reversibility="irreversible"),
+                                 "delete")
 
     def test_read_alias_still_reads_so_freeze_and_r1_behave(self):
         # decide._is_read_verb() and R1 both key on "read"; an adapter emitting
