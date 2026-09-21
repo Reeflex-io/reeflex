@@ -1054,7 +1054,7 @@ def _classify_bash(tool_input: dict) -> dict:
     results += [t for t in (_peeled_truncations(seg, preview) for seg in segments)
                 if t is not None]
 
-    return max(results, key=_severity)
+    return _most_severe(results)
 
 
 def _sql_reachable(segments: list) -> bool:
@@ -1130,12 +1130,19 @@ def _severity(cls: dict) -> tuple:
     bash redirection grammar: 28 rows, all `/srv/prod/secrets.env`, spread
     evenly across all seven truncating operators, in `&&` and `{ ; }` context.
 
-    NOT fixed here, and deliberately: a line carrying TWO destructions still
-    reports only the winner's `target_ref`, so the verdict is right and the
-    record can name nothing (80 rows in the same grid).  That is an
-    audit-record defect, not a fail-open, and it is filed separately -- see
-    RFX-346's CLASS 2.  Merging refs across candidates changes what every
-    destruction reports and needs its own evidence.
+    A line carrying TWO destructions still reports only the winner's
+    `target_ref` (80 rows in the same grid).  THIS DOCSTRING USED TO CALL THAT
+    "an audit-record defect, not a fail-open", on the grounds that "the verdict
+    is right".  RFX-356 measured that sentence and it is wrong, so it has been
+    removed rather than softened: when the two candidates TIE, the verdict is
+    decided by which one `max()` happened to keep, and `max()` keeps the first
+    -- so the agent chooses the verdict by choosing the order.  144 of 225
+    pairs flip on reordering alone, against the real pack.
+
+    The tie half is closed by `_most_severe` below, which breaks an exact tie
+    on something the agent does not supply.  What remains -- naming only ONE of
+    several destroyed refs to an auditor -- IS the audit-record defect this
+    paragraph originally described, and it is still filed separately.
     """
     return (
         _TIER_RANK.get(cls["classification_tier"], 1),
@@ -1143,6 +1150,117 @@ def _severity(cls: dict) -> tuple:
         _BLAST_RANK.get(cls["blast_radius"], 1),
         _VERB_RANK.get(cls["verb"], 1),
     )
+
+
+# ---------------------------------------------------------------------------
+# Which of several EQUALLY severe candidates gets named (RFX-356)
+# ---------------------------------------------------------------------------
+#
+# The FHS designates these as TEMPORARY.  This is NOT a copy of core's
+# `protected_assets` and must never become one: that list is the OPERATOR'S
+# DECLARATION about their own estate, it lives in policy data they edit, and
+# protected.rego says in its own words that "the adapter cannot know it".
+#
+# This is the complement, and the complement is the part that IS standard.
+# protected.rego says so itself, about its own `ephemeral_assets`: "The same
+# standard designates /tmp and /var/tmp as TEMPORARY, which is why they are
+# not here and why the `ephemeral_assets` list below can be short."  The five
+# prefixes below are that list.
+#
+# STATED LIMIT, because it is the one that matters: if an operator EDITS
+# `ephemeral_assets` -- removes /tmp/, or declares /tmp/ protected -- this copy
+# drifts from theirs.  The blast radius of that drift is bounded to exactly one
+# thing: WHICH of two candidates that already score identically gets named.  It
+# can move no axis, no tier and no severity, so it cannot by itself produce a
+# verdict; see `_most_severe`.
+_FHS_TEMPORARY_PREFIXES = ("/tmp/", "/var/tmp/", "/var/cache/", "/dev/shm/", "/run/")
+
+
+def _is_fhs_temporary(ref: Optional[str]) -> bool:
+    """True when `ref` names a path the FHS designates as temporary storage.
+
+    Prefix match, plus exact match on the prefix with its trailing separator
+    removed, so `/tmp` itself is temporary and not only things under it -- the
+    same two-form match `protected.rego::_under` does, for the same reason.
+    A None/empty/non-string ref is NOT temporary: an adapter that cannot name
+    what it is destroying has not thereby established that the thing is
+    scratch.
+    """
+    if not isinstance(ref, str) or not ref:
+        return False
+    low = ref.lower()
+    return any(low.startswith(p) or low == p.rstrip("/")
+               for p in _FHS_TEMPORARY_PREFIXES)
+
+
+def _most_severe(results: list) -> dict:
+    """Report the line's most severe candidate -- and break a TIE on something
+    the audited agent does not control.
+
+    RFX-356.  THE DEFECT THIS CLOSES IS NOT A WRONG SEVERITY.  It is that
+    `max()` keeps the FIRST maximal element, so when two candidates score an
+    IDENTICAL key, POSITION ON THE LINE decided which `target_ref` the envelope
+    carried -- and position is supplied by the agent being audited:
+
+        { rm /srv/prod/secrets.env ; dd if=/dev/zero of=/tmp/x ; }
+            -> ref=/srv/prod/secrets.env  require_approval  (R6)
+        { dd if=/dev/zero of=/tmp/x ; rm /srv/prod/secrets.env ; }
+            -> ref=/tmp/x                 allow             (R4 default_allow)
+
+    Same two commands, same two destructions, reordered.  Measured against the
+    REAL pack (`opa eval` over reeflex-core/policy, fresh ledger, approval
+    absent): 144 of 225 pairs over a 5 ephemeral x 5 protected x 3 separator x
+    3 wrapper grid FLIP DECISION on reordering alone.
+
+    WHY THE TWO REPAIRS RFX-356 PROPOSED ARE BOTH WRONG, measured rather than
+    argued -- this is the part worth not re-deriving:
+
+      (a) "add a protected-asset term to `_severity`".  The adapter cannot.
+          Core's `protected_assets` is SITE knowledge in policy data the
+          operator edits; protected.rego argues at length that the adapter
+          cannot know it and core cannot derive it.  Built from the knowledge
+          the adapter DOES have, the term closes 36 of the 144 flips: of eight
+          paths under core's DEFAULT protected list, `_SENSITIVE_PATH_RE` sees
+          one and `_SYSTEM_DIR_RE` two, and `_SYSTEM_DIR_RE` would positively
+          PREFER /var/tmp/y over /srv/prod/ledger.dat.  A fix that closes a
+          quarter of an exposure and reads as complete is worse than none.
+
+      (b) "carry every candidate's target_ref".  Core REFUSES it, by design and
+          for this exact reason: `canonicalize_target_ref` raises
+          ValidationError for a list, because admitting `{"ref": [...]}` would
+          "match no prefix and so evade R6".  One ref reaches the pack; the
+          adapter has to choose which.
+
+    SO THE LEVER IS THE TIE-BREAK, AND ONLY THE TIE-BREAK.  Among candidates
+    whose severity key is EXACTLY equal, prefer one whose ref is not FHS
+    temporary.  Everything else is untouched: the maximal key is still chosen
+    by `_severity` first, so no candidate that used to win on severity stops
+    winning, and no axis, tier or verb moves.  The ONLY observable change is
+    which of several equally-severe refs is named.
+
+    WHY THIS CANNOT WEAKEN A VERDICT, under core's default lists.  A temporary
+    ref is unprotected under BOTH postures: /tmp/ is absent from
+    `protected_assets` (default posture -> not protected) and present in
+    `ephemeral_assets` (strict posture -> declared ephemeral -> not protected).
+    So replacing a temporary winner with a non-temporary one can only ADD
+    protection, never remove it.  If an operator rewrites those lists so a
+    temporary path is protected, that argument inverts -- which is why the
+    limit is stated on `_FHS_TEMPORARY_PREFIXES` rather than left implicit.
+
+    RESIDUAL, NAMED BECAUSE IT IS NOT CLOSED.  Two tied candidates that are
+    BOTH non-temporary are still separated by position: `rm /home/app/data/x ;
+    rm /srv/prod/y` names whichever comes first.  The adapter cannot rank those
+    without the operator's list, so closing it needs core to see every
+    destroyed ref -- an envelope change, filed separately, not taken here.
+    """
+    best = max(_severity(r) for r in results)
+    tied = [r for r in results if _severity(r) == best]
+    if len(tied) == 1:
+        return tied[0]
+    for cls in tied:
+        if not _is_fhs_temporary(cls.get("target_ref")):
+            return cls
+    return tied[0]
 
 
 def _classify_segment(segment: str, preview: Optional[str],
