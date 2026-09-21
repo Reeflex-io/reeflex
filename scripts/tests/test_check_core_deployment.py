@@ -25,6 +25,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -360,8 +361,104 @@ class BothArmsAreActuallyInvoked(unittest.TestCase):
 
 
 class SelftestProvesItsOwnRedness(unittest.TestCase):
+    """`--selftest` is the ONLY gate core-deployment.yml runs before the live
+    check, so what binds IT matters.
+
+    `test_selftest_exits_zero` on its own did not bind anything: with
+    `CAPABILITY_FIXTURES` emptied, the old `_selftest` scored zero cases, printed
+    `CORE-DEPLOYMENT: PASS (selftest: capability arm goes red on 3 of 4
+    fixtures, green on 1)` — a hardcoded count over nothing — and returned 0, so
+    this class and the CI step both stayed green. Measured dev-2--117
+    (RFX-399): full `unittest discover -s scripts/tests` = 201 ran / OK with
+    the list emptied.
+
+    So the assertions below are about COVERAGE and about the verdict line being
+    DERIVED, not about the exit code alone. Each one is required to fail when
+    the fixtures are emptied or an arm is dropped.
+    """
+
+    def _selftest_output(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = ccd._selftest()
+        return code, buf.getvalue()
+
     def test_selftest_exits_zero(self):
-        self.assertEqual(ccd._selftest(), 0)
+        code, _out = self._selftest_output()
+        self.assertEqual(code, 0)
+
+    def test_it_scores_every_declared_arm(self):
+        """The docstring and --help say BOTH arms. Assert the arms actually
+        appear in the scored output, so dropping one cannot stay green."""
+        _code, out = self._selftest_output()
+        for arm in ccd.SELFTEST_ARMS:
+            self.assertRegex(
+                out, r"(?m)^ok +%s " % re.escape(arm),
+                "`--selftest` claims to score the %s arm and no scored line "
+                "names it" % arm,
+            )
+
+    def test_an_arm_that_scores_no_case_is_ERROR_and_names_the_arm(self):
+        """The defect, directly: an empty fixture list must not be a pass."""
+        with unittest.mock.patch.object(ccd, "CAPABILITY_FIXTURES", []):
+            code, out = self._selftest_output()
+        self.assertEqual(code, 2, "a selftest that scored no capability case "
+                                  "exited %r, not 2" % code)
+        self.assertIn(ccd.VERDICT_ERROR, out)
+        self.assertIn("capability arm scored 0 red and 0 green", out)
+        self.assertNotIn(ccd.VERDICT_PASS, out)
+
+    def test_an_arm_with_only_green_cases_is_ERROR(self):
+        """Coverage is not a count: four cases that can never go red prove
+        nothing about redness, which is the whole point of this gate."""
+        green_only = [c for c in ccd.CAPABILITY_FIXTURES if c[2] is True]
+        self.assertTrue(green_only, "fixture set has no green case to narrow to")
+        with unittest.mock.patch.object(ccd, "CAPABILITY_FIXTURES", green_only):
+            code, out = self._selftest_output()
+        self.assertEqual(code, 2)
+        self.assertIn("red and %d green" % len(green_only), out)
+
+    def test_the_verdict_line_counts_what_was_actually_scored(self):
+        """A hardcoded '3 of 4' is a count nobody measured. Drop one fixture and
+        the printed total must move with it."""
+        _code, full = self._selftest_output()
+        self.assertIn("(selftest: %d case(s) scored" % (
+            len(ccd.CAPABILITY_FIXTURES) + 4), full)
+
+        one_fewer = ccd.CAPABILITY_FIXTURES[:-1]
+        with unittest.mock.patch.object(ccd, "CAPABILITY_FIXTURES", one_fewer):
+            code, out = self._selftest_output()
+        self.assertEqual(code, 0, "narrowing to %d fixtures should still be a "
+                                  "valid, passing selftest" % len(one_fewer))
+        self.assertIn("(selftest: %d case(s) scored" % (len(one_fewer) + 4), out)
+        self.assertNotIn("(selftest: %d case(s) scored" % (
+            len(ccd.CAPABILITY_FIXTURES) + 4), out)
+
+    def test_the_drift_arm_fixtures_really_reach_the_drift_arm(self):
+        """The scratch repo is the point: without it the drift cases cannot be
+        scored at all, and an unbuildable fixture must be ERROR, not a pass."""
+        with unittest.mock.patch.object(ccd, "_scratch_repo",
+                               side_effect=ccd.CheckError("git is not available")):
+            code, out = self._selftest_output()
+        self.assertEqual(code, 2)
+        self.assertIn(ccd.VERDICT_ERROR, out)
+        self.assertIn("git is not available", out)
+        self.assertNotIn(ccd.VERDICT_PASS, out)
+
+    def test_the_selftest_removes_its_scratch_repo(self):
+        made = []
+        real = ccd._scratch_repo
+
+        def spy(root):
+            repo = real(root)
+            made.append(repo)
+            return repo
+
+        with unittest.mock.patch.object(ccd, "_scratch_repo", side_effect=spy):
+            self._selftest_output()
+        self.assertEqual(len(made), 1)
+        self.assertFalse(made[0].exists(),
+                         "selftest left %s behind" % made[0])
 
 
 class TheFixtureMatchesWhatCoreActuallyPublishes(unittest.TestCase):
