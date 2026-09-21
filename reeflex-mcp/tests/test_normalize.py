@@ -474,6 +474,117 @@ class TestReadPrefixCompoundNames(unittest.TestCase):
         self.assertTrue(normalize._has_mutating_stem("get_and_delete_file"))
 
 
+class TestStemVetoBothDirections(unittest.TestCase):
+    """RFX-249. The veto above was matched as an OPEN PREFIX of a token, so it
+    also matched the noun and participle forms ordinary read tools are named
+    after. Measured on the PUBLISHED 0.1.4 wheel (sha256 of the installed
+    normalize.py checked against the wheel PyPI hashes): all eleven names in
+    OVER_BLOCKED priced execute/irreversible/systemic, and `get_settings`,
+    `list_commits` and `get_workflow_run` came back `deny` from the deployed
+    production core, while the control `list_issues` came back `allow`.
+
+    This class is the harness RFX-249 asks for: BOTH directions in one place,
+    failing if either moves. The two directions are each other's control -- a
+    change that narrows the veto into uselessness fails MUTATING_COMPOUNDS, and
+    a change that widens it back fails OVER_BLOCKED.
+    """
+
+    # Direction A -- RFX-249's own eleven, with the token that mis-matched.
+    OVER_BLOCKED = (
+        ("get_settings", "settings <- set"),
+        ("list_settings", "settings <- set"),
+        ("read_settings", "settings <- set"),
+        ("get_setting", "setting <- set"),
+        ("get_commit", "commit, a noun here (real GitHub MCP tool)"),
+        ("list_commits", "commits <- commit (real GitHub MCP tool)"),
+        ("list_running_jobs", "running <- run"),
+        ("get_installed_packages", "installed <- install"),
+        ("list_deployments", "deployments <- deploy"),
+        ("get_publisher", "publisher <- publish"),
+        ("read_moved_items", "moved <- move"),
+    )
+
+    # Direction A', same defect, names not in the ticket: real tools on servers
+    # people actually run, plus the participle forms of `delete` itself.
+    OVER_BLOCKED_WIDER = (
+        ("get_workflow_run", "run, a noun here (GitHub Actions)"),
+        ("list_workflow_runs", "runs <- run"),
+        ("get_pull_request_commits", "commits <- commit (real GitHub MCP tool)"),
+        ("describe_change_set", "set, a noun here (AWS CloudFormation)"),
+        ("get_merge_base", "merge, a noun here (git)"),
+        ("get_deletion_status", "deletion <- delete"),
+        ("list_deleted_files", "deleted <- delete"),
+        ("list_pushes", "pushes <- push"),
+        ("list_updates", "updates <- update"),
+    )
+
+    # Direction B -- the veto's reason to exist. Every one of these was
+    # MEASURED `allow` in production before RFX-175; none may move.
+    STILL_VETOED = TestReadPrefixCompoundNames.MUTATING_COMPOUNDS
+
+    def test_ordinary_reads_are_not_vetoed(self) -> None:
+        for name, why in self.OVER_BLOCKED:
+            with self.subTest(name=name):
+                cls = normalize.classify(name, {})
+                self.assertEqual(cls["_tier"], "heuristic:read", "%s (%s)" % (name, why))
+                self.assertEqual(cls["verb"], "read", name)
+
+    def test_wider_real_tool_names_are_not_vetoed(self) -> None:
+        for name, why in self.OVER_BLOCKED_WIDER:
+            with self.subTest(name=name):
+                self.assertEqual(
+                    normalize.classify(name, {})["_tier"], "heuristic:read",
+                    "%s (%s)" % (name, why))
+
+    def test_the_true_catches_are_untouched(self) -> None:
+        for name in self.STILL_VETOED:
+            with self.subTest(name=name):
+                cls = normalize.classify(name, {})
+                self.assertEqual(cls["_tier"], "heuristic:default", name)
+                self.assertEqual(cls["reversibility"], "irreversible", name)
+                self.assertEqual(cls["blast_radius"], "systemic", name)
+
+    def test_an_inflected_verb_still_vetoes_in_coordinator_position(self) -> None:
+        # Nothing but a verb follows "and"/"or"/"then" in a tool name, so the
+        # narrowing does not apply there and the bounded inflections stay.
+        for name in ("get_and_deleted_rows", "list_and_purges_tables",
+                     "search_or_replacing_text", "fetchAndDrops"):
+            with self.subTest(name=name):
+                self.assertTrue(normalize._has_mutating_stem(name), name)
+
+    def test_a_noun_sense_stem_vetoes_when_a_coordinator_makes_it_a_verb(self) -> None:
+        # `get_commit` is an object; `get_and_commit` is an action. The
+        # exception list is about the word's POSITION, not about the word.
+        self.assertFalse(normalize._has_mutating_stem("get_commit"))
+        self.assertTrue(normalize._has_mutating_stem("get_and_commit"))
+        self.assertFalse(normalize._has_mutating_stem("get_workflow_run"))
+        self.assertTrue(normalize._has_mutating_stem("get_then_run"))
+
+    def test_the_noun_sense_exception_list_stays_small_and_measured(self) -> None:
+        # The only deliberate weakening in RFX-249. Each entry is justified by
+        # a real tool name in the docstring beside it; growing this set is a
+        # decision, so it is asserted rather than left to drift.
+        self.assertEqual(normalize._NOUN_SENSE_STEMS,
+                         frozenset({"commit", "run", "set", "merge"}))
+        self.assertTrue(normalize._NOUN_SENSE_STEMS <= normalize._MUTATING_STEMS)
+
+    def test_the_residual_is_real_and_is_stated(self) -> None:
+        # RFX-249 asks for the residual to be stated rather than a list that
+        # looks total. This is it, pinned so it cannot be forgotten: one of the
+        # four noun-sense stems used as a genuine verb, with no coordinator, is
+        # NOT vetoed and lands in the read bucket. Tier 1 is the answer for a
+        # tool named like this, not a longer word list.
+        self.assertEqual(normalize.classify("query_commit", {})["_tier"],
+                         "heuristic:read")
+        self.assertEqual(normalize.classify("fetch_set", {})["_tier"],
+                         "heuristic:read")
+        # ... and the complement: every OTHER stem still vetoes bare.
+        self.assertEqual(normalize.classify("query_write", {})["_tier"],
+                         "heuristic:default")
+        self.assertEqual(normalize.classify("fetch_truncate", {})["_tier"],
+                         "heuristic:default")
+
+
 class TestBuildEnvelope(unittest.TestCase):
     def _build(self, **overrides):
         kwargs = dict(
