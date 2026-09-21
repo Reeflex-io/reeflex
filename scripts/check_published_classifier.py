@@ -336,6 +336,34 @@ PUBLISHED_LAG: dict = {
         {"ticket": "RFX-339", "index_serves": "0.2.1"},
     "destroy-subst-bare":
         {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    # ------------------------------------------------------------------
+    # RFX-366 + RFX-361 -- the long-option ABBREVIATION rows, on the same
+    # `0.2.1` wheel as every block above.  This branch carried its own
+    # ten-row version of this list, measured by dev-1--201 against a base
+    # that had neither RFX-345's writer family nor RFX-384's in-place edits
+    # nor RFX-158's coercion in it.  Those ten were NOT transcribed across
+    # the rebase: the list below is what `check_published_classifier.py`
+    # NAMED when it was run on the rebased tree, and the run is in
+    # `code-reports/qa--300--20260922-evidence/`.  The two agreed, which is
+    # a result of this round and not an assumption of it.
+    #
+    # The fail-noisy rows are declared beside the fail-open ones because
+    # over-asking is its own defect (RFX-131, RFX-145: a gate that asks on
+    # an append is a gate that gets switched off), not a lesser form of
+    # correct.
+    #
+    # The ticket is the REPUBLISH (RFX-339), not RFX-366/RFX-361, which this
+    # branch closes in the tree -- same distinction every block above draws.
+    "destroy-sort-output-abbreviated":        {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "destroy-sort-output-shortest-prefix":    {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "destroy-tee-output-error-operand":       {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "destroy-git-clean-force-abbreviated":    {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "destroy-git-push-delete-abbreviated":    {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "destroy-git-push-mirror-abbreviated":    {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "destroy-git-push-prune":                 {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "everyday-tee-append-abbreviated":        {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "everyday-git-clean-dry-run-abbreviated": {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "everyday-git-push-dry-run-abbreviated":  {"ticket": "RFX-339", "index_serves": "0.2.1"},
 }
 
 # --------------------------------------------------------------------------
@@ -454,6 +482,22 @@ SEAT_PUBLISHED_LAG: dict = {
         {"ticket": "RFX-339", "index_serves": "0.2.0"},
     "destroy-subst-bare":
         {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    # ------------------------------------------------------------------
+    # RFX-366 + RFX-361, on THIS arm.  `index_serves` names the SEAT's own
+    # distribution (`reeflex-litellm==0.2.0`), not the `0.2.1` the block in
+    # PUBLISHED_LAG names: the two arms resolve different wheels and expire
+    # on different clocks, so a republish of one does not clear the other.
+    # Measured on this arm rather than mirrored from above.
+    "destroy-sort-output-abbreviated":        {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "destroy-sort-output-shortest-prefix":    {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "destroy-tee-output-error-operand":       {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "destroy-git-clean-force-abbreviated":    {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "destroy-git-push-delete-abbreviated":    {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "destroy-git-push-mirror-abbreviated":    {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "destroy-git-push-prune":                 {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "everyday-tee-append-abbreviated":        {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "everyday-git-clean-dry-run-abbreviated": {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "everyday-git-push-dry-run-abbreviated":  {"ticket": "RFX-339", "index_serves": "0.2.0"},
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")
