@@ -290,8 +290,14 @@ USAGE_RE_TMPL = r"^usage: %s\b"
 COMPONENT_RE = re.compile(r"^COMPONENT ([a-z0-9-]+): (PASS|FAIL|SKIPPED|DELEGATED)\b(?: \((.*)\))?$")
 
 
-def score_entrypoint_help(entry, has_usage, code, out):
+def score_entrypoint_help(pkg, entry, code, out):
     """Score one `<entry> --help` invocation. Returns (ok, detail).
+
+    THE BANNER EXPECTATION IS LOOKED UP FROM `PUBLISHED`, NOT PASSED IN. An
+    earlier draft took `has_usage` as an argument, and a sabotage arm that left
+    the call in place and passed `False` neutered the whole leg with every
+    selftest row still green. A call site must not be able to choose the policy
+    it is judged by; an unlisted package is judged as if it declared a banner.
 
     ONE SCORER FOR BOTH LEGS, AND THAT IS THE POINT (RFX-149). `entrypoints`
     (the wheel built from this tree) asserted the anchored banner; `pypi-smoke`
@@ -306,6 +312,7 @@ def score_entrypoint_help(entry, has_usage, code, out):
 
     A dead console script and a silent one are the same exit code. The exit code
     is not the observation."""
+    has_usage = dict((p, u) for p, _e, u in PUBLISHED).get(pkg, True)
     if code != 0:
         return False, "%s --help exit %d" % (entry, code)
     if not has_usage:
@@ -773,7 +780,7 @@ class Gate:
         failures = []
         details = []
         resolved = []
-        for pkg, entry, has_usage in PUBLISHED:
+        for pkg, entry, _ in PUBLISHED:
             venv_path, err = self.make_venv("venv-entry-%s" % pkg)
             if not venv_path:
                 failures.append("%s: venv creation failed" % pkg)
@@ -792,7 +799,7 @@ class Gate:
             exe = self.venv_bin(venv_path, entry + (".exe" if os.name == "nt" else ""))
             code, out = self.run_cmd([exe, "--help"], stdin_devnull=True)
             self.emit("  | invoke: %s --help -> exit %d" % (entry, code))
-            ok, detail = score_entrypoint_help(entry, has_usage, code, out)
+            ok, detail = score_entrypoint_help(pkg, entry, code, out)
             if ok:
                 details.append(detail)
             else:
@@ -838,7 +845,7 @@ class Gate:
             self.component(key, "SKIPPED", "explicitly disabled via --pypi skip (tree-health run)")
             return
         failures, details = [], []
-        for pkg, entry, has_usage in PUBLISHED:
+        for pkg, entry, _ in PUBLISHED:
             venv_path, err = self.make_venv("venv-pypi-" + pkg)
             if not venv_path:
                 failures.append("%s: venv failed" % pkg)
@@ -856,7 +863,7 @@ class Gate:
             code, out = self.run_cmd([exe, "--help"], stdin_devnull=True)
             self.emit("  | pypi %s==%s: %s --help -> exit %d, %d bytes"
                       % (pkg, ver, entry, code, len(out or "")))
-            ok, detail = score_entrypoint_help(entry, has_usage, code, out)
+            ok, detail = score_entrypoint_help(pkg, entry, code, out)
             if ok:
                 details.append("%s==%s %s" % (pkg, ver, detail))
             else:
@@ -1507,30 +1514,36 @@ def selftest():
     # this, so the rows below are about the artefact leg as much as the tree leg.
     _USAGE_OUT = "usage: reeflex-holds [-h] {list,approve,reject} ...\n"
     check("entrypoint scorer accepts exit 0 + anchored banner",
-          score_entrypoint_help("reeflex-holds", True, 0, _USAGE_OUT)[0])
+          score_entrypoint_help("reeflex-holds", "reeflex-holds", 0, _USAGE_OUT)[0])
     check("entrypoint scorer REJECTS exit 0 with no output at all",
-          not score_entrypoint_help("reeflex-holds", True, 0, "")[0])
+          not score_entrypoint_help("reeflex-holds", "reeflex-holds", 0, "")[0])
     check("entrypoint scorer names the silent-banner failure, not the exit code",
           "no anchored 'usage: reeflex-holds' banner"
-          in score_entrypoint_help("reeflex-holds", True, 0, "")[1])
+          in score_entrypoint_help("reeflex-holds", "reeflex-holds", 0, "")[1])
     check("entrypoint scorer rejects the banner as a mid-line substring",
-          not score_entrypoint_help("reeflex-holds", True, 0,
+          not score_entrypoint_help("reeflex-holds", "reeflex-holds", 0,
                                     "error: bad usage: reeflex-holds [-h]\n")[0])
     check("entrypoint scorer rejects a nonzero exit despite a banner",
-          not score_entrypoint_help("reeflex-holds", True, 1, _USAGE_OUT)[0])
-    check("entrypoint scorer allows exit 0 with no banner only where none is declared",
-          score_entrypoint_help("some-daemon", False, 0, "")[0])
-    check("entrypoint scorer says so when it accepted a script with no banner",
-          "nothing more" in score_entrypoint_help("some-daemon", False, 0, "")[1])
+          not score_entrypoint_help("reeflex-holds", "reeflex-holds", 1, _USAGE_OUT)[0])
     check("entrypoint scorer anchors on the entry point's own name",
-          not score_entrypoint_help("reeflex-holds", True, 0,
+          not score_entrypoint_help("reeflex-holds", "reeflex-holds", 0,
                                     "usage: reeflex-mcp [-h]\n")[0])
     # The regression itself, as a row: reeflex-holds==0.1.2 answered --help with
     # exit 0 and zero bytes, and that wheel's `approve` exits 0 in silence.
     check("the 0.1.2 observation (exit 0, zero bytes) fails the published leg",
-          not score_entrypoint_help("reeflex-holds", True, 0, "")[0])
+          not score_entrypoint_help("reeflex-holds", "reeflex-holds", 0, "")[0])
+    # The expectation is DATA, and a caller cannot talk it down. An unlisted
+    # package is judged as if it declared a banner (fail closed).
+    check("an unlisted package is still held to a banner",
+          not score_entrypoint_help("not-in-the-list", "not-in-the-list", 0, "")[0])
     check("every PUBLISHED row carries a banner flag the scorer can read",
           all(isinstance(has_usage, bool) for _, _, has_usage in PUBLISHED))
+    check("every package this repo publishes is in PUBLISHED",
+          set(p for p, _e, _u in PUBLISHED)
+          >= {"reeflex-mcp", "reeflex-holds", "reeflex-claude"})
+    check("every PUBLISHED row with a banner flag is held to it",
+          all(score_entrypoint_help(p, e, 0, "")[0] is not True
+              for p, e, u in PUBLISHED if u))
     # AND THE ROWS ABOVE CANNOT SEE A CALLER DROP THE CALL. Every check so far
     # scores the scorer; all of them stay green if `run_pypi_smoke` goes back to
     # `for pkg, entry, _ in PUBLISHED` and its own `if code != 0`, which is
