@@ -116,7 +116,12 @@ USAGE
 EXIT CODES / ANCHORED LINE
     0  PUBLISHED-CLASSIFIER: PASS (...)
     1  PUBLISHED-CLASSIFIER: FAIL (...)
-    3  PUBLISHED-CLASSIFIER: SKIP (...)   index unreachable, venv/pip unusable
+    3  PUBLISHED-CLASSIFIER: SKIP (...)   nothing was installed, so nothing was
+                                          scored. The SKIP names its own cause
+                                          — index unreachable, venv/pip
+                                          unusable, or an interpreter the
+                                          published files do not admit
+                                          (RFX-349)
 Only the anchored line at the start of a line decides the verdict; `gate.py`
 parses it that way on purpose (RFX-108).
 """
@@ -781,6 +786,132 @@ def classify_with_published(python, cases, workdir, driver_src=DRIVER):
     return json.loads(proc.stdout)
 
 
+# ---------------------------------------------------------------------------
+# WHY A SKIP HAS TO NAME ITS CAUSE  (RFX-349)
+# ---------------------------------------------------------------------------
+# When `pip install` finds nothing, pip says the same sentence for causes that
+# are not the same fact:
+#
+#     ERROR: Could not find a version that satisfies the requirement
+#     reeflex-litellm (from versions: none)
+#
+# and this component turned that into `SKIP (<dist> is not installable from the
+# index here)`.  Every word of that is defensible and the reading it produces is
+# wrong.  Measured on the devbox 2026-09-21, `python3` = 3.9.25:
+#
+#     --seat  under python3.9   -> SKIP  exit 3, "not installable from the index"
+#     --seat  under python3.12  -> PASS  exit 0, 191 cases scored, 0 fail-open
+#
+# The index was reachable both times and served the same two files both times.
+# `reeflex-litellm` declares `requires-python >=3.10`, so pip on 3.9 filters
+# every candidate and reports none.  `reeflex-claude` declares `>=3.8`, which is
+# why the sibling arm installs fine under the identical pip and the discrepancy
+# never shows there.  The cause is the INTERPRETER THIS COMPONENT WAS LAUNCHED
+# WITH -- `install_published` builds its venv from `sys.executable` -- and the
+# sentence names the index instead.  RFX-349 records getting one step from
+# filing "the seat wheel is not installable by a customer" off that reading;
+# that would have been a finding about the runner, reported as a finding about
+# the product.
+#
+# CI is not affected and this does not pretend otherwise: `gate.yml` pins
+# `python-version: "3.12"` and the arm scores there.  So the fix is not to
+# redden anything.  It is that the one sentence a reader gets must carry the
+# discriminator.
+#
+# THIS STATES FACTS AND DOES NOT ADJUDICATE, deliberately.  It would be easy to
+# write "your interpreter is too old" here, and doing it properly means a PEP
+# 440 specifier evaluator; a half-written one that parses cleanly and answers
+# wrongly is worse than the sentence it replaces, because it would be believed.
+# So the line prints what the index serves and what interpreter ran, side by
+# side, and the reader does the comparison in one glance.
+
+PYPI_JSON_URL = "https://pypi.org/pypi/%s/json"
+INDEX_UNREACHABLE = "__index_unreachable__"
+
+
+def fetch_index_json(dist, timeout=30, url_template=PYPI_JSON_URL):
+    """What the index says about `dist`, or INDEX_UNREACHABLE.
+
+    NEVER raises.  A diagnostic that can itself fail is a diagnostic that turns
+    one unexplained skip into two.
+    """
+    import urllib.error          # local: this is the only place that needs them
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(url_template % dist, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:     # noqa: BLE001 - urllib raises a wide family
+        return {INDEX_UNREACHABLE: "%s: %s" % (type(exc).__name__,
+                                               str(exc)[:120])}
+
+
+def describe_install_failure(dist, version, index, interpreter):
+    """One clause naming the discriminator, for the SKIP line.  Pure.
+
+    `index` is what `fetch_index_json` returned; `interpreter` is the python
+    that built the venv (`sys.executable`'s version), i.e. the thing pip
+    filtered candidates against.
+
+    ALWAYS ONE LINE.  This clause is interpolated into the anchored verdict,
+    and `gate.py` matches that anchor with `^...$` under `re.M`: a newline
+    arriving here out of an exception string would split the line, the match
+    would fail, and an unreachable index would render as a component FAILURE
+    with "no anchored verdict".  Collapsing whitespace is load-bearing.
+    """
+    return " ".join(_describe(dist, version, index, interpreter).split())
+
+
+def _describe(dist, version, index, interpreter):
+    if not isinstance(index, dict) or INDEX_UNREACHABLE in index:
+        why = (index or {}).get(INDEX_UNREACHABLE, "no answer") \
+            if isinstance(index, dict) else "no answer"
+        return ("could not reach the index to say why (%s), so this skip is "
+                "not attributed" % why)
+
+    releases = index.get("releases") or {}
+    want = version or (index.get("info") or {}).get("version")
+    files = releases.get(want) or [] if want else []
+
+    if not releases:
+        return "the index serves no releases at all for %s" % dist
+    if want and want not in releases:
+        return ("the index serves %d version(s) of %s and %s is not one of them"
+                % (len(releases), dist, want))
+    if not files:
+        return "the index serves %s %s with no files" % (dist, want)
+
+    live = [f for f in files if not f.get("yanked")]
+    if not live:
+        return ("the index serves %d file(s) for %s %s and every one is YANKED "
+                "-- pip filters them all" % (len(files), dist, want))
+
+    reqs = sorted({(f.get("requires_python") or "") for f in live})
+    shown = ", ".join(repr(r) if r else "(none declared)" for r in reqs)
+    return ("the index serves %d file(s) for %s %s, requires-python %s; this "
+            "run's interpreter is python %s -- compare those two before "
+            "reading this as a fact about the package"
+            % (len(live), dist, want, shown, interpreter))
+
+
+def skip_lines(dist, version, index, interpreter, anchor, pip_error):
+    """The whole SKIP branch: body lines plus the anchored verdict.
+
+    A separate function so the selftest can pin the WIRING and not only the
+    clause.  Arms that assert `describe_install_failure` returns good words
+    stay green if someone stops calling it from `run()`, and a guard that
+    cannot see its own removal is the class of check this component exists to
+    complain about.
+    """
+    because = describe_install_failure(dist, version, index, interpreter)
+    return ["  %s" % pip_error,
+            "  index says      : %s" % because,
+            anchored_line("SKIP",
+                          "%s was not installed here so nothing was scored — "
+                          "%s — no verdict, not a pass" % (dist, because),
+                          anchor)]
+
+
 def install_published(workdir, version, index_timeout=300, dist=DIST):
     """A throwaway venv with ONE `dist` in it, from the index.
 
@@ -839,10 +970,11 @@ def run(repo_root, version=None, keep=False, seat=False):
     try:
         py, resolved, err = install_published(workdir, version, dist=dist)
         if err:
-            lines.append("  %s" % err)
-            return 3, lines + [anchored_line(
-                "SKIP", "%s is not installable from the index here — no verdict, "
-                        "not a pass" % dist, anchor)]
+            # RFX-349. The skip stands; what changes is that it names what
+            # distinguishes "the index has nothing" from "this interpreter
+            # could not take what the index has".
+            return 3, lines + skip_lines(dist, version, fetch_index_json(dist),
+                                         sys.version.split()[0], anchor, err)
         lines.append("  published wheel : %s==%s (installed from the index)" % (dist, resolved))
         try:
             got = classify_with_published(py, conformance.CASES, workdir,
@@ -1146,6 +1278,116 @@ def selftest():
     check("...and both real tables are back after those arms, so no later "
           "check is scored against a fixture",
           SEAT_PUBLISHED_LAG is real_seat and PUBLISHED_LAG is real_main)
+
+    # -- a SKIP has to name its own cause (RFX-349) ------------------------
+    # The bug being guarded is not "the skip is wrong" -- the skip is right.
+    # It is that one sentence attributed a property of the RUNNER to the INDEX,
+    # and a reader acting on it files a product defect. So every arm below
+    # asserts the DISCRIMINATOR is present, and the two that must not be
+    # confusable with each other assert the other one's language is ABSENT.
+    # Fixtures only; this branch never touches the network.
+    PY39, PY312 = "3.9.25", "3.12.13"
+
+    def idx(version, files, other_versions=()):
+        rel = {v: [] for v in other_versions}
+        rel[version] = files
+        return {"info": {"version": version}, "releases": rel}
+
+    def f(requires_python=None, yanked=False):
+        return {"requires_python": requires_python, "yanked": yanked}
+
+    old_py = describe_install_failure(
+        "reeflex-litellm", None,
+        idx("0.2.0", [f(">=3.10"), f(">=3.10")]), PY39)
+    check("the SKIP clause names the interpreter this run used",
+          PY39 in old_py)
+    check("...and the requires-python the index actually serves",
+          ">=3.10" in old_py)
+    check("...and says the index SERVES files, so the reader cannot read it as "
+          "'the package is not published'",
+          "serves 2 file(s)" in old_py and "not installable" not in old_py)
+
+    gone = describe_install_failure("reeflex-ghost", None,
+                                    {"info": {"version": None}, "releases": {}},
+                                    PY312)
+    check("a genuinely absent package is described as absent",
+          "no releases at all" in gone)
+    check("...and that branch does NOT blame the interpreter, which is the "
+          "confusion in the other direction",
+          PY312 not in gone and "requires-python" not in gone)
+
+    unreachable = describe_install_failure(
+        "reeflex-litellm", None,
+        {INDEX_UNREACHABLE: "URLError: [Errno -2] Name or service not known"},
+        PY39)
+    check("an unreachable index is reported as unattributed rather than as a "
+          "fact about the package",
+          "could not reach the index" in unreachable
+          and "not attributed" in unreachable)
+    check("...and carries the transport error so it is diagnosable",
+          "URLError" in unreachable)
+
+    yanked_all = describe_install_failure(
+        "reeflex-litellm", None, idx("0.2.0", [f(">=3.10", yanked=True)]), PY312)
+    check("a version whose every file is YANKED is named as yanked, not as an "
+          "interpreter problem", "YANKED" in yanked_all)
+
+    pinned_missing = describe_install_failure(
+        "reeflex-litellm", "9.9.9", idx("0.2.0", [f(">=3.10")]), PY312)
+    check("--version pinning a release the index does not serve says exactly "
+          "that", "9.9.9 is not one of them" in pinned_missing)
+
+    nodecl = describe_install_failure("reeflex-x", None, idx("1.0.0", [f(None)]),
+                                      PY312)
+    check("files declaring no requires-python are shown as declaring none, not "
+          "as an empty string", "(none declared)" in nodecl)
+
+    # THE LOAD-BEARING ONE. `gate.py` matches the anchored verdict with `^...$`
+    # under re.M, and this clause is interpolated into it. A newline arriving
+    # from an exception string would split the line, the match would fail, and
+    # parse_published_seat would render an unreachable index as a component
+    # FAILURE reading "no anchored verdict" -- a red with the wrong cause, which
+    # is this ticket's own defect committed a second time.
+    multiline = describe_install_failure(
+        "reeflex-litellm", None,
+        {INDEX_UNREACHABLE: "HTTPError: 503\nService Unavailable\n  retry later"},
+        PY39)
+    check("the clause is ALWAYS one line, whatever the transport error carried",
+          "\n" not in multiline and "\r" not in multiline)
+    check("...and the anchored SKIP line built from it still matches gate.py's "
+          "own anchor regex",
+          re.compile(r"^%s: (PASS|FAIL|SKIP) \((.*)\)$" % SEAT_ANCHOR, re.M)
+          .search(anchored_line("SKIP", "x — %s — y" % multiline, SEAT_ANCHOR))
+          is not None)
+
+    check("fetch_index_json never raises, whatever the URL does",
+          INDEX_UNREACHABLE in fetch_index_json(
+              "reeflex-litellm", timeout=1,
+              url_template="http://127.0.0.1:1/%s/json"))
+
+    # THE WIRING, not the clause. Every arm above would stay green if `run()`
+    # stopped calling `describe_install_failure` -- they score the function.
+    # This one scores the lines the SKIP branch actually emits, including the
+    # anchored verdict gate.py reads, so deleting the call is visible.
+    emitted = skip_lines("reeflex-litellm", None,
+                         idx("0.2.0", [f(">=3.10"), f(">=3.10")]), PY39,
+                         SEAT_ANCHOR, "ERROR: Could not find a version ...")
+    anchored = [l for l in emitted if l.startswith(SEAT_ANCHOR)]
+    check("the SKIP branch emits exactly one anchored line", len(anchored) == 1)
+    check("...and the discriminator is IN the anchored line, not only in the "
+          "body a reader has to scroll to",
+          PY39 in anchored[0] and ">=3.10" in anchored[0])
+    check("...and it no longer says the package is not installable from the "
+          "index, which is the sentence this ticket is about",
+          "not installable from the index" not in anchored[0])
+    check("...and it still says no verdict was reached, so a skip cannot be "
+          "read as a pass", "no verdict, not a pass" in anchored[0])
+    check("...and gate.py's SEAT anchor regex parses it as SKIP",
+          (lambda m: bool(m) and m.group(1) == "SKIP")(
+              re.compile(r"^%s: (PASS|FAIL|SKIP) \((.*)\)$" % SEAT_ANCHOR, re.M)
+              .search(anchored[0])))
+    check("...and the pip error is still shown verbatim in the body",
+          any("Could not find a version" in l for l in emitted))
 
     failed = [n for n, ok in checks if not ok]
     for n, ok in checks:
