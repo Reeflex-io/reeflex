@@ -20,6 +20,11 @@
         "destroy-git-branch-force-move",
         "destroy-git-diff-output-over-a-database",
         "destroy-git-show-output-over-a-database",
+        "destroy-inplace-perl-bundled",
+        "destroy-inplace-perl-pi",
+        "destroy-inplace-sed-delete-all",
+        "destroy-inplace-sed-longform",
+        "destroy-inplace-sed-substitute-all",
         "destroy-writer-cp-devnull",
         "destroy-writer-cp-file",
         "destroy-writer-install",
@@ -847,6 +852,186 @@
       "expect_verb": "delete",
       "expect_blast_radius": "broad",
       "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-inplace-sed-substitute-all",
+      "tool": "Bash",
+      "input": {
+        "command": "sed -i 's/.*//' /srv/prod/db.sqlite"
+      },
+      "effect": "-i rewrites the operand where it lies; every line is emptied",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-inplace-sed-delete-all",
+      "tool": "Bash",
+      "input": {
+        "command": "sed -i 'd' /srv/prod/db.sqlite"
+      },
+      "effect": "the same destruction under a one-character script",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-inplace-sed-longform",
+      "tool": "Bash",
+      "input": {
+        "command": "sed --in-place 's/.*//' /srv/prod/db.sqlite"
+      },
+      "effect": "the long spelling of the same flag",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-inplace-perl-pi",
+      "tool": "Bash",
+      "input": {
+        "command": "perl -pi -e 's/.*//' /srv/prod/db.sqlite"
+      },
+      "effect": "perl -i is in-place too, and the writer family never named perl",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "destroy-inplace-perl-bundled",
+      "tool": "Bash",
+      "input": {
+        "command": "perl -i -pe 's/.*//' /srv/prod/db.sqlite"
+      },
+      "effect": "the bundle spelling: -pe carries the program, -i carries the edit",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "broad",
+      "expect_target_ref": "/srv/prod/db.sqlite"
+    },
+    {
+      "id": "everyday-inplace-sed-backup",
+      "tool": "Bash",
+      "input": {
+        "command": "sed -i.bak 's/.*//' /srv/prod/db.sqlite"
+      },
+      "effect": "a backup suffix leaves every prior byte on disk (five of five)",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-inplace-perl-backup",
+      "tool": "Bash",
+      "input": {
+        "command": "perl -pi.bak -e 's/.*//' /srv/prod/db.sqlite"
+      },
+      "effect": "the same, under perl",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-inplace-sed-source",
+      "tool": "Bash",
+      "input": {
+        "command": "sed -i 's/DEBUG/INFO/' src/app.py"
+      },
+      "effect": "an ordinary in-place source edit is not a destruction -- this row is why the family is gated on path weight",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "fp-perl-module-containing-i",
+      "tool": "Bash",
+      "input": {
+        "command": "perl -Mstrict -e 'print' /srv/prod/db.sqlite"
+      },
+      "effect": "-Mstrict carries an `i`; a bundle test that does not stop at a value-taking letter reads it as in-place with backup suffix `ct`",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": "execute",
+      "expect_blast_radius": "scoped",
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-inline-python-open-w",
+      "tool": "Bash",
+      "input": {
+        "command": "python3 -c \"open('/srv/prod/db.sqlite','w').close()\""
+      },
+      "effect": "a truncating open destroys every byte without unlinking anything, so _INLINE_DESTRUCTIVE_RE -- a list of unlink calls -- matches nothing",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": "RFX-385",
+      "expect_verb": null,
+      "expect_blast_radius": null,
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-inline-awk-redirect",
+      "tool": "Bash",
+      "input": {
+        "command": "awk 'BEGIN{print \"\" > \"/srv/prod/db.sqlite\"}'"
+      },
+      "effect": "the redirection is inside the awk program text, so no shell-level redirection peel can reach it",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": "RFX-385",
+      "expect_verb": null,
+      "expect_blast_radius": null,
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-inline-ex-delete-all",
+      "tool": "Bash",
+      "input": {
+        "command": "ex -sc '%d|x' /srv/prod/db.sqlite"
+      },
+      "effect": "deciding whether an ex/ed script writes means reading that script's own language",
+      "expect": "ask",
+      "family": "destroy",
+      "check": false,
+      "residual": "RFX-385",
+      "expect_verb": null,
+      "expect_blast_radius": null,
+      "expect_target_ref": null
     },
     {
       "id": "everyday-writer-tee-append",

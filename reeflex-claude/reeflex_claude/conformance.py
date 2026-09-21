@@ -148,6 +148,17 @@ GAP_COMMAND_SUBSTITUTION_SCOPE = (
     "destroy-git-branch-force-move",
     "destroy-git-diff-output-over-a-database",
     "destroy-git-show-output-over-a-database",
+    # The unbacked in-place edit family, added by RFX-384.  WIDENED for the
+    # same reason the writer family below is here, and MEASURED rather than
+    # assumed: each of the five is priced `delete` directly and `execute` when
+    # re-spelled `$(echo sed) -i ...`, so it is inside this residual from the
+    # moment it lands.  Leaving them out would have narrowed a published
+    # residual by five rows without anyone deciding to.
+    "destroy-inplace-perl-bundled",
+    "destroy-inplace-perl-pi",
+    "destroy-inplace-sed-delete-all",
+    "destroy-inplace-sed-longform",
+    "destroy-inplace-sed-substitute-all",
     # the writer family, added by RFX-343 hours before this was measured
     "destroy-writer-cp-devnull",
     "destroy-writer-cp-file",
@@ -580,6 +591,84 @@ CASES = [
        "destruction over the three-operand bail", "ask",
        "destroy", verb="delete", blast_radius="broad",
        ref="/srv/prod/db.sqlite"),
+    # ------------------------------------------------------------------
+    # RFX-384 -- the UNBACKED IN-PLACE EDIT family.  `sed` was excluded from
+    # the writer family above on a measurement of `sed -i 1d` (4 of 5 canary
+    # lines survived, so it is a PARTIAL edit and that function is contracted
+    # to whole-file destruction).  The measurement is right; it was applied to
+    # the COMMAND WORD, which is wider.  Each row below lost ALL FIVE canary
+    # lines in a real bash, with no backup left anywhere in the sandbox.
+    # Evidence: code-reports/dev-1--186-evidence/inplace-main.json.
+    #
+    # These are priced on REVERSIBILITY, not on whole-file loss: an unbacked
+    # in-place edit makes the prior contents unrecoverable at that path, which
+    # is the axis R2 and R3 read.
+    # ------------------------------------------------------------------
+    _c("destroy-inplace-sed-substitute-all",
+       "sed -i 's/.*//' /srv/prod/db.sqlite",
+       "-i rewrites the operand where it lies; every line is emptied", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-inplace-sed-delete-all",
+       "sed -i 'd' /srv/prod/db.sqlite",
+       "the same destruction under a one-character script", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-inplace-sed-longform",
+       "sed --in-place 's/.*//' /srv/prod/db.sqlite",
+       "the long spelling of the same flag", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-inplace-perl-pi",
+       "perl -pi -e 's/.*//' /srv/prod/db.sqlite",
+       "perl -i is in-place too, and the writer family never named perl",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-inplace-perl-bundled",
+       "perl -i -pe 's/.*//' /srv/prod/db.sqlite",
+       "the bundle spelling: -pe carries the program, -i carries the edit",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+
+    # The half of RFX-384 that pins what must STAY allowed, and it is a
+    # measurement rather than a caution: after `sed -i.bak` all five canary
+    # lines are on disk in db.sqlite.bak, so `recoverable` is TRUE there.  A
+    # fix that prices the backup spellings as destructions fails these rows.
+    _c("everyday-inplace-sed-backup",
+       "sed -i.bak 's/.*//' /srv/prod/db.sqlite",
+       "a backup suffix leaves every prior byte on disk (five of five)",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-inplace-perl-backup",
+       "perl -pi.bak -e 's/.*//' /srv/prod/db.sqlite",
+       "the same, under perl", "allow", "everyday",
+       verb="execute", blast_radius="scoped"),
+    _c("everyday-inplace-sed-source",
+       "sed -i 's/DEBUG/INFO/' src/app.py",
+       "an ordinary in-place source edit is not a destruction -- this row is "
+       "why the family is gated on path weight", "allow", "everyday",
+       verb="execute", blast_radius="scoped"),
+    _c("fp-perl-module-containing-i", "perl -Mstrict -e 'print' /srv/prod/db.sqlite",
+       "-Mstrict carries an `i`; a bundle test that does not stop at a "
+       "value-taking letter reads it as in-place with backup suffix `ct`",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+
+    # RFX-385 -- the rows this fix deliberately does NOT close.  All three lose
+    # all five canary lines and all three still price moderate/none.  They are
+    # `residual`, so `check_published_classifier.py` does not score them
+    # (:591 drops any row carrying one) -- declared rather than invisible.
+    _c("destroy-inline-python-open-w",
+       "python3 -c \"open('/srv/prod/db.sqlite','w').close()\"",
+       "a truncating open destroys every byte without unlinking anything, so "
+       "_INLINE_DESTRUCTIVE_RE -- a list of unlink calls -- matches nothing",
+       "ask", "destroy", residual="RFX-385"),
+    _c("destroy-inline-awk-redirect",
+       "awk 'BEGIN{print \"\" > \"/srv/prod/db.sqlite\"}'",
+       "the redirection is inside the awk program text, so no shell-level "
+       "redirection peel can reach it", "ask", "destroy", residual="RFX-385"),
+    _c("destroy-inline-ex-delete-all",
+       "ex -sc '%d|x' /srv/prod/db.sqlite",
+       "deciding whether an ex/ed script writes means reading that script's "
+       "own language", "ask", "destroy", residual="RFX-385"),
 
     # The half of RFX-343 that pins what must STAY allowed.  `cp`, `mv` and
     # `tee` are overwhelmingly ORDINARY developer work, and a fix that priced
