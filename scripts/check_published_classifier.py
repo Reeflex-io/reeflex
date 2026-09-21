@@ -217,7 +217,61 @@ MIN_SCORED_CASES = 40
 # scores 191 corpus cases with 0 fail-open and 0 fail-noisy. The entries are
 # deleted rather than left to report EXPIRED forever; `git log -- ` this file
 # at e175e4e for the measurements behind each one.
-PUBLISHED_LAG: dict = {}
+#
+# WHAT IT HOLDS NOW, AND WHY THESE ELEVEN ARE NOT A CARRY-OVER (RFX-345).
+# RFX-345 adds eleven corpus rows the served wheel gets wrong, and since #167
+# the corpus IS this component's sensitivity, so a classifier fix that added no
+# rows would silently narrow the gate instead of widening it. The rows were
+# RE-MEASURED against the wheel the index serves TODAY -- `reeflex-claude
+# ==0.2.1` -- and not transcribed from the branch's earlier declaration, which
+# was measured against `0.2.0` and is a statement about an artefact nobody can
+# install any more. The re-measurement changed the answer in both directions:
+#
+#   6 FAIL-OPEN   the `destroy-writer-*` spellings below. 0.2.1 prices each
+#                 execute/recoverable/scoped -> `allow` with target_ref=null
+#                 while the command empties the operand.
+#   5 fail-noisy  the `everyday-writer-*` rows. THE BRANCH'S OWN COMMENT SAID
+#                 THESE MUST NOT BE DECLARED, on the measurement that 0.2.0
+#                 "reported ZERO fail-noisy". Against 0.2.1 that is false:
+#                 0.2.1 DID ship the writer family without RFX-345's
+#                 value-aware bundle scan, so it now answers `ask` on four
+#                 ordinary copies and `deny` on `cp ./a.sql ./b.sql
+#                 /var/lib/pgsql/data/` -- naming as destroyed an operand that
+#                 is only being read. An over-block is a divergence like any
+#                 other here, because a noisy gate gets switched off.
+#
+# THE TICKET IS RFX-382, NOT RFX-345, AND THE DIFFERENCE IS THE ONE THE BLOCKS
+# ABOVE KEPT GETTING WRONG. RFX-345 is the classifier defect and this PR closes
+# it in the tree; following it lands a reader on a ticket that says "fixed",
+# which is not what an entry in this table means. What clears these rows is a
+# REPUBLISH -- a wheel built from a tree that carries the fix -- which is
+# RFX-382's "delivery half" and is owner-gated. Nothing here performs or
+# decides it.
+#
+# MEASURED, not inferred from the diff: dev-2--113, python3.12, against the
+# index, with main's own corpus as the control arm (191 scored, 0 fail-open,
+# 0 fail-noisy, so the comparator demonstrably prints PASS on the same run
+# shape). code-reports/dev-2--113--20260921-evidence/.
+_LAG_345 = {"ticket": "RFX-382", "index_serves": "0.2.1"}
+PUBLISHED_LAG: dict = {
+    # Six spellings that empty a production file for free. `-T` folds to `-t`
+    # and `install -D` to `install -d`, and one shared flag set was asked to
+    # answer for five commands in which `-t` and `-d` do not mean the same
+    # thing (`cp -d` is --no-dereference; `sort -t` is the field separator).
+    "destroy-writer-cp-no-target-dir-short":      _LAG_345,
+    "destroy-writer-mv-no-target-dir-short":      _LAG_345,
+    "destroy-writer-install-no-target-dir-short": _LAG_345,
+    "destroy-writer-install-create-leading-dirs": _LAG_345,
+    "destroy-writer-cp-no-dereference":           _LAG_345,
+    "destroy-writer-sort-field-separator":        _LAG_345,
+    # Five the served wheel over-blocks. These are the half of RFX-345 that
+    # pins what must STAY unpriced, and on 0.2.1 they do not.
+    "everyday-writer-cp-to-directory-bundled":                _LAG_345,
+    "everyday-writer-cp-to-directory-bundled-weighty-source":  _LAG_345,
+    "everyday-writer-cp-to-directory-attached-weighty-source": _LAG_345,
+    "everyday-writer-install-missing-dest-operand":            _LAG_345,
+    "everyday-writer-cp-many-into-directory":                  _LAG_345,
+}
 
 # --------------------------------------------------------------------------
 # THE SEAT ARM (RFX-326): the same corpus, one DISTRIBUTION out.
@@ -268,7 +322,40 @@ SEAT_ANCHOR = "PUBLISHED-LITELLM-SEAT"
 # describe an artefact nobody can install any more. Deleted, not left to
 # report EXPIRED forever; `git log -- ` this file at e175e4e for the
 # per-family evidence paths.
-SEAT_PUBLISHED_LAG: dict = {}
+#
+# WHAT IT HOLDS NOW (RFX-345), AND THE WORD "MEASURED" IS LOAD-BEARING. The
+# eleven rows below were scored on THIS arm -- `--seat` against
+# `reeflex-litellm==0.2.0` resolved from the index, through the seat's own
+# normaliser -- and not mirrored from the table above. Mirroring is not free
+# in either direction: a copied entry that does not actually diverge FAILS as
+# STALE and reddens the gate rather than quieting it, and an entry omitted
+# because "the other arm did not need it" leaves a real divergence undeclared.
+#
+# The two arms agree on all eleven. THAT AGREEMENT IS A MEASUREMENT AND NOT AN
+# ENTAILMENT: they are independent resolves, the default arm cannot read this
+# table at all, and the reason they agree is single and stated -- the seat's
+# normaliser passes a Bash `command` through untouched, so the mispricing is
+# entirely that of whichever `reeflex-claude` the seat's floor admits
+# (`0.2.1` here, printed by the run as `it resolved`). A future edit to
+# `reeflex-litellm`'s floor moves this arm without moving the other, which is
+# exactly why the tables are not aliased.
+#
+# Same ticket and the same reason as the arm above: RFX-382, the republish, not
+# RFX-345, which is the defect this PR closes in the tree.
+_SEAT_LAG_345 = {"ticket": "RFX-382", "index_serves": "0.2.0"}
+SEAT_PUBLISHED_LAG: dict = {
+    "destroy-writer-cp-no-target-dir-short":      _SEAT_LAG_345,
+    "destroy-writer-mv-no-target-dir-short":      _SEAT_LAG_345,
+    "destroy-writer-install-no-target-dir-short": _SEAT_LAG_345,
+    "destroy-writer-install-create-leading-dirs": _SEAT_LAG_345,
+    "destroy-writer-cp-no-dereference":           _SEAT_LAG_345,
+    "destroy-writer-sort-field-separator":        _SEAT_LAG_345,
+    "everyday-writer-cp-to-directory-bundled":                _SEAT_LAG_345,
+    "everyday-writer-cp-to-directory-bundled-weighty-source":  _SEAT_LAG_345,
+    "everyday-writer-cp-to-directory-attached-weighty-source": _SEAT_LAG_345,
+    "everyday-writer-install-missing-dest-operand":            _SEAT_LAG_345,
+    "everyday-writer-cp-many-into-directory":                  _SEAT_LAG_345,
+}
 
 TICKET_RE = re.compile(r"RFX-\d+")
 
