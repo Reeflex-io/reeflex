@@ -80,18 +80,40 @@ RESIDUAL_TICKET = "RFX-153"
 GAP_TICKET = "RFX-158"
 
 # ---------------------------------------------------------------------------
-# HOW WIDE THE COMMAND-SUBSTITUTION GAP IS  (RFX-158, measured 2026-09-18)
+# HOW WIDE THE COMMAND-SUBSTITUTION GAP IS  (RFX-158, measured 2026-09-18,
+# HALF-CLOSED 2026-09-19 -- read the two conditions below before quoting it)
 # ---------------------------------------------------------------------------
 # `gap-command-substitution` below declares ONE shape, and read as a shape it
 # looks narrow: only the word `rm` is produced at runtime.  Read as its own
 # stated EFFECT -- "the command word is the output of another command" -- it
 # covers every operator-free row in this corpus that the adapter prices
-# `delete`.  Re-spell such a row as `$(echo '<the row>')` and it comes back
+# `delete`.  Re-spell such a row as `$(echo '<the row>')` and it used to come
+# back
 #
 #     verb=execute  reversibility=recoverable  blast_radius=scoped
 #     target_ref=null  danger_signature=none
 #
 # which core's own pack decides `allow` / `reeflex.policy/default_allow`.
+#
+# WHAT dev-3--141 CHANGED, AND WHAT IT DID NOT.  The adapter now refuses to
+# price a command word it cannot resolve (`_unresolvable_command_word`), so
+# every row below re-spelled that way is `deny` /
+# `reeflex.policy/irreversible_systemic_prod` IN PRODUCTION.  THE LIST IS NOT
+# RETIRED, because the residual it names is still reachable by two routes and
+# both are measured:
+#
+#   1. ANY ENVIRONMENT THAT IS NOT `production`.  R2/R3/R6/R7 are each
+#      conjoined with `target.environment == "production"`, so every row below
+#      is still `allow` in `staging` and `dev` -- as, for that matter, is
+#      `rm -rf /` typed directly.  This is a property of the pack, not of this
+#      gap; RFX-158 is one instance of it.
+#   2. THE PARAMETER-EXPANSION SPELLING.  `RM=rm; $RM -rf /srv/prod/data`
+#      (corpus row `gap-variable-indirection`) reaches the same rows with one
+#      character less.  It is NOT refused, and that is a priced decision rather
+#      than an oversight: command substitution in command position is 472 of
+#      57,027 real shell command lines (0.83%) and parameter expansion is 6,556
+#      (11.5%).  A default that refuses one line in eight is a gate that gets
+#      switched off.  Evidence: dev-3--141 `03-decompose.json`.
 #
 # THE LIST IS HERE, AND SPELLED OUT, FOR ONE REASON.  Until 2026-09-18 the
 # scope of this residual was not written down anywhere: the corpus said "one
@@ -126,8 +148,12 @@ GAP_TICKET = "RFX-158"
 # qa--245's five-canary ground-truth run.
 #
 # THIS IS A DECLARATION OF SCOPE, NOT AN ACCEPTANCE OF IT.  What can actually
-# be done about it, and what each option costs, is priced in dev-3--073's
-# report; the decision is the owner's and had not been taken when this landed.
+# be done about it, and what each option costs, was priced in dev-3--073's
+# report; the console took the decision on 2026-09-19 (option A -- an
+# unclassifiable command word is never `allow`) and dev-3--141 shipped the
+# production half of it.  The list stays because the two routes above are
+# still open, and `tests/test_residual_scope_rfx158.py` now asserts BOTH
+# halves row by row: refused in production, still allowed in dev.
 GAP_COMMAND_SUBSTITUTION_SCOPE = (
     # the corpus's own controls -- the rows that must never be missed
     "ctrl-drop-database",
@@ -953,9 +979,28 @@ CASES = [
     _c("destroy-subst-backticks", "echo `rm -rf /srv/prod/data`",
        "the same delete in the older backtick spelling", "ask", "destroy",
        verb="delete", blast_radius="broad"),
+    # THE ONE ROW RFX-158 RE-PRICED RATHER THAN CLOSED, and it is worth the
+    # paragraph because the escalation costs something.  This line does TWO
+    # things: it runs `rm -rf /srv/prod/data` (visible, priced `delete` /
+    # `broad` / `target_ref=/srv/prod/data` by RFX-301, which is `ask`), and
+    # then it runs whatever that printed AS A COMMAND -- which is the
+    # unresolvable command word RFX-158 refuses.  The second reading is
+    # `systemic` and wins `_classify_bash`'s severity comparison, so the row
+    # moves `ask` -> `deny`.
+    #
+    # WHAT THAT LOSES: the winner carries the whole envelope, so `target_ref`
+    # goes from `/srv/prod/data` to null and the audit line stops naming the
+    # directory.  That is not a new defect -- it is one more instance of
+    # RFX-346 CLASS 2, "a line carrying two destructions reports only the
+    # winner's ref", which `_severity`'s own docstring files and declines to
+    # fix.  Recorded here rather than papered over, because a preference rule
+    # that kept the named candidate would have made APPENDING a destruction to
+    # a line LOWER its verdict, which is RFX-346's defect wearing a hat.
     _c("destroy-subst-bare", "$(rm -rf /srv/prod/data)",
-       "the substitution is the whole line; its output is run as a command",
-       "ask", "destroy", verb="delete", blast_radius="broad"),
+       "the substitution is the whole line: the delete runs AND its output is "
+       "run as a command, so the line also has a command word the adapter "
+       "cannot resolve (RFX-158)",
+       "deny", "destroy", verb="execute", blast_radius="systemic"),
     _c("destroy-subst-process", "cat <(rm -rf /srv/prod/data)",
        "process substitution -- the delete runs to produce a file descriptor",
        "ask", "destroy", verb="delete", blast_radius="broad"),
@@ -1069,37 +1114,50 @@ CASES = [
     # not in the command string, which is what makes this a `gap` and that one
     # a `destroy`.  Closing it would mean evaluating the substitution, not
     # parsing it.
+    # CLOSED IN PRODUCTION BY RFX-158 (dev-3--141), AND STILL OPEN EVERYWHERE
+    # ELSE.  The three rows below used to be `residual=RFX-158` and priced
+    # `execute/recoverable/scoped`, which core decides `allow`.  The adapter now
+    # refuses to price a command word it cannot resolve at all: SPEC §4.0
+    # fail-closed coercion to the most-guarded member of every axis, which is
+    # R3's deny in production.  They score from here on.
+    #
+    # WHAT THEY DO NOT SAY.  `expect` on these rows is the PRODUCTION verdict,
+    # because that is the environment `policy_oracle` and the live probe both
+    # run at.  In `staging` or `dev` all three are still `allow` -- R2, R3, R6
+    # and R7 are each conjoined with `target.environment == "production"`, so no
+    # coercion an adapter can perform reaches a non-production envelope.  That
+    # is not a property of this gap: `rm -rf /` spelled DIRECTLY is `allow` in
+    # dev too.  Measured both ways in
+    # `code-reports/dev-3--141--20260919-evidence/05-nonprod-gap.json`, and
+    # asserted row by row in `tests/test_residual_scope_rfx158.py`.
     _c("gap-command-substitution", "$(echo rm) -rf /srv/prod/data",
-       "the command word is the output of another command -- which is not one "
-       "shape but 41: every operator-free row this corpus prices `delete` "
-       "falls to execute/recoverable/scoped/target_ref=null when re-spelled "
-       "this way, the two `ctrl-` rows included. See "
-       "GAP_COMMAND_SUBSTITUTION_SCOPE for the list", "ask", "gap",
-       residual=GAP_TICKET, verb="execute", blast_radius="scoped"),
+       "the command word is the output of another command, so the word that "
+       "will run is not in the text. The adapter no longer guesses: every axis "
+       "it cannot know is coerced to its most-guarded member (SPEC §4.0) and "
+       "the action is refused in production. Outside production it is still "
+       "allowed -- see GAP_COMMAND_SUBSTITUTION_SCOPE", "deny", "gap",
+       verb="execute", blast_radius="systemic"),
     # The two rows below are the SCOPE made visible, and they exist because a
     # list in a Python tuple is not what a reader of the published artefact
-    # sees.  `check_published_classifier.py` excludes residual rows from its
-    # score, so these cost the republish number nothing (measured, dev-3--073);
-    # what they buy is that "this gate does not stop `rm -rf /` when it is
-    # spelled through a substitution" is a row somebody can read, rather than
-    # an inference from a ticket id three files away.
-    #
-    # `expect` is "deny" and "deny" respectively -- NOT the "ask" the other gap
-    # rows carry -- because that is what the direct forms get, and the honest
-    # statement of a residual is the distance between what the row deserves and
-    # what it receives.  Both are residual, so neither scores.
+    # sees.  They were added residual (dev-3--073) so "this gate does not stop
+    # `rm -rf /` when it is spelled through a substitution" was a line somebody
+    # could read; they are kept, unresidualled, because "it now does, in
+    # production" is a line worth exactly as much, and because a row that is
+    # deleted the moment it goes green cannot regress.
     _c("gap-command-substitution-ctrl-rm-rf-root",
        "$(echo 'rm -rf /')",
-       "the corpus's own always-catch control, re-spelled through the declared "
-       "gap: `rm -rf /` is denied directly and allowed this way",
+       "the corpus's own always-catch control, re-spelled through the gap: "
+       "`rm -rf /` was denied directly and allowed this way, and is now denied "
+       "both ways in production",
        "deny", "gap",
-       residual=GAP_TICKET, verb="execute", blast_radius="scoped"),
+       verb="execute", blast_radius="systemic"),
     _c("gap-command-substitution-ctrl-drop-database",
        "$(echo \"psql -h prod-db -c 'DROP DATABASE acme'\")",
        "the second always-catch control, re-spelled: the production database "
-       "drop is denied directly and allowed this way",
+       "drop was denied directly and allowed this way, and is now denied both "
+       "ways in production",
        "deny", "gap",
-       residual=GAP_TICKET, verb="execute", blast_radius="scoped"),
+       verb="execute", blast_radius="systemic"),
     _c("gap-remote-execution", "ssh prod 'rm -rf /srv/data'",
        "the destruction happens on another host; priced as the outbound emit "
        "it is, silent about the delete it causes", "ask", "gap",

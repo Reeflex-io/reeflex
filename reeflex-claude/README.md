@@ -565,6 +565,20 @@ has to finish in time.
   and should not be lumped in: the remote command *is* on the line, and a
   classifier that parses `ssh`'s argv can price it (PR #98 did, measured), so
   that one is unclosed work rather than a limit of the approach.
+
+  **One of the four is now refused rather than read.** When the command word
+  is a *command substitution* — `$(echo rm) -rf …`, `` `which rm` -rf … ``,
+  `eval "$(curl …)"` — the adapter no longer guesses: it coerces every axis it
+  cannot know to that axis's most-guarded member (SPEC §4.0) and core denies
+  the action in production.  Two bounds on that sentence, both measured:
+  it is **production only** (R2/R3/R6/R7 are each conjoined with
+  `target.environment == "production"`, so in `staging` and `dev` these lines
+  are still allowed — as is `rm -rf /` typed directly), and it does **not**
+  cover the `$RM` parameter-expansion spelling, which reaches the same
+  destructions and is left alone because it is 11.5% of real shell command
+  lines against command substitution's 0.83%.  Cost of the part that shipped:
+  **472 of 57,027** command lines in this box's own shell scripts, and 0 of
+  the corpus's 68 agent-shaped rows.
   **`REEFLEX_CLAUDE_STRICT=1` does cover five of the six** —
   measured, not asserted: they are all unrecognised *execute* commands, which
   strict mode prices `irreversible`+`broad`.  The `ssh` case is not one of
@@ -574,7 +588,9 @@ has to finish in time.
   irreversible + broad, so in production it reaches a human — measured live on
   the conformance corpus, **it moves 23 of 82 verdicts**, including `pytest`,
   `npm install` and `make build` from `allow` to `ask`, and five of the six
-  RFX-158 gaps above.  That is the whole point of the knob: it is the noisy
+  RFX-158 gaps above (three of those five — the command-substitution rows —
+  are refused now without the knob, so what strict still adds there is the
+  other two).  That is the whole point of the knob: it is the noisy
   setting, and today it is the broadest lever this adapter ships for the
   commands the classifier cannot read.  It is not the only way to cover them:
   a policy-side rule, or parsing the wrapper the destruction hides behind, both

@@ -1864,13 +1864,13 @@
       "input": {
         "command": "$(rm -rf /srv/prod/data)"
       },
-      "effect": "the substitution is the whole line; its output is run as a command",
-      "expect": "ask",
+      "effect": "the substitution is the whole line: the delete runs AND its output is run as a command, so the line also has a command word the adapter cannot resolve (RFX-158)",
+      "expect": "deny",
       "family": "destroy",
       "check": false,
       "residual": null,
-      "expect_verb": "delete",
-      "expect_blast_radius": "broad",
+      "expect_verb": "execute",
+      "expect_blast_radius": "systemic",
       "expect_target_ref": null
     },
     {
@@ -2149,13 +2149,13 @@
       "input": {
         "command": "$(echo rm) -rf /srv/prod/data"
       },
-      "effect": "the command word is the output of another command -- which is not one shape but 41: every operator-free row this corpus prices `delete` falls to execute/recoverable/scoped/target_ref=null when re-spelled this way, the two `ctrl-` rows included. See GAP_COMMAND_SUBSTITUTION_SCOPE for the list",
-      "expect": "ask",
+      "effect": "the command word is the output of another command, so the word that will run is not in the text. The adapter no longer guesses: every axis it cannot know is coerced to its most-guarded member (SPEC §4.0) and the action is refused in production. Outside production it is still allowed -- see GAP_COMMAND_SUBSTITUTION_SCOPE",
+      "expect": "deny",
       "family": "gap",
       "check": false,
-      "residual": "RFX-158",
+      "residual": null,
       "expect_verb": "execute",
-      "expect_blast_radius": "scoped",
+      "expect_blast_radius": "systemic",
       "expect_target_ref": null
     },
     {
@@ -2164,13 +2164,13 @@
       "input": {
         "command": "$(echo 'rm -rf /')"
       },
-      "effect": "the corpus's own always-catch control, re-spelled through the declared gap: `rm -rf /` is denied directly and allowed this way",
+      "effect": "the corpus's own always-catch control, re-spelled through the gap: `rm -rf /` was denied directly and allowed this way, and is now denied both ways in production",
       "expect": "deny",
       "family": "gap",
       "check": false,
-      "residual": "RFX-158",
+      "residual": null,
       "expect_verb": "execute",
-      "expect_blast_radius": "scoped",
+      "expect_blast_radius": "systemic",
       "expect_target_ref": null
     },
     {
@@ -2179,13 +2179,13 @@
       "input": {
         "command": "$(echo \"psql -h prod-db -c 'DROP DATABASE acme'\")"
       },
-      "effect": "the second always-catch control, re-spelled: the production database drop is denied directly and allowed this way",
+      "effect": "the second always-catch control, re-spelled: the production database drop was denied directly and allowed this way, and is now denied both ways in production",
       "expect": "deny",
       "family": "gap",
       "check": false,
-      "residual": "RFX-158",
+      "residual": null,
       "expect_verb": "execute",
-      "expect_blast_radius": "scoped",
+      "expect_blast_radius": "systemic",
       "expect_target_ref": null
     },
     {

@@ -41,12 +41,27 @@ read rather than an inference from a ticket id.  Both are residual, so the
 published-wheel score is untouched -- measured: 145 scored before and after,
 37 fail-open both sides.  The measurement below is unchanged.
 
-Direction of failure, both ways:
-  * a row JOINS   -> a new destructive shape is bypassable; widen the residual
-                     declaration deliberately, do not just re-baseline.
-  * a row LEAVES  -> the gap is narrowing; good, but the corpus still marks it
-                     residual=RFX-158, so update the corpus (same discipline as
-                     `test_the_command_word_form_is_still_open`).
+WHAT dev-3--141 CHANGED, and it is the half of RFX-158 the console decided to
+close.  The adapter no longer prices a command word it cannot resolve; it
+coerces every axis it cannot know to that axis's most-guarded member (SPEC
+§4.0) and lets core decide.  So every row listed below, re-spelled through a
+substitution, is now `deny` / `reeflex.policy/irreversible_systemic_prod` IN
+PRODUCTION -- and is still `allow` in `staging` and `dev`, because R2, R3, R6
+and R7 are each conjoined with `target.environment == "production"`.
+
+BOTH HALVES ARE ASSERTED HERE, deliberately and separately, because a module
+that only asserted the good half would let a release note claim the hole is
+closed.  The non-production half is not this gap's fault and a control says so:
+`rm -rf /` typed DIRECTLY, priced irreversible+systemic with a named target, is
+also `allow` in dev.
+
+Direction of failure, all four ways:
+  * a row JOINS the set     -> a new destructive shape is reachable through the
+                               spelling; widen the declaration deliberately.
+  * a row LEAVES the set    -> the spelling stopped reaching it; update the corpus.
+  * a row is ALLOWED in prod-> the fix regressed.
+  * a row is REFUSED in dev -> the non-production half closed. Good: retire the
+                               list, close RFX-158, delete this module.
 
 GROUND TRUTH is not asserted here, it was executed elsewhere: every writer shape
 below emptied a five-canary victim through a real /bin/bash when re-spelled this
@@ -58,12 +73,19 @@ The protected-looking paths in the corpus are CLASSIFIER INPUT ONLY.  This
 module creates, opens, writes and executes nothing.
 """
 
+import os
 import re
 import shlex
+import sys
 import unittest
 
-from reeflex_claude import conformance
-from reeflex_claude.classify import classify
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from reeflex_claude import conformance  # noqa: E402
+from reeflex_claude.classify import classify  # noqa: E402
+
+from policy_oracle import policy_oracle  # noqa: E402  -- the SHARED oracle
 
 
 # Command-substitution output is word-split but NEVER re-parsed for shell
@@ -121,9 +143,111 @@ def _operator_free_delete_rows():
     return rows
 
 
+def _respell_variable(command):
+    """The SIBLING spelling RFX-158 does not close: `RM=rm; $RM -rf ...`.
+
+    Only the command word moves into a variable; the arguments stay where they
+    are, so the line still destroys exactly what the original destroyed.
+    """
+    word, _, rest = command.partition(" ")
+    return "RFXCMD=%s; $RFXCMD %s" % (shlex.quote(word), rest)
+
+
 class TestTheResidualScopeIsDeclared(unittest.TestCase):
+    """
+    WHAT THIS ASKS, AND WHY IT IS NO LONGER `verb != "delete"`.
+
+    Until dev-3--141 this measured the bypassable set by asking whether the
+    re-spelled row still priced as a `delete`.  That question survived the fix
+    unchanged and would have gone on answering "all 53 are bypassable" after
+    they had stopped being: the coercion prices them `execute`, because the
+    adapter genuinely does not know the verb -- it just prices every axis at
+    its worst case, and core denies.  The verb was never the property that
+    mattered.  THE DECISION IS.  A guard keyed to a proxy for the thing it
+    cares about passes for the wrong reason exactly once, and this is the
+    round it would have done it in.
+    """
+
+    def test_every_declared_row_is_refused_in_production_when_respelled(self):
+        """The fix, row by row, across the whole declared scope."""
+        allowed = []
+        for case_id, command in _operator_free_delete_rows():
+            if case_id not in BYPASSABLE_THROUGH_RFX158:
+                continue
+            cls = classify("Bash", {"command": _respell(command)})
+            verdict = policy_oracle(cls, "production")
+            if verdict == "allow":
+                allowed.append("%s -> %s (axes %s/%s)" % (
+                    case_id, verdict, cls["reversibility"], cls["blast_radius"]))
+        self.assertEqual(
+            [], allowed,
+            "\nRFX-158's production half is open again for these rows:\n  %s\n"
+            % "\n  ".join(allowed))
+
+    def test_every_declared_row_is_still_allowed_outside_production(self):
+        """The half this does NOT close, asserted so nobody can claim it did.
+
+        If this test starts failing, the non-production hole closed -- which is
+        the good direction and means RFX-158 can be closed outright. Update the
+        corpus, retire the list, delete this module.
+        """
+        refused = []
+        for case_id, command in _operator_free_delete_rows():
+            if case_id not in BYPASSABLE_THROUGH_RFX158:
+                continue
+            cls = classify("Bash", {"command": _respell(command)})
+            if policy_oracle(cls, "dev") != "allow":
+                refused.append(case_id)
+        self.assertEqual(
+            [], refused,
+            "\nThese rows are now refused in `dev` too. RFX-158's "
+            "non-production half has been closed -- update the corpus and this "
+            "module:\n  %s\n" % "\n  ".join(refused))
+
+    def test_the_non_production_hole_is_not_this_gaps_fault(self):
+        """The control that keeps the test above from being read as a finding
+        about substitutions.  The same destruction typed DIRECTLY, priced
+        irreversible + systemic with a named target, is also `allow` in dev --
+        so what the test above measures is the pack having no per-action
+        control outside production, and this gap is one instance of it."""
+        direct = classify("Bash", {"command": "rm -rf /"})
+        self.assertEqual("delete", direct["verb"])
+        self.assertEqual("systemic", direct["blast_radius"])
+        self.assertEqual("deny", policy_oracle(direct, "production"))
+        self.assertEqual(
+            "allow", policy_oracle(direct, "dev"),
+            "`rm -rf /` is now refused in dev -- the pack grew a "
+            "non-production control and this module's framing is stale")
+
+    def test_the_variable_spelling_is_still_open_everywhere(self):
+        """The sibling residual, and the reason the declared list survives.
+
+        `$(echo rm) -rf X` is refused; `RM=rm; $RM -rf X` is not, and it
+        reaches every row in the set.  Priced rather than closed: parameter
+        expansion in command position is 11.5% of real shell command lines
+        against command substitution's 0.83% (dev-3--141 03-decompose.json).
+        """
+        allowed = []
+        for case_id, command in _operator_free_delete_rows():
+            if case_id not in BYPASSABLE_THROUGH_RFX158:
+                continue
+            cls = classify("Bash", {"command": _respell_variable(command)})
+            if policy_oracle(cls, "production") == "allow":
+                allowed.append(case_id)
+        self.assertEqual(
+            sorted(BYPASSABLE_THROUGH_RFX158), sorted(allowed),
+            "the variable-indirection spelling no longer reaches exactly the "
+            "declared set -- re-derive the scope rather than re-baselining it")
 
     def test_the_bypassable_set_is_exactly_what_is_declared(self):
+        """The set itself, unchanged in purpose: which rows the gap reaches.
+
+        Kept keyed on the classification rather than the verdict, because this
+        is the question "which destructive rows does the substitution spelling
+        reach at all" -- the two tests above are the ones that ask what happens
+        to them. A row JOINING here is still a new destructive family arriving
+        inside the residual.
+        """
         measured = set()
         for case_id, command in _operator_free_delete_rows():
             if classify("Bash", {"command": _respell(command)}).get("verb") != "delete":
@@ -134,13 +258,12 @@ class TestTheResidualScopeIsDeclared(unittest.TestCase):
         self.assertEqual(
             BYPASSABLE_THROUGH_RFX158, measured,
             "\nThe scope of residual RFX-158 moved.\n"
-            "  JOINED (now bypassable, was not declared): %s\n"
+            "  JOINED (now reached by the spelling, was not declared): %s\n"
             "    -> a destructive shape was added that this residual swallows.\n"
             "       Widen the declaration deliberately and say so in the report;\n"
             "       do not simply re-baseline this set.\n"
-            "  LEFT (declared bypassable, no longer is): %s\n"
-            "    -> the gap narrowed. Good -- but the corpus still marks these\n"
-            "       residual=RFX-158, so update the corpus too.\n"
+            "  LEFT (declared, no longer reached): %s\n"
+            "    -> the spelling stopped reaching these. Update the corpus too.\n"
             % (sorted(joined) or "none", sorted(left) or "none"))
 
     def test_the_rows_this_reads_are_really_destructive(self):
@@ -158,18 +281,27 @@ class TestTheResidualScopeIsDeclared(unittest.TestCase):
                     "delete", classify("Bash", {"command": command})["verb"],
                     "%s is the control for its own re-spelling" % case_id)
 
-    def test_the_declared_residual_row_itself_is_still_open(self):
-        """The one row that declares the gap must still BE the gap. If this
-        starts passing, everything above is describing a closed hole."""
+    def test_the_declaring_row_says_what_the_adapter_now_does(self):
+        """The row that names the gap has to agree with the fix.
+
+        It was `residual=RFX-158`, `expect: ask`, priced `execute/scoped`, and
+        scored by nothing (`check_published_classifier.py` excludes residual
+        rows).  It is now a scored row expecting the production deny.  If it
+        drifts back to residual while the classifier keeps refusing, the
+        published-wheel ledger silently stops watching a row that works.
+        """
         gap = [c for c in conformance.CASES
                if c["id"] == "gap-command-substitution"]
         self.assertEqual(1, len(gap), "the declaring row vanished from the corpus")
-        self.assertEqual("RFX-158", gap[0].get("residual"))
-        self.assertNotEqual(
-            "delete",
-            classify("Bash", gap[0]["input"]).get("verb"),
-            "gap-command-substitution now prices as a delete -- the residual is "
-            "stale; close it in the corpus and delete this module")
+        row = gap[0]
+        self.assertIsNone(
+            row.get("residual"),
+            "the declaring row is marked residual again while the adapter "
+            "refuses it -- one of the two is wrong")
+        self.assertEqual("deny", row["expect"])
+        cls = classify("Bash", row["input"])
+        self.assertEqual("unresolvable_command_word", cls["danger_signature"])
+        self.assertEqual("deny", policy_oracle(cls, "production"))
 
     def test_the_published_artefact_states_its_own_blast_radius(self):
         """The corpus JSON is what the spec ships and what an auditor reads. A
@@ -197,21 +329,24 @@ class TestTheResidualScopeIsDeclared(unittest.TestCase):
         """`ctrl-rm-rf-root` falling into a declared gap is the single fact a
         reader of this corpus most needs to see, and a membership in a tuple in
         a Python module is not seeing it. These rows put it in the artefact
-        under a name that says what it is."""
+        under a name that says what it is -- and they are kept now that the
+        answer changed, because the row is what makes the change legible."""
         by_id = {c["id"]: c for c in conformance.CASES}
         for cid in ("gap-command-substitution-ctrl-rm-rf-root",
                     "gap-command-substitution-ctrl-drop-database"):
             with self.subTest(case=cid):
                 row = by_id.get(cid)
                 self.assertIsNotNone(row, "%s is missing from the corpus" % cid)
-                self.assertEqual("RFX-158", row["residual"])
-                # It must really still be open, or the row is describing a
-                # closed hole -- the same trap as the declaring row itself.
-                self.assertNotEqual(
-                    "delete",
-                    classify("Bash", row["input"]).get("verb"),
-                    "%s now prices as a delete; the gap narrowed and this row "
-                    "and the scope list are both stale" % cid)
+                self.assertIsNone(row.get("residual"))
+                cls = classify("Bash", row["input"])
+                self.assertEqual(
+                    "deny", policy_oracle(cls, "production"),
+                    "%s is allowed again in production -- the corpus's own "
+                    "always-catch control is bypassable" % cid)
+                self.assertEqual(
+                    "allow", policy_oracle(cls, "dev"),
+                    "%s is refused in dev -- good, but then RFX-158's "
+                    "non-production half closed and nothing here says so" % cid)
 
     def test_the_operator_exclusion_is_real_and_not_a_convenience(self):
         """The rows excluded above are excluded because bash does not destroy
