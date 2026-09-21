@@ -57,7 +57,10 @@ USAGE
   --skip-drift     run the capability arm only (for a scratch core built from
                    a tree the clone does not have)
   --skip-capability  run the drift arm only
-  --selftest       run the arm logic against built fixtures and exit
+  --selftest       score BOTH arms against built fixtures and exit. Needs no
+                   network and not this clone (it builds a scratch git repo for
+                   the drift arm and removes it). Exits 2 — never 0 — if an arm
+                   scored no red or no green case.
 
 VERDICT — anchored, case-sensitive; parse EXACTLY this line. Same convention
 as scripts/check_migration_heads.py and reeflex-app's check_deploy_drift.py:
@@ -111,8 +114,10 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -400,7 +405,8 @@ def main(argv=None) -> int:
     parser.add_argument("--skip-drift", action="store_true")
     parser.add_argument("--skip-capability", action="store_true")
     parser.add_argument("--selftest", action="store_true",
-                        help="prove both arms can go red, then exit")
+                        help="score both arms against built fixtures, proving "
+                             "each can go red, then exit")
     args = parser.parse_args(argv)
 
     if args.selftest:
@@ -428,40 +434,141 @@ def main(argv=None) -> int:
     return 0 if ok else 1
 
 
+CAPABILITY_FIXTURES = [
+    ("healthy", {"status": "ok", "holds": {"resolvable": True,
+                                           "reason": "credentials_bound",
+                                           "verified_approvers": 1,
+                                           "ttl_seconds": 14400}}, True),
+    ("api-dev today", {"status": "ok", "holds": {"resolvable": False,
+                                                 "reason": "verification_not_configured",
+                                                 "verified_approvers": 0,
+                                                 "ttl_seconds": 14400}}, False),
+    ("pre-RFX-309 core", {"status": "ok"}, False),
+    ("resolvable absent", {"status": "ok", "holds": {"reason": "x"}}, False),
+]
+
+# Every arm named here must score at least one case that goes RED and at least
+# one that stays GREEN, or the selftest is an ERROR that names the arm. See
+# _selftest's docstring for what that floor is defending against.
+SELFTEST_ARMS = ("capability", "drift")
+
+
+def _scratch_repo(root: pathlib.Path) -> pathlib.Path:
+    """A two-commit git repo, built here and thrown away, so the drift arm can
+    be scored without this clone and without a network.
+
+    The drift arm reaches `git rev-parse <ref>` before it reads `revision`, so
+    there is no drift case that can be scored against no repository at all.
+    Building a scratch one is what tests/test_check_core_deployment.py's
+    DriftArmAgainstRealRepos already does; doing it here too is what lets the
+    `--selftest` gate speak about both arms rather than one.
+    """
+    repo = root / "scratch"
+    repo.mkdir()
+
+    def run(*args: str) -> None:
+        proc = subprocess.run(["git", "-C", str(repo), *args],
+                              capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise CheckError("git %s failed while building the selftest "
+                             "fixtures: %s" % (" ".join(args), proc.stderr.strip()))
+
+    run("init", "-q", "-b", "main")
+    run("config", "user.email", "selftest@rfx.invalid")
+    run("config", "user.name", "selftest")
+    (repo / "f.txt").write_text("one", encoding="utf-8")
+    run("add", "-A")
+    run("commit", "-q", "-m", "one")
+    return repo
+
+
+def _drift_fixtures(repo: pathlib.Path) -> list:
+    """(label, healthz body, expect_ok) for the drift arm, against `repo`."""
+    head = git(repo, "rev-parse", "HEAD")
+    return [
+        ("deployed == ref", {"status": "ok", "revision": head}, True),
+        # The four failing directions, in the order drift_arm returns them.
+        ("no revision", {"status": "ok"}, False),
+        ("empty revision", {"status": "ok", "revision": "   "}, False),
+        ("revision unknown here", {"status": "ok", "revision": "0" * 40}, False),
+    ]
+
+
 def _selftest() -> int:
-    """Prove BOTH arms can go red, on this file, without a network or a clone.
+    """Prove BOTH arms can go red, on this file, without a network and without
+    this clone.
 
     A tool whose green nobody has seen turn red is the class of defect it
     exists to catch, so the selftest is deliberately about the FAILING
     directions, and it is the same property tests/test_check_core_deployment.py
     asserts under unittest discovery (gate.yml runs both).
+
+    AND IT HAS TO PROVE IT RAN. This function used to score the capability arm
+    only, while its own docstring and `--help` both said "both arms"; and its
+    verdict line printed "goes red on 3 of 4 fixtures" as prose, so emptying
+    the case list left `--selftest` printing that sentence, exiting 0, and
+    carrying the `core-deployment.yml` step named "prove the ... arm can go red
+    before trusting it" green over a selftest that scored nothing. The unit
+    test in front of it asserted the exit code and nothing else, so it stayed
+    green too (RFX-399). That is the same shape as RFX-179 (a release gate whose
+    green meant no row ran) landing inside the tool whose module docstring
+    names it.
+    So: the counts below are DERIVED from the results, and an arm that produced
+    no red or no green is an ERROR naming that arm, never a pass.
     """
-    cases = [
-        ("healthy", {"status": "ok", "holds": {"resolvable": True,
-                                               "reason": "credentials_bound",
-                                               "verified_approvers": 1,
-                                               "ttl_seconds": 14400}}, True),
-        ("api-dev today", {"status": "ok", "holds": {"resolvable": False,
-                                                     "reason": "verification_not_configured",
-                                                     "verified_approvers": 0,
-                                                     "ttl_seconds": 14400}}, False),
-        ("pre-RFX-309 core", {"status": "ok"}, False),
-        ("resolvable absent", {"status": "ok", "holds": {"reason": "x"}}, False),
-    ]
-    failed = 0
-    for label, body, expect_ok in cases:
-        ok, _lines, failures = capability_arm(body, "/healthz")
-        mark = "ok " if ok == expect_ok else "BAD"
-        if ok != expect_ok:
-            failed += 1
-        print("%s capability %-20s -> %s %s"
-              % (mark, label, "PASS" if ok else "FAIL",
-                 "" if ok else "(%s)" % failures[0][:70]))
-    if failed:
-        print("%s (selftest: %d case(s) wrong)" % (VERDICT_ERROR, failed))
+    scored = []  # (arm, label, ok, expect_ok, detail)
+    tmp = tempfile.mkdtemp(prefix="core-deployment-selftest-")
+    try:
+        for label, body, expect_ok in CAPABILITY_FIXTURES:
+            ok, _lines, failures = capability_arm(body, "/healthz")
+            scored.append(("capability", label, ok, expect_ok,
+                           "" if ok else failures[0][:70]))
+        repo = _scratch_repo(pathlib.Path(tmp))
+        for label, body, expect_ok in _drift_fixtures(repo):
+            ok, _lines, failures = drift_arm(body, "/healthz", repo, "main",
+                                             DEFAULT_MAX_AGE_DAYS, None)
+            scored.append(("drift", label, ok, expect_ok,
+                           "" if ok else failures[0][:70]))
+    except CheckError as exc:
+        # Could not build the fixtures. NOT a pass: same rule as an unreachable
+        # target -- "we could not look" is never filed as "we looked".
+        print("%s (selftest: %s)" % (VERDICT_ERROR, exc))
         return 2
-    print("%s (selftest: capability arm goes red on 3 of 4 fixtures, green on 1)"
-          % VERDICT_PASS)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    wrong = 0
+    for arm, label, ok, expect_ok, detail in scored:
+        if ok != expect_ok:
+            wrong += 1
+        print("%s %-10s %-22s -> %s %s"
+              % ("ok " if ok == expect_ok else "BAD", arm, label,
+                 "PASS" if ok else "FAIL", "" if ok else "(%s)" % detail))
+
+    # The floor, per arm, BEFORE the tally -- an arm that scored nothing is the
+    # defect this function exists to refuse, and it has to be named rather than
+    # folded into a count.
+    for arm in SELFTEST_ARMS:
+        reds = [r for r in scored if r[0] == arm and not r[2]]
+        greens = [r for r in scored if r[0] == arm and r[2]]
+        if not reds or not greens:
+            print("%s (selftest: the %s arm scored %d red and %d green case(s) "
+                  "-- it must score at least one of each, or this gate passes "
+                  "without running)" % (VERDICT_ERROR, arm, len(reds), len(greens)))
+            return 2
+
+    if wrong:
+        print("%s (selftest: %d case(s) wrong)" % (VERDICT_ERROR, wrong))
+        return 2
+
+    summary = ", ".join(
+        "%s %d red / %d green" % (arm,
+                                  sum(1 for r in scored if r[0] == arm and not r[2]),
+                                  sum(1 for r in scored if r[0] == arm and r[2]))
+        for arm in SELFTEST_ARMS
+    )
+    print("%s (selftest: %d case(s) scored -- %s)"
+          % (VERDICT_PASS, len(scored), summary))
     return 0
 
 
