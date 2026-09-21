@@ -733,14 +733,34 @@ def cmd_status(args: argparse.Namespace) -> int:
         print("[reeflex-claude] the hook still runs; it records the narrowing once a session.")
     elif assessment["state"] == STATE_UNVERIFIED:
         print("")
-        print("[reeflex-claude] The most common cause is launching with")
-        print("[reeflex-claude]   claude --settings <path>")
-        print("[reeflex-claude] A hook is told its session, its cwd and its tool call, and")
-        print("[reeflex-claude] nothing about which settings file was loaded, so it cannot")
-        print("[reeflex-claude] read that file back. Re-running setup writes a")
-        print(f"[reeflex-claude] {MATCHER_STAMP_ENV} stamp into the settings 'env' block,")
-        print("[reeflex-claude] which does travel to the hook and closes this case:")
-        print(f"[reeflex-claude]   {widen_command(assessment)}")
+        if assessment["evidence"] == "env-stamp":
+            # RFX-325 residual (qa--285): we DID find a stamp, and we are
+            # deliberately not treating it as a clean bill of health. Saying so
+            # is the whole point -- an operator who sees only "UNVERIFIED" while
+            # the stamp sits in their settings file will assume we missed it.
+            print(f"[reeflex-claude] A {MATCHER_STAMP_ENV} stamp is present and says")
+            print(f"[reeflex-claude]   {assessment['wired'][0]['matcher']!r}")
+            print("[reeflex-claude] but NO settings file at a fixed location names this hook,")
+            print("[reeflex-claude] so there is nothing to confirm that stamp against. A stamp")
+            print("[reeflex-claude] records what 'setup' once wrote; what governs a tool call is")
+            print("[reeflex-claude] the hook entry that is in a settings file NOW. Claude Code")
+            print("[reeflex-claude] exports a settings file's 'env' block to the processes it")
+            print("[reeflex-claude] spawns, so the stamp outlives the hook entry it was written")
+            print("[reeflex-claude] beside: remove the entry, keep the block, and the stamp would")
+            print("[reeflex-claude] certify a gate that is no longer there. So a wide stamp is")
+            print("[reeflex-claude] read as 'not contradicted', never as 'verified'.")
+            print("[reeflex-claude] If this IS a 'claude --settings <path>' launch, the coverage")
+            print("[reeflex-claude] may well be complete -- run this command where that file is")
+            print("[reeflex-claude] the one at a fixed location, or wire the hook there:")
+            print(f"[reeflex-claude]   {widen_command(assessment)}")
+        else:
+            print("[reeflex-claude] The most common cause is launching with")
+            print("[reeflex-claude]   claude --settings <path>")
+            print("[reeflex-claude] A hook is told its session, its cwd and its tool call, and")
+            print("[reeflex-claude] nothing about which settings file was loaded, so it cannot")
+            print("[reeflex-claude] read that file back. Re-running setup wires the hook at a")
+            print("[reeflex-claude] fixed location, which is what this command can read:")
+            print(f"[reeflex-claude]   {widen_command(assessment)}")
         print("[reeflex-claude] Coverage here may be complete or may not be. This says only")
         print("[reeflex-claude] that it is not known -- which is not the same as 'fine'.")
 

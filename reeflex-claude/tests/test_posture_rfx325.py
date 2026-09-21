@@ -257,6 +257,59 @@ class TestAssess(_Isolated):
         self.assertEqual(a["evidence"], "env-stamp")
         self.assertEqual(a["wired"][0]["source"], "env:" + MATCHER_STAMP_ENV)
 
+    def test_a_WIDE_env_stamp_alone_is_NOT_full_coverage(self):
+        """
+        RFX-325 residual, qa--285, reproduced on real claude 2.1.268.
+
+        We reach the stamp only because no file at a fixed location names our
+        hook -- which is also exactly what "the gate is not wired" looks like.
+        Claude Code exports a settings file's `env` block to the processes it
+        spawns, so the stamp outlives the hook entry `setup` wrote beside it:
+        drop the entry, keep the block, and a wide stamp certified a gate that
+        is gone.  Measured before this fix: `COVERAGE: every tool reaches the
+        gate` and `status --strict` exit 0 on a box where no settings file
+        wired the hook at all -- RFX-325's own U1 == F, inside RFX-325's fix.
+
+        A stamp may only ever be read as evidence AGAINST coverage.
+        """
+        os.environ[MATCHER_STAMP_ENV] = DEFAULT_MATCHER
+        a = assess()
+        self.assertEqual(a["state"], STATE_UNVERIFIED)
+        # The stamp is still REPORTED -- refusing to trust it is not the same
+        # as pretending we never saw it, and `status` prints it back.
+        self.assertEqual(a["evidence"], "env-stamp")
+        self.assertEqual(a["wired"][0]["source"], "env:" + MATCHER_STAMP_ENV)
+        self.assertEqual(a["wired"][0]["matcher"], DEFAULT_MATCHER)
+        self.assertTrue(a["wired"][0]["covers_all"])
+
+    def test_a_wide_stamp_over_a_file_that_wires_SOMEONE_ELSES_hook_is_unverified(self):
+        """
+        The shape qa--285 drove through real Claude Code: a settings file that
+        IS loaded, IS read by us, wires a match-all PreToolUse hook that is not
+        ours, and carries our stamp in its env block.  Every ingredient of a
+        governed machine is present except the gate.
+        """
+        self.write_project({"hooks": {"PreToolUse": [
+            {"matcher": "*", "hooks": [{"type": "command", "command": "/bin/other"}]}]}})
+        os.environ[MATCHER_STAMP_ENV] = DEFAULT_MATCHER
+        a = assess()
+        self.assertEqual(a["state"], STATE_UNVERIFIED)
+        self.assertNotEqual(a["state"], STATE_FULL)
+
+    def test_a_wide_FILE_is_still_full_coverage_when_a_stamp_is_also_present(self):
+        """
+        The control for the two above: the fix must cost nothing to an
+        installation that really is wired.  File evidence, not stamp evidence,
+        so FULL survives -- otherwise the remedy would be to make every healthy
+        installation cry wolf, which is the failure mode dev-1--073 measured
+        against.
+        """
+        self.write_project(_settings(DEFAULT_MATCHER))
+        os.environ[MATCHER_STAMP_ENV] = DEFAULT_MATCHER
+        a = assess()
+        self.assertEqual(a["state"], STATE_FULL)
+        self.assertEqual(a["evidence"], "settings-file")
+
     def test_a_wide_env_stamp_never_overrides_a_narrow_FILE(self):
         """
         The load-bearing precedence.  A stamp records what `setup` wrote; the
@@ -338,6 +391,33 @@ class TestNoteOnce(_Isolated):
         self.assertIsNotNone(rec)
         self.assertEqual(rec["rule"], RULE_UNVERIFIED)
         self.assertNotEqual(RULE_UNVERIFIED, RULE_NARROWED)
+
+    def test_a_wide_stamp_session_records_UNVERIFIED_instead_of_staying_silent(self):
+        """
+        RFX-325 residual (qa--285).  Before the fix this session assessed FULL
+        and wrote nothing, so an ungated machine and a governed one produced
+        the same silence on the adapter's own stream -- the U1 == F the whole
+        module exists to break.  It now leaves a record, under the rule id that
+        means "cannot tell" and not the one that means "measured narrowing".
+        """
+        os.environ[MATCHER_STAMP_ENV] = DEFAULT_MATCHER
+        rec = note_once("session-S")
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec["rule"], RULE_UNVERIFIED)
+        self.assertEqual(rec["matcher"]["evidence"], "env-stamp")
+        # The reason has to say a stamp WAS seen and refused; the pre-existing
+        # wording ("no stamp was present") would be a false statement here.
+        self.assertIn(MATCHER_STAMP_ENV, rec["reason"])
+        self.assertNotIn("no {0} stamp was present".format(MATCHER_STAMP_ENV),
+                         rec["reason"])
+
+    def test_the_no_evidence_record_still_says_no_stamp_was_present(self):
+        """The other UNVERIFIED cause keeps its own, still-true, wording."""
+        rec = note_once("session-N")
+        self.assertEqual(rec["rule"], RULE_UNVERIFIED)
+        self.assertEqual(rec["matcher"]["evidence"], "none")
+        self.assertIn("no {0} stamp was present".format(MATCHER_STAMP_ENV),
+                      rec["reason"])
 
     def test_the_record_is_not_a_decision_record(self):
         """
@@ -504,6 +584,54 @@ class TestStatusCommand(_Isolated):
         self.write_project(_settings(OLD_MATCHER))
         rc, _ = self._status(["status", "--strict"])
         self.assertEqual(rc, 1)
+
+    def test_status_strict_exits_one_on_a_wide_stamp_with_no_file_naming_us(self):
+        """
+        RFX-325 residual (qa--285).  `check`'s own warning text calls
+        `status --strict` "the hook to hang CI on".  Before this fix that hook
+        returned 0 -- headline "COVERAGE: every tool reaches the gate" -- on an
+        installation where no settings file wired the hook at all, because an
+        exported `REEFLEX_CLAUDE_MATCHER=*` was allowed to stand in for the
+        file it could not find.  Reproduced through real claude 2.1.268, two
+        arms differing in that one env key: exit 0 with it, exit 1 without.
+
+        The exit code is the assertion.  The headline is asserted too, because
+        a CI step that gates correctly while printing a clean bill of health to
+        a human is only half fixed.
+        """
+        os.environ[MATCHER_STAMP_ENV] = DEFAULT_MATCHER
+        rc, out = self._status(["status", "--strict"])
+        self.assertEqual(rc, 1)
+        self.assertIn("COVERAGE: UNVERIFIED", out)
+        self.assertNotIn("every tool reaches the gate", out)
+        # ...and it says WHY, so an operator looking at a settings file that
+        # plainly contains the stamp does not conclude we failed to look.
+        #
+        # Asserting MATCHER_STAMP_ENV alone is NOT enough and this comment is
+        # the scar: the name also appears in the "from: env:..." provenance
+        # line, so that assertion passed with the whole explanation deleted
+        # (sabotage arm S3 reddened nothing). Anchor on a sentence only the
+        # env-stamp branch can print.
+        self.assertIn("A {0} stamp is present and says".format(MATCHER_STAMP_ENV), out)
+        self.assertIn("never as 'verified'", out)
+
+    def test_status_strict_still_exits_zero_on_a_really_wired_installation(self):
+        """The control: the fix must not redden a healthy machine."""
+        self.write_project(_settings(DEFAULT_MATCHER))
+        os.environ[MATCHER_STAMP_ENV] = DEFAULT_MATCHER
+        rc, out = self._status(["status", "--strict"])
+        self.assertEqual(rc, 0)
+        self.assertIn("COVERAGE: every tool reaches the gate", out)
+
+    def test_the_json_status_agrees_with_the_human_one(self):
+        """
+        Two readers of one assessment.  A fix applied to the printed output and
+        not to `--json` would leave a machine consumer on the old answer.
+        """
+        os.environ[MATCHER_STAMP_ENV] = DEFAULT_MATCHER
+        rc, out = self._status(["status", "--json", "--strict"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(json.loads(out)["assessment"]["state"], STATE_UNVERIFIED)
 
     def test_status_strict_exits_zero_on_a_correctly_wired_installation(self):
         self.write_project(_settings(DEFAULT_MATCHER))
