@@ -7,6 +7,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ### Fixed
 
+- **`reeflex-claude status --strict` — the command `check` names as "the hook to hang CI on" — reported `COVERAGE: every tool reaches the gate` and exited 0 on a machine where no settings file wired the hook at all.** (RFX-325 residual)
+
+  `posture.assess()` reads the settings files at Claude Code's fixed locations and, when none of them names our hook, falls back to the `REEFLEX_CLAUDE_MATCHER` stamp that `setup` writes into the settings `env` block. The fallback exists for one real case: a `claude --settings <path>` launch, whose path a hook is never told. But "no file names our hook" is also, and far more often, what **the gate not being wired** looks like — and Claude Code exports a settings file's `env` block to the processes it spawns, so the stamp outlives the hook entry `setup` wrote beside it. Remove the entry, keep the block, and a wide stamp certified a gate that was gone.
+
+  **Measured on real `claude` 2.1.268 (qa--285), two arms differing in one env key and nothing else,** on a box whose only fixed-location settings file wires a match-all PreToolUse hook that is not ours:
+
+  ```
+  project .claude/settings.json = {"env":{"REEFLEX_CLAUDE_MATCHER":"*"}}   (no "hooks" key at all)
+    -> COVERAGE: every tool reaches the gate            status --strict EXIT 0
+  project .claude/settings.json = {"env":{}}
+    -> COVERAGE: UNVERIFIED -- cannot tell which tools   status --strict EXIT 1
+  ```
+
+  The first arm is RFX-325's own `U1 == F` — an ungated installation indistinguishable from a governed one — reappearing inside the instrument RFX-325's fix built to detect it, and it wrote no `matcher_unverified` record either, so the adapter's own audit stream was silent about it too.
+
+  **The stamp is now read in one direction only.** A stamp narrower than what we ship still downgrades the assessment to `NARROWED`; a stamp that covers everything no longer upgrades it to `FULL` — with no file to confirm it against it is `UNVERIFIED`, `status --strict` exits 1, and the session leaves one `reeflex.adapter/matcher_unverified` record. That is the same argument the module already used to let a narrow FILE beat a wide stamp, applied to the case it skipped. `status` prints the stamp it refused and why, so an operator looking at a settings file that plainly contains it does not conclude we failed to look.
+
+  **What it costs, stated rather than discovered later:** a correctly wired `claude --settings <path>` launch that used to assess `FULL` and stay silent now assesses `UNVERIFIED` and leaves one record per session. An `UNVERIFIED` record on a healthy installation is a nuisance an operator closes by wiring the hook at a fixed location; a `FULL` verdict on an ungated one is the failure this module exists to stop. **No change to any decision, to `check`'s verdict, or to an installation wired at a fixed location** — the two control arms (`*` in a real file, with and without a stamp beside it) are green before and after, and go red under a sabotage arm that downgrades file evidence too.
+
 - **Publishing a tag turned the monorepo gate RED on `main` and blocked every open PR behind a tree nobody had changed.** (RFX-377)
 
   Three gate components declare where the PUBLISHED wheel diverges from the tree: `pypi-content` (`UNPUBLISHED_WITH_A_TICKET`, `WAIVED_COLLISIONS`) and `pypi-behaviour` / `pypi-litellm-seat` (`PUBLISHED_LAG`, `SEAT_PUBLISHED_LAG`). Every entry in them said "the artefact a customer installs gets this wrong", and every entry was written to FAIL the moment it stopped being true — deliberately, so that a declaration could not outlive its defect. The v0.2.2 tag published `reeflex-claude 0.2.1`, `reeflex-litellm 0.2.0` and `reeflex-mcp 0.1.4` at 00:40Z on 2026-09-20 and made **all 137 of them untrue at the same instant**. All three components went red.
