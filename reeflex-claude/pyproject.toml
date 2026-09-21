@@ -11,7 +11,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reeflex-claude"
-version = "0.2.1"
+# 0.2.1 -> 0.2.2 because THIS COMMIT CHANGES WHAT THE PACKAGE DECIDES, and the
+# v0.2.2 tag published 0.2.1 to the index at 2026-09-20T00:40:27Z.  Leaving the
+# string at 0.2.1 makes the tree a CONTENT COLLISION against the wheel a
+# customer already installs: `scripts/check_published_content.py` measured it
+# here as "same version string, 132 differing lines across 1 files", and its
+# remedy line is the only one available -- a lag FLAG cannot suppress a
+# collision, only an UNPUBLISHED version can (see that script's THREE OUTCOMES
+# docblock).  Under 0.2.2 the tree reads UNPUBLISHED, which that docblock calls
+# the normal healthy state between a bump and its release.
+#
+# This bump does NOT publish anything and is not a release: the tag is the
+# owner's call.  Until that tag, the index keeps serving 0.2.1 and a customer's
+# `pip install reeflex-claude` keeps getting a classifier WITHOUT the RFX-356
+# tie-break -- the reordering fail-open stays open for installed seats, and the
+# merge is not the delivery.
+version = "0.2.2"
 description = "Reeflex adapter for Claude Code: a PreToolUse hook that gates every tool call on its impact before it runs (allow/hold/deny), fail-closed -- governance that protects you from your own agent."
 readme = "README.md"
 license = "Apache-2.0"

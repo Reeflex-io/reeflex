@@ -181,6 +181,32 @@ GAP_COMMAND_SUBSTITUTION_SCOPE = (
     "destroy-writer-mv",
     "destroy-writer-sort-o",
     "destroy-writer-tee",
+    # RFX-345 -- the six spellings the writer family's directory-destination
+    # bail was failing open on.  WIDENED DELIBERATELY, not re-baselined: the
+    # guard JOINED them the moment they were priced, which is the mechanism
+    # working, and the honest reading is that RFX-345 closes six direct
+    # spellings while handing all six straight to this residual.  A customer on
+    # a wheel with the RFX-345 fix is protected against `cp -T /dev/null P` and
+    # is NOT protected against `$(echo cp) -T /dev/null P`.  That is the same
+    # trade the six RFX-343 rows above already record, and it is stated here
+    # rather than left for the next reader to rediscover.
+    "destroy-writer-cp-no-dereference",
+    "destroy-writer-cp-no-target-dir-short",
+    "destroy-writer-install-create-leading-dirs",
+    "destroy-writer-install-no-target-dir-short",
+    "destroy-writer-mv-no-target-dir-short",
+    "destroy-writer-sort-field-separator",
+    # RFX-345 second pass (dev-1--170): the four shapes where a short option's
+    # VALUE was being read as a flag letter.  They join this residual for
+    # exactly the same reason and on the same terms -- declared because this
+    # guard reported them, not re-baselined to make it quiet.  The honest
+    # reading is unchanged and now covers four more spellings: a customer is
+    # protected against `cp -St /dev/null P` and is NOT protected against
+    # `$(echo cp) -St /dev/null P`.
+    "destroy-writer-cp-suffix-value-not-a-flag",
+    "destroy-writer-install-bundled-mode-value",
+    "destroy-writer-install-owner-value-not-a-flag",
+    "destroy-writer-mv-suffix-value-not-a-flag",
     # whole-file destruction already in the table before RFX-343
     "destroy-dd-over-db",
     "destroy-truncate-db",
@@ -485,6 +511,102 @@ CASES = [
        "destroy", verb="delete", blast_radius="broad",
        ref="/srv/prod/db.sqlite"),
 
+    # RFX-345.  The writer family's "the destination is a DIRECTORY, so bail"
+    # test was one shared flag set, matched against the LOWERCASED args, for
+    # all five writer commands.  Each of these six lines EMPTIED a synthetic
+    # canary in a real /bin/bash and was priced execute/recoverable/scoped with
+    # target_ref=null, so R6 had no path to match.  Evidence:
+    # code-reports/dev-2--080--20260918-evidence/02-ground-truth.txt
+    #
+    # Read them in three groups, because they are three different ways for one
+    # test to fail open and a fix that closes only the first leaves four live:
+    #
+    #  (a) CASE.  `-T` is `--no-target-directory` -- it asserts the destination
+    #      is a FILE, the exact opposite of `-t` -- and it folded to `-t`.
+    #      `install -D` folded to `install -d` the same way.  The LONG spelling
+    #      was priced and the SHORT one was not, for the same effect.
+    _c("destroy-writer-cp-no-target-dir-short",
+       "cp -T /dev/null /srv/prod/db.sqlite",
+       "-T asserts the destination is a FILE; case-folding read it as -t",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-mv-no-target-dir-short",
+       "mv -T /tmp/replacement.dat /srv/prod/db.sqlite",
+       "the same fold under a second command word", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-install-no-target-dir-short",
+       "install -T /dev/null /srv/prod/db.sqlite",
+       "and under a third", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-install-create-leading-dirs",
+       "install -D /dev/null /srv/prod/db.sqlite",
+       "-D creates the LEADING directories and writes DEST as a file; it "
+       "folded to -d, which really does mean 'every operand is a directory'",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    #  (b) COMMAND.  `-d` is not a directory destination in `cp` at all -- it
+    #      is `--no-dereference --preserve=links`.  The shared set had no way
+    #      to know which command word it was answering for.
+    _c("destroy-writer-cp-no-dereference",
+       "cp -d /dev/null /srv/prod/db.sqlite",
+       "cp -d is --no-dereference, not a directory destination", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    #  (c) COMMAND, again, and this one carries its own discriminator: in
+    #      `sort`, `-t` is the FIELD SEPARATOR.  The SPACED spelling bailed
+    #      and the attached `sort -t:` was priced correctly -- same command,
+    #      same effect, two answers -- which is the tell that the bail was
+    #      matching a token and never reading a fact about the command.
+    _c("destroy-writer-sort-field-separator",
+       "sort -t : -k1 -o /srv/prod/db.sqlite /tmp/in.txt",
+       "sort -t is --field-separator; -o still opens the operand for "
+       "truncation", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+
+    # RFX-345, SECOND PASS (dev-1--170's review of the fix).  Keying the flags
+    # by command and reading `args` closes the case fold.  What replaced it was
+    # a SUBSTRING test over the bundle (`letter in arg[1:]`) and a bail on 3+
+    # positionals -- and both read a short option's VALUE as if it were a flag
+    # letter, which is the same class the ticket was filed for.  getopt reads a
+    # bundle left to right and the first letter that takes an argument swallows
+    # the rest of the token, so:
+    #
+    #   `cp -St P`        -- the t is -S's backup SUFFIX
+    #   `install -oroot`  -- the t belongs to the owner's name
+    #   `install -Dm 755` -- -m never appears as its own token, so 755 counted
+    #                        as a positional, which made three, which tripped
+    #                        the new bail
+    #
+    # REGRESSIONS, NOT RESIDUALS: every one was priced delete/irreversible on
+    # main (caf2cd6) and execute/recoverable with ref=null on #178's head
+    # (28936ee), over a 578-shape cross-product scored under both trees.  All
+    # EXECUTED against a canary in a real /bin/bash.
+    _c("destroy-writer-cp-suffix-value-not-a-flag",
+       "cp -St /dev/null /srv/prod/db.sqlite",
+       "the t is the backup SUFFIX of -S, not --target-directory", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-mv-suffix-value-not-a-flag",
+       "mv -S.tmp /tmp/replacement.dat /srv/prod/db.sqlite",
+       "not only the bare letter -- any backup suffix containing a t did it",
+       "ask", "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-install-owner-value-not-a-flag",
+       "install -oroot /dev/null /srv/prod/db.sqlite",
+       "the t of the owner name root is not install -t; an ordinary "
+       "provisioning line emptied the database", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+    _c("destroy-writer-install-bundled-mode-value",
+       "install -Dm 755 /dev/null /srv/prod/db.sqlite",
+       "a bundled -m consumes 755, so counting it as a positional put a real "
+       "destruction over the three-operand bail", "ask",
+       "destroy", verb="delete", blast_radius="broad",
+       ref="/srv/prod/db.sqlite"),
+
     # The half of RFX-343 that pins what must STAY allowed.  `cp`, `mv` and
     # `tee` are overwhelmingly ORDINARY developer work, and a fix that priced
     # them all as deletes would exhaust R5's cumulative delete budget on build
@@ -515,6 +637,84 @@ CASES = [
     # the RFX-343 report.
     _c("everyday-writer-tar-create", "tar -cf ./dist.tar ./src",
        "building an archive is ordinary work, not a destruction", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+
+    # RFX-345's other half: what must STAY unpriced.  The bail on a GENUINE
+    # directory destination is RIGHT -- which file inside DIR gets overwritten
+    # cannot be resolved without touching the filesystem, and this classifier
+    # never does.  A careless fix that reads `args` but drops the `-t`
+    # handling turns every one of these into a claimed destruction of a
+    # directory that measurably survives, so they are the rows that fail first.
+    # All four were EXECUTED: the directory and its contents came through
+    # intact (03-ground-truth-2.txt, 05-ground-truth-3.txt).
+    _c("everyday-writer-cp-to-directory", "cp -t /srv/prod/ ./a.sql",
+       "-t says DEST is a directory; which file inside it is overwritten is "
+       "unresolvable without the filesystem", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-cp-to-directory-bundled", "cp -at /srv/prod/ ./a.sql",
+       "the bundled spelling of the same flag must answer the same; before "
+       "RFX-345 it named the SOURCE as the destroyed file", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-install-make-directory", "install -d /srv/prod/newdir",
+       "install -d creates directories; there is no destination file at all",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    # The complement of the value-aware bundle scan (dev-1--170).  Stopping at
+    # the first value-taking letter must not stop it BEFORE a real flag, and
+    # must not lose the attached spelling of -t.  Both EXECUTED as survivors.
+    _c("everyday-writer-cp-to-directory-attached", "cp -t/srv/prod/ ./a.sql",
+       "the attached spelling of -t is still a directory destination", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    # THE SHAPE WHERE THE BUNDLE SCAN IS THE ONLY THING STANDING, found by a
+    # sabotage arm that went GREEN and was decomposed instead of accepted.
+    # Every other `-t` row here has ONE positional left after the directory,
+    # so the "fewer than two operands" rule already answers them and the
+    # bundle scan could be broken without moving a single verdict.  With a
+    # weighty file LAST and still a SOURCE, the scan alone decides.  EXECUTED:
+    # `cp -t DIR a.sql db.sqlite` exits 0, both operands appear inside DIR and
+    # db.sqlite comes through byte-identical (08-ground-truth-rev5.txt).
+    _c("everyday-writer-cp-to-directory-bundled-weighty-source",
+       "cp -at /srv/backup/ /tmp/a.sql /srv/prod/db.sqlite",
+       "with -t the LAST operand is still a source; naming it would report a "
+       "destruction of a file that is only being read", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-cp-to-directory-attached-weighty-source",
+       "cp -t/srv/backup/ /tmp/a.sql /srv/prod/db.sqlite",
+       "the attached spelling of the same, which only the bundle scan sees",
+       "allow", "everyday", verb="execute", blast_radius="scoped"),
+    _c("everyday-writer-install-make-directory-bundled",
+       "install -dm 755 /srv/prod/newdir",
+       "the d is a flag even though the m after it takes a value", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    # EXECUTED: exits 1, "missing destination file operand", file intact.
+    # MAIN priced this one -- a destruction that cannot happen -- because it
+    # counted the bundled -m's value as an operand.  A false positive closed
+    # by the same fix, recorded so it cannot come back unnoticed.
+    _c("everyday-writer-install-missing-dest-operand",
+       "install -Dm 755 /srv/prod/db.sqlite",
+       "one operand once the bundled -m takes 755; install exits 1 and the "
+       "file is intact", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    # Three or more positionals say "DEST is a directory" with no flag at all.
+    # EXECUTED both ways: `cp a b DIR/` leaves DIR intact, and `cp a b FILE`
+    # exits 1 with "target is not a directory" and leaves FILE intact -- so
+    # there is no spelling of this that destroys the last positional, and
+    # naming it reported a destruction of /var/lib/pgsql/data/.
+    _c("everyday-writer-cp-many-into-directory",
+       "cp ./a.sql ./b.sql /var/lib/pgsql/data/",
+       "3+ positionals means a directory destination; the last operand is not "
+       "the destroyed file", "allow",
+       "everyday", verb="execute", blast_radius="scoped"),
+    # The SPACED long spelling, added because a sabotage arm found it missing:
+    # it is the only shape where matching the flag TOKEN decides the answer
+    # (a bundle cannot match `--`, and `--target-directory=DIR` leaves too few
+    # positionals to price).  EXECUTED: the original path is gone and all five
+    # canary lines are recoverable at the new one -- the `gzip` exclusion this
+    # family's docstring already names, so `delete/irreversible` would be
+    # measurably untrue rather than merely cautious.
+    _c("everyday-writer-mv-into-directory-long-flag",
+       "mv --target-directory /srv/backup/ /srv/prod/db.sqlite",
+       "the bytes move, they are not destroyed; recoverable-but-disruptive is "
+       "a pricing this family cannot express", "allow",
        "everyday", verb="execute", blast_radius="scoped"),
 
     # NEW rows (dev-1 round 054).  The corpus had `destroy-env-rm`

@@ -10,10 +10,13 @@ Working. The engine is complete and functional:
 
 - `POST /v1/decide` — full request pipeline: envelope validation → axis coercion
   → cumulative ledger → OPA/Rego evaluation → decision → audit write.
-- `GET /healthz` — liveness **and capability**: `{"status":"ok"}` plus whether this
-  core can remember (`ledger.durable`), whether it can accept an **approval**
-  (`holds.resolvable` — false means every hold it raises expires unanswered) and
-  what it can serve at once (`server`).
+- `GET /healthz` — liveness **and capability**: `{"status":"ok"}` plus which build
+  is answering (`revision`), whether this core can remember (`ledger.durable`),
+  whether it can accept an **approval** (`holds.resolvable` — false means every
+  hold it raises expires unanswered) and what it can serve at once (`server`).
+  `scripts/check_core_deployment.py` reads the first three; a build that will not
+  say what it is, or that cannot approve anything, is reported as a failure and
+  never as "unknown, therefore fine".
 - Fail-closed on any OPA error, connection failure, or unexpected exception.
 - Append-only JSONL audit of every decision (cryptographic record signing is on the roadmap — see SPEC §6).
 - Per-session cumulative action ledger for fragmentation-resistance (SPEC §4.1).

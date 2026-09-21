@@ -566,6 +566,13 @@ jobs:
             type=raw,value=${{ needs.prepare.outputs.tag }}
             type=raw,value=latest
 
+      - name: Resolve the commit actually checked out (RFX-89)
+        id: gitsha
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "building reeflex-core from $sha (tag ${{ needs.prepare.outputs.tag }})"
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -577,6 +584,28 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # RFX-89 (core half). `labels:` above already carries
+          # org.opencontainers.image.revision — but a LABEL is only readable
+          # with `docker inspect` on the VM, which is exactly the shell-access
+          # requirement RFX-89 was filed about and the reason api-dev's 34-day
+          # drift (RFX-88) was invisible to every check we had. The same sha,
+          # passed as a build arg, reaches /healthz and can be read by an
+          # auditor, an operator or the scheduled deploy-drift job with one
+          # unauthenticated GET.
+          #
+          # READ OFF THE CHECKOUT, not from `github.sha`. This workflow has a
+          # `workflow_dispatch` path taking an existing tag (and release.yml
+          # is re-runnable on a tag that already shipped), and on that path
+          # `github.sha` is the commit the run was DISPATCHED from — main's
+          # tip — while the checkout above is `ref: <tag>`. Using it would
+          # bake a revision into the image that is not the commit the image
+          # was built from: a self-report that lies, which is worse than the
+          # `revision`-absent case this whole change exists to remove.
+          #
+          # A tag NAME is not a commit either; the checker rejects anything
+          # that is not a git object name, so this must be the resolved sha.
+          build-args: |
+            GIT_SHA=${{ steps.gitsha.outputs.sha }}
 
   # ---------------------------------------------------------------------------
   # ghcr-connector: build + push ghcr.io/reeflex-io/reeflex-connector.

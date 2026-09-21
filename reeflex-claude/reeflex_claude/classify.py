@@ -1079,7 +1079,7 @@ def _classify_bash(tool_input: dict) -> dict:
     results += [t for t in (_peeled_truncations(seg, preview) for seg in segments)
                 if t is not None]
 
-    return max(results, key=_severity)
+    return _most_severe(results)
 
 
 def _sql_reachable(segments: list) -> bool:
@@ -1155,12 +1155,19 @@ def _severity(cls: dict) -> tuple:
     bash redirection grammar: 28 rows, all `/srv/prod/secrets.env`, spread
     evenly across all seven truncating operators, in `&&` and `{ ; }` context.
 
-    NOT fixed here, and deliberately: a line carrying TWO destructions still
-    reports only the winner's `target_ref`, so the verdict is right and the
-    record can name nothing (80 rows in the same grid).  That is an
-    audit-record defect, not a fail-open, and it is filed separately -- see
-    RFX-346's CLASS 2.  Merging refs across candidates changes what every
-    destruction reports and needs its own evidence.
+    A line carrying TWO destructions still reports only the winner's
+    `target_ref` (80 rows in the same grid).  THIS DOCSTRING USED TO CALL THAT
+    "an audit-record defect, not a fail-open", on the grounds that "the verdict
+    is right".  RFX-356 measured that sentence and it is wrong, so it has been
+    removed rather than softened: when the two candidates TIE, the verdict is
+    decided by which one `max()` happened to keep, and `max()` keeps the first
+    -- so the agent chooses the verdict by choosing the order.  144 of 225
+    pairs flip on reordering alone, against the real pack.
+
+    The tie half is closed by `_most_severe` below, which breaks an exact tie
+    on something the agent does not supply.  What remains -- naming only ONE of
+    several destroyed refs to an auditor -- IS the audit-record defect this
+    paragraph originally described, and it is still filed separately.
     """
     return (
         _TIER_RANK.get(cls["classification_tier"], 1),
@@ -1168,6 +1175,117 @@ def _severity(cls: dict) -> tuple:
         _BLAST_RANK.get(cls["blast_radius"], 1),
         _VERB_RANK.get(cls["verb"], 1),
     )
+
+
+# ---------------------------------------------------------------------------
+# Which of several EQUALLY severe candidates gets named (RFX-356)
+# ---------------------------------------------------------------------------
+#
+# The FHS designates these as TEMPORARY.  This is NOT a copy of core's
+# `protected_assets` and must never become one: that list is the OPERATOR'S
+# DECLARATION about their own estate, it lives in policy data they edit, and
+# protected.rego says in its own words that "the adapter cannot know it".
+#
+# This is the complement, and the complement is the part that IS standard.
+# protected.rego says so itself, about its own `ephemeral_assets`: "The same
+# standard designates /tmp and /var/tmp as TEMPORARY, which is why they are
+# not here and why the `ephemeral_assets` list below can be short."  The five
+# prefixes below are that list.
+#
+# STATED LIMIT, because it is the one that matters: if an operator EDITS
+# `ephemeral_assets` -- removes /tmp/, or declares /tmp/ protected -- this copy
+# drifts from theirs.  The blast radius of that drift is bounded to exactly one
+# thing: WHICH of two candidates that already score identically gets named.  It
+# can move no axis, no tier and no severity, so it cannot by itself produce a
+# verdict; see `_most_severe`.
+_FHS_TEMPORARY_PREFIXES = ("/tmp/", "/var/tmp/", "/var/cache/", "/dev/shm/", "/run/")
+
+
+def _is_fhs_temporary(ref: Optional[str]) -> bool:
+    """True when `ref` names a path the FHS designates as temporary storage.
+
+    Prefix match, plus exact match on the prefix with its trailing separator
+    removed, so `/tmp` itself is temporary and not only things under it -- the
+    same two-form match `protected.rego::_under` does, for the same reason.
+    A None/empty/non-string ref is NOT temporary: an adapter that cannot name
+    what it is destroying has not thereby established that the thing is
+    scratch.
+    """
+    if not isinstance(ref, str) or not ref:
+        return False
+    low = ref.lower()
+    return any(low.startswith(p) or low == p.rstrip("/")
+               for p in _FHS_TEMPORARY_PREFIXES)
+
+
+def _most_severe(results: list) -> dict:
+    """Report the line's most severe candidate -- and break a TIE on something
+    the audited agent does not control.
+
+    RFX-356.  THE DEFECT THIS CLOSES IS NOT A WRONG SEVERITY.  It is that
+    `max()` keeps the FIRST maximal element, so when two candidates score an
+    IDENTICAL key, POSITION ON THE LINE decided which `target_ref` the envelope
+    carried -- and position is supplied by the agent being audited:
+
+        { rm /srv/prod/secrets.env ; dd if=/dev/zero of=/tmp/x ; }
+            -> ref=/srv/prod/secrets.env  require_approval  (R6)
+        { dd if=/dev/zero of=/tmp/x ; rm /srv/prod/secrets.env ; }
+            -> ref=/tmp/x                 allow             (R4 default_allow)
+
+    Same two commands, same two destructions, reordered.  Measured against the
+    REAL pack (`opa eval` over reeflex-core/policy, fresh ledger, approval
+    absent): 144 of 225 pairs over a 5 ephemeral x 5 protected x 3 separator x
+    3 wrapper grid FLIP DECISION on reordering alone.
+
+    WHY THE TWO REPAIRS RFX-356 PROPOSED ARE BOTH WRONG, measured rather than
+    argued -- this is the part worth not re-deriving:
+
+      (a) "add a protected-asset term to `_severity`".  The adapter cannot.
+          Core's `protected_assets` is SITE knowledge in policy data the
+          operator edits; protected.rego argues at length that the adapter
+          cannot know it and core cannot derive it.  Built from the knowledge
+          the adapter DOES have, the term closes 36 of the 144 flips: of eight
+          paths under core's DEFAULT protected list, `_SENSITIVE_PATH_RE` sees
+          one and `_SYSTEM_DIR_RE` two, and `_SYSTEM_DIR_RE` would positively
+          PREFER /var/tmp/y over /srv/prod/ledger.dat.  A fix that closes a
+          quarter of an exposure and reads as complete is worse than none.
+
+      (b) "carry every candidate's target_ref".  Core REFUSES it, by design and
+          for this exact reason: `canonicalize_target_ref` raises
+          ValidationError for a list, because admitting `{"ref": [...]}` would
+          "match no prefix and so evade R6".  One ref reaches the pack; the
+          adapter has to choose which.
+
+    SO THE LEVER IS THE TIE-BREAK, AND ONLY THE TIE-BREAK.  Among candidates
+    whose severity key is EXACTLY equal, prefer one whose ref is not FHS
+    temporary.  Everything else is untouched: the maximal key is still chosen
+    by `_severity` first, so no candidate that used to win on severity stops
+    winning, and no axis, tier or verb moves.  The ONLY observable change is
+    which of several equally-severe refs is named.
+
+    WHY THIS CANNOT WEAKEN A VERDICT, under core's default lists.  A temporary
+    ref is unprotected under BOTH postures: /tmp/ is absent from
+    `protected_assets` (default posture -> not protected) and present in
+    `ephemeral_assets` (strict posture -> declared ephemeral -> not protected).
+    So replacing a temporary winner with a non-temporary one can only ADD
+    protection, never remove it.  If an operator rewrites those lists so a
+    temporary path is protected, that argument inverts -- which is why the
+    limit is stated on `_FHS_TEMPORARY_PREFIXES` rather than left implicit.
+
+    RESIDUAL, NAMED BECAUSE IT IS NOT CLOSED.  Two tied candidates that are
+    BOTH non-temporary are still separated by position: `rm /home/app/data/x ;
+    rm /srv/prod/y` names whichever comes first.  The adapter cannot rank those
+    without the operator's list, so closing it needs core to see every
+    destroyed ref -- an envelope change, filed separately, not taken here.
+    """
+    best = max(_severity(r) for r in results)
+    tied = [r for r in results if _severity(r) == best]
+    if len(tied) == 1:
+        return tied[0]
+    for cls in tied:
+        if not _is_fhs_temporary(cls.get("target_ref")):
+            return cls
+    return tied[0]
 
 
 def _classify_segment(segment: str, preview: Optional[str],
@@ -1511,9 +1629,118 @@ _WRITER_COMMANDS = frozenset([
 # destroyed cannot be resolved without touching the filesystem -- and this
 # classifier never does.  Bail rather than name the directory, which would
 # report a destruction of the wrong thing.
-_WRITER_DIR_DEST_FLAGS = frozenset([
-    "-t", "--target-directory", "-d", "--directory",
-])
+#
+# PER COMMAND, AND CASE-SENSITIVE.  One shared set applied to all five writer
+# commands failed OPEN three different ways, each one EXECUTED against a real
+# /bin/bash over a synthetic canary (RFX-345, and the two beyond it found while
+# fixing it -- evidence in the dev-2--080 report):
+#
+#   1. the set was tested against the LOWERCASED argument list, so `-T`
+#      (`--no-target-directory`, whose destination is emphatically a FILE) read
+#      as `-t`, and `install -D` read as `install -d`.  Four destroying shapes
+#      switched their own pricing off.  The LONG spelling was priced and the
+#      SHORT one was not, for the same command with the same effect.
+#   2. `-d` does not mean "directory destination" in `cp`: it is
+#      `--no-dereference --preserve=links`, and `cp -d /dev/null P` empties P.
+#   3. `-t` and `-d` mean nothing of the sort in `sort`: they are
+#      `--field-separator` and `--dictionary-order`.  `sort -t : -o P in` empties
+#      P, and the SPACED spelling bailed while the attached `-t:` was priced --
+#      which is the tell that this was a token match and never a fact about the
+#      command.
+#
+# So the flags are keyed by command word and compared against `args`, never
+# `low`.  `tee` and `sort` have no directory-destination flag at all and get an
+# empty set rather than a shared one.  Short flags are case-sensitive, and
+# folding case here fails OPEN -- the same sentence `_short_bundle_has` carries
+# two functions down for `tee -a`, which is where the class was first caught.
+_WRITER_DIR_DEST_FLAGS = {
+    # `-T`/`--no-target-directory` is the OPPOSITE of these and must never be
+    # in here: it asserts the destination is a file.
+    "cp":      (frozenset(["-t", "--target-directory"]), "t"),
+    "mv":      (frozenset(["-t", "--target-directory"]), "t"),
+    # `install -d` really does treat every operand as a directory to create.
+    # `install -D` creates the LEADING directories and writes DEST as a FILE --
+    # measured, not read off the man page.
+    "install": (frozenset(["-t", "--target-directory", "-d", "--directory"]), "td"),
+    "tee":     (frozenset(), ""),
+    "sort":    (frozenset(), ""),
+    # `git` joined _WRITER_COMMANDS in RFX-358 (`git diff|log|show --output=P`)
+    # AFTER this table was written, and the rebase that brought the two
+    # together merged CLEANLY -- no conflict, and the empty set it would have
+    # defaulted to is invisible.  `test_every_writer_command_has_an_entry` is
+    # what caught it.  Empty is the right answer here and it is recorded as a
+    # DECISION rather than a default: git's writer arm names its destination
+    # with `--output`, a FILE, and git has no directory-destination flag to
+    # bail on.  git also declines abbreviations (`git diff --out` exits 129,
+    # measured), so there is no prefix spelling to admit either.
+    "git":     (frozenset(), ""),
+}
+
+# SHORT OPTIONS THAT CONSUME AN ARGUMENT, per writer command.  This is what
+# separates a flag LETTER from an option's VALUE, and it is needed in two
+# places below for the same reason.
+#
+# getopt reads a bundle left to right and the FIRST letter that takes an
+# argument swallows the whole rest of the token as its value.  So in `cp -St`
+# the `t` is the backup SUFFIX, not `--target-directory`; in
+# `install -oroot` the `t` of `root` is part of an owner's name.  A substring
+# test over the bundle cannot tell those from `cp -at DIR`, and it fails OPEN
+# exactly the way the shared lowercased set above did -- it matches a token
+# instead of reading a fact about the command.  Measured, not reasoned: `cp -St
+# /dev/null P`, `cp -S.tmp /dev/null P`, `mv -St src P`, `install -oroot
+# /dev/null P` and `install -groot /dev/null P` each emptied a real canary in a
+# real /bin/bash (dev-1--170 evidence, 03-ground-truth-rev2.txt).
+#
+# `-Z` is NOT here: in GNU cp, mv and install the short spelling takes no
+# argument (only the long `--context[=CTX]` does).
+_WRITER_VALUE_LETTERS = {
+    "cp":      "tS",       # -t DIR, -S SUFFIX
+    "mv":      "tS",
+    "install": "tSmog",    # -t DIR, -S SUFFIX, -m MODE, -o OWNER, -g GROUP
+    "tee":     "",         # --output-error is long-only; no short value option
+    "sort":    "",
+    # Same decision as the table above, for the same reason and recorded here
+    # rather than left to `.get(cmd0, "")`: the default is correct and silent,
+    # and silence is what let `git` sit in one of these tables and not the
+    # other.  git's writer arm reads `--output=P` / `-o P` through
+    # `_git_output_target`, not through a short-bundle scan.
+    "git":     "",
+}
+
+
+def _short_bundle_flag_set(arg: str, letters: str, value_letters: str) -> bool:
+    """Is any of `letters` set as a FLAG -- not as part of a VALUE -- in `arg`?
+
+    Reads the bundle the way getopt does: left to right, stopping at the first
+    letter that takes an argument, because everything after that letter belongs
+    to it.  `-at` -> `a`, then `t` is a flag.  `-St` -> `S` takes an argument,
+    so the `t` is its value and nothing is set.
+    """
+    if not arg.startswith("-") or arg.startswith("--") or arg == "-":
+        return False
+    for ch in arg[1:]:
+        if ch in letters:
+            return True
+        if ch in value_letters:
+            return False    # the rest of this token is that option's value
+    return False
+
+
+def _writer_dest_is_a_directory(cmd0: str, args: list) -> bool:
+    """Does this invocation say, in its own flags, that DEST is a directory?"""
+    exact, letters = _WRITER_DIR_DEST_FLAGS.get(cmd0, (frozenset(), ""))
+    if not exact and not letters:
+        return False
+    values = _WRITER_VALUE_LETTERS.get(cmd0, "")
+    for a in args:
+        if a in exact or a.split("=", 1)[0] in exact:
+            return True
+        # `cp -at DIR src` is the bundled spelling of `cp -a -t DIR src`.
+        # Case-sensitive by construction, so `-aT` -- which destroys -- does
+        # NOT match and keeps its pricing.
+        if _short_bundle_flag_set(a, letters, values):
+            return True
+    return False
 
 
 def _short_bundle_has(arg: str, letter: str) -> bool:
@@ -1584,8 +1811,7 @@ def _writer_overwrite_targets(cmd0: str, args: list, low: list):
     """
     if cmd0 not in _WRITER_COMMANDS:
         return None
-    if any(a in _WRITER_DIR_DEST_FLAGS or a.split("=", 1)[0] in _WRITER_DIR_DEST_FLAGS
-           for a in low):
+    if _writer_dest_is_a_directory(cmd0, args):
         return None
 
     targets: list = []
@@ -1610,8 +1836,22 @@ def _writer_overwrite_targets(cmd0: str, args: list, low: list):
         # invocation, so there is nothing to price.
         positional = _positional_args(
             args, value_flags=("-S", "--suffix", "--backup", "-Z", "--context",
-                               "-m", "--mode", "-o", "--owner", "-g", "--group"))
+                               "-m", "--mode", "-o", "--owner", "-g", "--group"),
+            value_letters=_WRITER_VALUE_LETTERS.get(cmd0, ""))
         if len(positional) < 2:
+            return None
+        # THREE OR MORE POSITIONALS SAY "DEST IS A DIRECTORY" WITHOUT A FLAG,
+        # and the answer is the same as for `-t DIR`: bail rather than name the
+        # wrong thing.  Both sub-cases were EXECUTED (RFX-345):
+        #   `cp a.sql b.sql DIR/`  -> exit 0, DIR and its contents intact
+        #   `cp a.sql b.sql FILE`  -> exit 1, "target 'FILE' is not a
+        #                             directory", FILE intact
+        # so there is no spelling of this shape that destroys the last
+        # positional.  Taking it as the destroyed file reported a destruction
+        # of `/var/lib/pgsql/data/` -- a resource that measurably survived.
+        # Fail-CLOSED, so not exposure; but a record naming a resource nothing
+        # touched is not a record an auditor can check.
+        if len(positional) > 2:
             return None
         targets = [positional[-1]]
 
@@ -3371,8 +3611,19 @@ def _peel_wrappers(tokens: list):
     return tokens[i:], unbounded, truncated
 
 
-def _positional_args(args: list, value_flags: tuple = ()) -> list:
-    """Positional arguments only: drops flags and the values they consume."""
+def _positional_args(args: list, value_flags: tuple = (),
+                     value_letters: str = "") -> list:
+    """Positional arguments only: drops flags and the values they consume.
+
+    `value_flags` are whole tokens (`-m`, `--mode`).  `value_letters` is for
+    BUNDLES: in `install -Dm 755`, `-m` never appears as its own token, so
+    without it the `755` is counted as a positional.  That miscount is not
+    cosmetic -- it is what puts `install -Dm 755 /dev/null P` over the
+    three-positional bail below and takes a destruction out of the verdict.
+    Only the LAST letter of a bundle can consume the next word; if the value is
+    attached (`-Dm755`) there is nothing to skip.  Callers that pass no
+    `value_letters` are unaffected.
+    """
     out: list = []
     skip = False
     for a in args:
@@ -3382,6 +3633,11 @@ def _positional_args(args: list, value_flags: tuple = ()) -> list:
         if a.startswith("-"):
             if a in value_flags:
                 skip = True
+            elif value_letters and not a.startswith("--") and len(a) > 1:
+                for i, ch in enumerate(a[1:]):
+                    if ch in value_letters:
+                        skip = (i == len(a) - 2)   # nothing attached after it
+                        break
             continue
         out.append(a)
     return out

@@ -45,7 +45,7 @@
         "count": "={{$json.count}}",
         "targetSystem": "={{$json.table}}",
         "sessionId": "={{$json.sessionId}}",
-        "agentId": "agent:n8n-demo2-fragmentation",
+        "agentId": "=agent:n8n-demo2-fragmentation/{{$execution.id}}",
         "additionalFields": {}
       },
       "id": "d2000002-0004-4002-8002-000000000004",

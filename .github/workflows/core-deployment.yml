@@ -1,0 +1,117 @@
+name: core-deployment
+
+# WHAT THIS IS (RFX-309 requirement 3, RFX-90, RFX-88). The deploy-drift job,
+# for the production CORE — plus the arm RFX-309 asked for and nobody built:
+# can that deployment still accept a human approval at all?
+#
+# WHY IT IS HERE AND NOT A LINE IN reeflex-app's deploy-drift.yml. That
+# workflow watches app.reeflex.io and says in its own closing comment that
+# api-dev is deliberately not wired in, for a reason that was true until this
+# change: core's /healthz answered with no revision, so the checker could only
+# ever report the same unfixable "will not say what it is" FAIL. There is a
+# SECOND reason, measured 2026-09-20 (dev-1--185) and not previously written
+# down: that checker's git arm asks ITS OWN clone `git cat-file -e <revision>`,
+# and a core commit is not an object in the reeflex-app repository. The
+# deployed core revision e175e4e resolves here and does not resolve there. So
+# the check for core had to live in the repo that has core's history.
+#
+# WHY TWO ARMS. A revision-only check would have been green through the entire
+# defect it is named after. On the day this was written the production core was
+# at origin/main exactly — ZERO drift — while `holds.resolvable` was false, it
+# had resolved no hold since 2026-08-22, and 551 of 593 holds in its ledger had
+# expired unanswered. RFX-309's own sentence: the drift check "compares code
+# revision, not capability".
+#
+# THIS JOB IS RED THE DAY IT LANDS, and that is the correct result, not a
+# misconfiguration. It has a switch, which is the difference between a red
+# worth keeping and a red everybody learns to ignore:
+#
+#   capability arm  RED until api-dev binds an approver credential
+#                   (REEFLEX_RESOLVER_TOKENS — the map is re-read per request,
+#                   so no restart). That is RFX-309 requirement 1, a
+#                   production configuration change, owner/console-gated, and
+#                   deliberately NOT taken by the fleet round that added this.
+#                   The alternative RFX-309 offers is equally acceptable and
+#                   also flips this green: stop requiring verified approvers
+#                   there, or state in the docs that the endpoint holds and
+#                   never approves and drop this arm with that sentence quoted.
+#
+#   drift arm       RED until the first core image built by release.yml AFTER
+#                   the GIT_SHA build-arg lands is deployed. Every image built
+#                   before it carries no REEFLEX_BUILD_REVISION and correctly
+#                   reports as unidentifiable.
+#
+# It needs no VM access and no secret: one unauthenticated GET plus this
+# clone's git history. It does NOT raise a hold and does NOT attempt a resolve
+# — an approval probe against the live core would write forged-approver
+# attempts into the same ledger real Attest reports are generated from.
+
+on:
+  schedule:
+    # 06:55 UTC daily. Fifteen minutes after reeflex-app's deploy-drift job so
+    # the two reds arrive as two readable results rather than one pile, and
+    # off the top of the hour where GitHub's scheduler is most congested.
+    - cron: "55 6 * * *"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Base URL to check (default: the production core)"
+        required: false
+        default: "https://api-dev.reeflex.io"
+      max_age_days:
+        description: "Fail if the oldest undeployed commit is older than this"
+        required: false
+        default: "2"
+  # DELIBERATELY NO `pull_request` TRIGGER, for the same reason the app-side
+  # job gives: the tool's own behaviour is tested by
+  # scripts/tests/test_check_core_deployment.py, which gate.yml already runs on
+  # every PR under `unittest discover -s scripts/tests`, and that suite can
+  # fail on a broken tool — the property that matters. Running the LIVE check
+  # on a PR would paint every PR red for a deploy state the PR did not cause.
+
+concurrency:
+  # NOT `true`. This workflow's only automatic trigger is `schedule`, and a
+  # cancelled scheduled run is a verdict nothing reissues — tomorrow's 06:55
+  # is a different commit and a different deploy state, so the answer for
+  # today is simply lost. That is RFX-134, and scripts/check_workflow_concurrency.py
+  # (#200) fails this file on `true` for exactly that reason. The group is kept
+  # so a manual workflow_dispatch queues behind the daily run instead of
+  # racing it against the same target.
+  group: core-deployment-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  api-dev:
+    name: is the deployed core the build we test, and can it still approve?
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # REQUIRED. The drift arm is `git rev-list <deployed>..origin/main`;
+          # a shallow clone cannot answer it, and the script reports that as
+          # ERROR (exit 2) rather than pretending to have looked.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Selftest — prove the capability arm can go red before trusting it
+        run: python scripts/check_core_deployment.py --selftest
+
+      - name: Check the deployment
+        run: |
+          python scripts/check_core_deployment.py \
+            --target "${{ github.event.inputs.target || 'https://api-dev.reeflex.io' }}" \
+            --ref origin/main \
+            --max-age-days "${{ github.event.inputs.max_age_days || '2' }}"
+
+  # app.reeflex.io is NOT wired here. It has its own checker, in its own repo,
+  # against its own clone (reeflex-app scripts/check_deploy_drift.py, RFX-90) —
+  # and the same argument that sent core's check here sends the app's check
+  # there. Two checks in two repos is the consequence of two histories, not a
+  # duplication to be tidied away.

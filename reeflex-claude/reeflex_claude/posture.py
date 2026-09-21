@@ -66,13 +66,36 @@ earns its place on exactly one case: Claude Code merges the `env` block of
 whichever settings source was loaded, INCLUDING one passed as `--settings
 <path>`, and that path is not discoverable from the hook (measured above).
 
+AND THE STAMP IS READ IN ONE DIRECTION ONLY (RFX-325 residual, qa--285).  A
+stamp NARROWER than what we ship downgrades the assessment to NARROWED; a
+stamp that covers everything does NOT upgrade it to FULL.  The asymmetry is
+the same argument as the paragraph above, applied to the case that paragraph
+skipped.  "No file names our hook" is not only the `--settings <path>` launch:
+it is also, and much more commonly, what an installation with no gate wired
+looks like.  Claude Code exports a settings file's `env` block to the
+processes it spawns, so the stamp OUTLIVES the hook entry that `setup` wrote
+beside it -- delete the entry, keep the block, and the wide stamp is still
+there certifying a gate that is gone.  Measured on real `claude` 2.1.268: a
+project settings file with an `env` stamp and NO `hooks` key at all produced
+`COVERAGE: every tool reaches the gate` and `status --strict` exit 0, on a box
+where no settings file wired this hook -- which is RFX-325's own U1 == F shape
+inside the instrument RFX-325's fix built to detect it.  So a wide stamp is
+read as "not contradicted", never as "verified".
+
 WHAT THIS INSTRUMENT CANNOT SEE, stated rather than discovered later:
 
-* A settings file supplied as `claude --settings /some/where.json` by an
-  installation older than 0.2.1 (no stamp).  The hook cannot find the path and
-  the file carries no stamp, so coverage is UNVERIFIED, not "fine" -- it is
-  recorded under its own rule id (`reeflex.adapter/matcher_unverified`) so it
-  is never read as a measured narrowing and never read as silence.
+* WHICH tools a `claude --settings /some/where.json` launch routes here.  The
+  hook cannot find the path, and the stamp that travels with it cannot be
+  confirmed against anything, so coverage is UNVERIFIED -- not "fine" and not
+  "narrowed".  It is recorded under its own rule id
+  (`reeflex.adapter/matcher_unverified`) so it is never read as a measured
+  narrowing and never read as silence.  The cost of the paragraph above is
+  paid here: a correctly wired `--settings` launch that used to assess FULL
+  and stay silent now assesses UNVERIFIED and leaves one record per session.
+  That is the trade taken deliberately -- an UNVERIFIED record on a healthy
+  installation is a nuisance an operator can close by wiring the hook at a
+  fixed location, and a FULL verdict on an ungated one is the failure this
+  whole module exists to stop.
 * An enterprise-managed settings file at a non-default location.
 * Whether Claude Code would in fact have routed a given tool name here: we
   compute coverage with `re.fullmatch`, which is what 2.1.268 was measured to
@@ -335,6 +358,28 @@ def assess() -> Dict[str, Any]:
             return result
 
         if any(w["covers_all"] for w in result["wired"]):
+            if result["evidence"] == "env-stamp":
+                # RFX-325 residual, measured by qa--285 on real claude 2.1.268.
+                # We are here only because NO file at a fixed location names
+                # our hook -- which is also what "the gate is not wired" looks
+                # like.  A stamp records what `setup` WROTE once; what governs
+                # is what is wired NOW.  That is the same reasoning the branch
+                # above uses to let a narrow FILE beat a wide stamp, and it
+                # does not stop applying when there is no file to compare
+                # against -- it gets stronger, because then nothing confirms
+                # the stamp at all.  Claude Code exports a loaded settings
+                # file's `env` block to every process it spawns, so the stamp
+                # outlives the hook entry in that same file: delete the entry,
+                # keep the block, and a wide stamp certified a gate that was
+                # gone.  A wide stamp can only FAIL TO CONTRADICT coverage; it
+                # cannot establish it.  UNVERIFIED, not FULL.
+                #
+                # Asymmetric on purpose: a NARROW stamp still falls through to
+                # STATE_NARROWED below, because that is evidence AGAINST
+                # coverage, and the direction that loses a finding is the only
+                # one this module has to refuse.
+                result["state"] = STATE_UNVERIFIED
+                return result
             # Claude Code unions the blocks it loads, so one match-all block is
             # full coverage however narrow its neighbours are.
             result["state"] = STATE_FULL
@@ -501,15 +546,36 @@ def _build_record(session_id: str, assessment: Dict[str, Any], mode: str) -> Dic
             rule=rule,
         )
     else:
+        # Two different ways to be UNVERIFIED, and the record has to say which:
+        # "nothing to read" and "a stamp that cannot be confirmed" send an
+        # operator to different places.
+        if assessment.get("evidence") == "env-stamp":
+            why = (
+                "No settings file at a fixed location names this hook. A "
+                "{stamp} stamp is present and says {stamped!r}, but a stamp records "
+                "what 'setup' once wrote, not what is wired now -- with no file to "
+                "confirm it against, a wide stamp cannot establish coverage"
+            ).format(
+                stamp=MATCHER_STAMP_ENV,
+                stamped=next(
+                    (w["matcher"] for w in assessment["wired"]
+                     if w["source"] == "env:" + MATCHER_STAMP_ENV),
+                    None,
+                ),
+            )
+        else:
+            why = (
+                "No settings file at a fixed location names this hook, and no "
+                "{stamp} stamp was present"
+            ).format(stamp=MATCHER_STAMP_ENV)
         reason = (
-            "Reeflex: this session's PreToolUse coverage could not be verified. No "
-            "settings file at a fixed location names this hook, and no "
-            "{stamp} stamp was present, so the adapter cannot say which tools reach "
+            "Reeflex: this session's PreToolUse coverage could not be verified. {why}, "
+            "so the adapter cannot say which tools reach "
             "it -- most commonly a 'claude --settings <path>' launch, whose path the "
             "hook is not told. Coverage may be complete or may not be; this record "
             "says only that it is unknown. Run 'reeflex-claude status' where the agent "
             "runs. [rule={rule}]"
-        ).format(stamp=MATCHER_STAMP_ENV, rule=rule)
+        ).format(why=why, rule=rule)
 
     return {
         "ts": ts,

@@ -53,7 +53,20 @@ on:
 
 concurrency:
   group: gate-${{ github.ref }}
-  cancel-in-progress: true
+  # RFX-134: cancel a pull request's superseded run, NEVER a push to main.
+  # `github.ref` is `refs/heads/main` for every merge, so an unconditional
+  # `true` means the second merge of the day cancels the first merge commit's
+  # run -- reported by GitHub as `cancelled`, not `failure`, so main does not
+  # go red and nobody is emailed. Measured 2026-09-20 over each workflow's
+  # whole main-push history: ci.yml 13 cancelled of 195, gate.yml 8 of 113,
+  # reeflex-app's ci.yml 16 of 113. All 37 of those commits are on main today
+  # with no successful run of that workflow at that sha. c76ad2d8 (2026-09-17)
+  # is the one to remember: the gate was RE-RUN and `run_attempt: 2` was
+  # cancelled too. Proved on a real runner, two pushes seven seconds apart --
+  # `true` cancels run 1, this expression lets both finish (run 2 queues).
+  # `docs.yml` already carried this line; guarded by
+  # scripts/check_workflow_concurrency.py.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -85,6 +98,19 @@ jobs:
         run: python -m unittest discover -s scripts/tests -t scripts -v
       - name: Check the tree
         run: python scripts/check_dependency_floors.py .
+
+      # RFX-134, and it lives in THIS job for the same reason dep-floors does:
+      # it is a one-line diff to fix and the reviewer should not wait ten
+      # minutes for npm ci and four PHP harnesses to be told about it. The
+      # checker is dependency-free by design (this job does no `pip install`),
+      # so it costs about a second. The instrument before the verdict, as
+      # everywhere else here: `--selftest` proves the reader on its fixtures —
+      # including two arms that must come back as ERROR rather than PASS — and
+      # a failing selftest reports no verdict at all.
+      - name: Selftest — prove the workflow-concurrency reader
+        run: python scripts/check_workflow_concurrency.py --selftest
+      - name: No workflow may cancel a verdict nothing will reissue (RFX-134)
+        run: python scripts/check_workflow_concurrency.py .
 
   preflight-gate:
     name: preflight gate (env + full suite + built entry points)
@@ -123,6 +149,17 @@ jobs:
         # life). Its detectors are proved on synthetic fixtures before the
         # census verdict is trusted.
         run: python scripts/check_test_census.py --selftest
+
+      - name: Suite-coverage selftest — prove every coverage detector (RFX-355)
+        # The layer under the census: it asks whether an enumerated test file
+        # yields tests, and `drift` asks whether a test-LOOKING file sits in an
+        # enumerated root. Neither could see a harness dropped into
+        # reeflex-wordpress/tests, which is inside a root and invoked by
+        # nothing, because that root is run from two hardcoded literals rather
+        # than by directory discovery. Detectors first, verdict after — a
+        # coverage checker that cannot detect an uncovered file certifies
+        # anything.
+        run: python scripts/check_suite_coverage.py --selftest
 
       - name: Start a local reeflex-core for the WordPress harnesses
         working-directory: reeflex-core

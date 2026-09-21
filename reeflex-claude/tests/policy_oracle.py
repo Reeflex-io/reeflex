@@ -42,16 +42,31 @@ WHAT THIS ORACLE DOES NOT MODEL -- read before trusting an offline green
 =======================================================================
   R0  `unclassified_action` -- fires on `provenance.undeclared`, which CORE
       computes from what the envelope omitted (it is not caller-supplied). The
-      adapter declares every axis R0 reads, so no corpus case reaches it;
-      measured 0 of 84 on v0.2.1.
+      adapter declares every axis R0 reads, so no corpus case reaches it. That
+      was measured 0 of 84 on v0.2.1 and has NOT been re-measured since; the
+      count is left here as the date-stamped observation it is rather than
+      refreshed into a number that will rot again.
   R5  cumulative budgets -- needs session history. The probe gives every case
       its own session id, so every corpus call is a first call and no budget
       can accumulate. R5 can only ever make a verdict stricter, never looser.
   R7  `authority_change_prod` -- authority.rego holds three operator-editable
       signal lists and a tokenizer. Transcribing those would add more drift
-      surface than it removes, and no corpus case reaches it (measured 0 of
-      84). A case that starts reaching it shows up as a live-vs-oracle
-      divergence, which is the whole point of the live arm.
+      surface than it removes, and no corpus case reaches it.
+
+      THAT LAST CLAUSE IS NOW ASSERTED, NOT COUNTED (RFX-327). It used to read
+      "measured 0 of 84" -- a count taken once, against a corpus that has since
+      passed 150 cases with nothing re-taking it. R7 fires on
+      `action.ability`, which envelope.py composes as `claude-code/<tool>`, so
+      reachability is a property of the TOOL NAME and changes the moment a row
+      is added for a tool whose name carries a signal token
+      (`mcp__admin__grant_role` -> {grant, role} is a match; every built-in
+      tool in the corpus today is not).
+      `TestTheUnmodelledRulesAreStillUnreachable` in test_conformance_bash.py
+      re-derives it from the shipped rego on every run, so the day a case does
+      reach R7 the suite says so instead of the docstring being quietly wrong.
+      A case that reaches it also shows up as a live-vs-oracle divergence,
+      which is the whole point of the live arm -- but only if the live arm ran,
+      and it needs a real core.
   THE REF IS COMPARED RAW. Core canonicalises `target.ref` first (envelope.py
       F9: `..` segments, doubled separators, zero-width characters), and this
       module does not. A ref that only becomes protected after canonicalisation
@@ -127,6 +142,71 @@ def protected_assets_from_rego(path=None):
         "ephemeral_assets": _array("ephemeral_assets"),
         "default_protected": (m.group(1) == "true") if m else None,
     }
+
+
+# --------------------------------------------------------------------------
+# R7 REACHABILITY (RFX-327).  NOT a transcription of R7 -- read the difference.
+#
+# The docstring above declines to model R7 and justifies it with "no corpus case
+# reaches it".  That justification was a COUNT, taken once at 84 cases; the
+# corpus is past 150 and nothing re-took it.  A residual whose evidence is a
+# number someone typed is the shape RFX-303 and RFX-327 are both about, so the
+# claim is now asserted on every run instead (test_conformance_bash.py,
+# TestTheUnmodelledRulesAreStillUnreachable).
+#
+# What is parsed here decides NO verdict.  It answers one question -- could any
+# corpus row's `action.ability` match an R7 signal -- so the oracle's silence
+# about R7 stays a measured fact rather than an inherited sentence.  The signal
+# lists are PARSED from the shipped file, exactly as protected_assets_from_rego
+# parses protected.rego; only the tokenizer is mirrored.
+#
+# THE RESIDUAL IN THIS GUARD, SAID OUT LOUD: `ability_tokens` mirrors
+# authority.rego's two regex lines.  If the rego tokenizer widens and this one
+# does not, this guard goes quietly green on a row it should have caught -- i.e.
+# it fails back to exactly where main is today, an unmeasured claim, and never
+# to a false red.  That is why it is worth having and why it is not a proof.
+# --------------------------------------------------------------------------
+
+_AUTHORITY_REGO = pathlib.Path(__file__).resolve().parents[2] / "reeflex-core" / "policy" / "authority.rego"
+
+_SET_RE = r"^%s\s*:=\s*\{(.*?)\}"
+
+
+def authority_rego_path() -> pathlib.Path:
+    """authority.rego in the monorepo; may not exist (installed wheel)."""
+    return _AUTHORITY_REGO
+
+
+def authority_signals_from_rego(path=None):
+    """The union of authority.rego's three operator-editable signal lists.
+
+    Returns None when the file is absent, so an installed wheel skips rather
+    than passing over an empty set.
+    """
+    path = pathlib.Path(path) if path else _AUTHORITY_REGO
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8")
+    signals = set()
+    found = []
+    for name in ("authority_signals", "credential_signals", "executable_signals"):
+        m = re.search(_SET_RE % name, text, re.M | re.S)
+        if m:
+            found.append(name)
+            signals |= set(re.findall(r'"([^"]*)"', m.group(1)))
+    # A rename in the rego must not read as "no signals, nothing reachable".
+    if len(found) != 3:
+        return {"signals": signals, "lists_found": found, "complete": False}
+    return {"signals": signals, "lists_found": found, "complete": True}
+
+
+def ability_tokens(raw):
+    """authority.rego's `ability_tokens`: camelCase humps first, then split on
+    every run of non-alphanumerics, lowercased, empties dropped."""
+    if not isinstance(raw, str):
+        return set()
+    humped = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", raw)
+    return {t for t in re.split(r"[^a-zA-Z0-9]+", humped.lower()) if t}
 
 
 def _under(key: str, prefix: str) -> bool:
