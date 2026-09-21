@@ -298,6 +298,31 @@ PUBLISHED_LAG: dict = {
     "everyday-writer-cp-to-directory-attached-weighty-source": _LAG_345,
     "everyday-writer-install-missing-dest-operand":            _LAG_345,
     "everyday-writer-cp-many-into-directory":                  _LAG_345,
+    # ------------------------------------------------------------------
+    # RFX-384 -- the UNBACKED IN-PLACE EDIT, five more rows on the SAME
+    # wheel (`0.2.1`).  These sit beside the eleven above, not instead of
+    # them.
+    #
+    # CORRECTED ON REBASE, because the branch's own wording stopped being
+    # true when it landed second.  #199 was written while this table was
+    # EMPTY and its comment argued from that emptiness -- "0 fail-open"
+    # described the 191 rows the corpus then held, not the artefact.  RFX-345
+    # (#178) landed first and put eleven entries here, so the emptiness
+    # premise is gone; what survives it is the measurement, which is
+    # unchanged: RFX-384 adds nine Bash rows the corpus never had and the
+    # served wheel gets FIVE of them wrong.  The other four
+    # (`everyday-inplace-*` / `fp-perl-*`) already decide correctly on 0.2.1,
+    # so declaring them would be a STALE entry and `audit` would fail it --
+    # the mechanism working.
+    #
+    # The ticket is the REPUBLISH (RFX-339), not the classifier defect
+    # (RFX-384) which this change closes in the tree -- same distinction the
+    # block above draws, and for the same reason.
+    "destroy-inplace-sed-substitute-all": {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "destroy-inplace-sed-delete-all":     {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "destroy-inplace-sed-longform":       {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "destroy-inplace-perl-pi":            {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    "destroy-inplace-perl-bundled":       {"ticket": "RFX-339", "index_serves": "0.2.1"},
     "gap-command-substitution":
         {"ticket": "RFX-339", "index_serves": "0.2.1"},
     "gap-command-substitution-ctrl-rm-rf-root":
@@ -400,6 +425,22 @@ SEAT_PUBLISHED_LAG: dict = {
     "everyday-writer-cp-to-directory-attached-weighty-source": _SEAT_LAG_345,
     "everyday-writer-install-missing-dest-operand":            _SEAT_LAG_345,
     "everyday-writer-cp-many-into-directory":                  _SEAT_LAG_345,
+    # ------------------------------------------------------------------
+    # RFX-384, reached one distribution further out.  Same correction as the
+    # arm above: the branch argued from an empty table and RFX-345 filled it
+    # first; these five are additional to the eleven.
+    #
+    # MEASURED through the seat's own normaliser (`--seat` on python3.12,
+    # reeflex-litellm==0.2.0, whose floor resolves reeflex-claude==0.2.1) and
+    # NOT mirrored from the table above -- this component fails a declaration
+    # as STALE if the seat happens to decide it correctly.  `index_serves`
+    # names the SEAT's version, which is what this arm resolves against.
+    # Closed by the same republish: RFX-339.
+    "destroy-inplace-sed-substitute-all": {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "destroy-inplace-sed-delete-all":     {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "destroy-inplace-sed-longform":       {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "destroy-inplace-perl-pi":            {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    "destroy-inplace-perl-bundled":       {"ticket": "RFX-339", "index_serves": "0.2.0"},
     "gap-command-substitution":
         {"ticket": "RFX-339", "index_serves": "0.2.0"},
     "gap-command-substitution-ctrl-rm-rf-root":

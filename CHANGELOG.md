@@ -97,6 +97,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
   package under the same number is an RFX-300 content collision. **This is a
   bump, not a publication** — until the owner cuts the next tag the index still
   serves 0.2.1 and installed seats do not have this fix.
+- **A production database emptied by `sed -i` was priced a benign execute, because the exclusion that let it through was measured on a different command.** (RFX-384)
+
+  `_writer_overwrite_targets` excludes `sed` with a reason stated as a measurement: `sed -i 1d P` leaves 4 of 5 canary lines alive, so it is a PARTIAL edit and that function is contracted to whole-file destruction. The measurement is correct, and it describes `sed -i 1d`. The exclusion it justified was applied to the **command word** `sed`, which is wider than the thing measured.
+
+  Measured on `origin/main` e175e4e, five canary lines per shape, ground truth read off the filesystem after a real `/bin/bash` ran the line — never `size == 0`, because a truncating editor writes after it truncates:
+
+  | shape | canaries surviving | main | this change |
+  |---|---|---|---|
+  | `sed -i 's/.*//' P` | 0 of 5 | `execute`/`recoverable`/`scoped` | `delete`/`irreversible`/`broad` |
+  | `sed -i 'd' P` | 0 of 5 | `execute`/`recoverable`/`scoped` | `delete`/`irreversible`/`broad` |
+  | `sed -i '1,$d' P` | 0 of 5 | `execute`/`recoverable`/`scoped` | `delete`/`irreversible`/`broad` |
+  | `sed --in-place 's/.*//' P` | 0 of 5 | `execute`/`recoverable`/`scoped` | `delete`/`irreversible`/`broad` |
+  | `perl -pi -e 's/.*//' P` | 0 of 5 | `execute`/`recoverable`/`scoped` | `delete`/`irreversible`/`broad` |
+  | `perl -i -pe 's/.*//' P` | 0 of 5 | `execute`/`recoverable`/`scoped` | `delete`/`irreversible`/`broad` |
+  | `perl -ni -e 'print if 0' P` | 0 of 5 | `execute`/`recoverable`/`scoped` | `delete`/`irreversible`/`broad` |
+  | `truncate -s 0 P` — CONTROL | 0 of 5 | `delete`/`irreversible`/`broad` | unchanged |
+  | `sed -i.bak 's/.*//' P` — CONTROL | 0 at P, **5 in P.bak** | `execute`/`recoverable` | unchanged |
+
+  `perl` is not named in that docstring at all, and `_INLINE_DESTRUCTIVE_RE` models **unlinking** (`os.remove`, `shutil.rmtree`, `.unlink(`) rather than content truncation, so no arm fired for either. `target_ref` was `null` on every row, so R6 had no path to match and the audit line could not name the file that was emptied.
+
+  **The axis priced is reversibility, not whole-file loss**, so RFX-343's contract is untouched — `_writer_overwrite_targets` still claims no `sed` target, and that is now asserted directly rather than implied. Whole-versus-partial changes how much was lost; the backup suffix changes whether it can be got back, and it is decidable from argv. Behind the same `_redirect_target_is_weighty` gate as the writer and redirect families, so `sed -i 's/DEBUG/INFO/' src/app.py` stays benign and routine edits are not charged to R5's cumulative delete budget.
+
+  Collateral: **0 of 1206** corpus rows moved, AST-harvested from main only so this change's own test file cannot seed the corpus. The comparator detected 5 of 10 rows on a control set through the same path, so that zero is a measurement rather than a vacuous run. Attribution is one line: neutralising the single call site while leaving the helper defined returns all 10 probe rows to main's values and reddens 21 guards.
+
+  **Not closed here, and filed rather than left silent:** RFX-385 — `python3 -c "open(P,'w')"`, `awk 'BEGIN{print > P}'` and `ex -sc '%d|x'` each destroy all five canaries and are still priced `moderate`. They are recorded as `residual` corpus rows so they are declared and unscored rather than invisible. `gzip -f` is **not** a defect: its bytes survive in `P.gz` and `gunzip` returns them, so the existing exclusion is correct — a sweep grepping for a plaintext canary flags it only because it cannot see inside a compressed file. `ruby -i` is **unmeasured, not cleared**: ruby is not installed on the devbox and those rows exited 127.
 
 ## [0.2.2] - 2026-09-20 — reeflex-core 0.2.2 + reeflex-claude 0.2.1 + reeflex-litellm 0.2.0 + reeflex-mcp 0.1.4
 

@@ -32,7 +32,7 @@ The protected-looking paths here are CLASSIFIER INPUT ONLY.  Nothing under
 
 import unittest
 
-from reeflex_claude.classify import classify
+from reeflex_claude.classify import classify, _writer_overwrite_targets
 
 
 def _c(command):
@@ -206,12 +206,27 @@ class TestTheExclusionsAreMeasuredNotForgotten(unittest.TestCase):
     """
 
     def test_sed_in_place_is_a_partial_edit_not_a_whole_file_destruction(self):
-        """`sed -i 1d P` left 4 of 5 canary lines readable.
+        """`sed -i 1d P` left 4 of 5 canary lines readable, so it is not a
+        WHOLE-FILE destruction and `_writer_overwrite_targets` must not claim
+        it as one.  That contract is unchanged and is asserted directly.
 
-        `_overwrite_targets` is contracted to WHOLE-FILE destruction; pricing
-        a partial edit through it would make that contract false.
+        CHANGED BY RFX-384, deliberately, because this class exists so that a
+        later round has to change a test that says why.  What RFX-343 measured
+        was `sed -i 1d`; the exclusion it justified was applied to the command
+        word `sed`, and four other spellings of `sed -i` lose ALL FIVE canary
+        lines.  `_inplace_edit_targets` prices them on REVERSIBILITY -- an
+        unbacked in-place edit cannot be undone at that path -- rather than on
+        whole-file loss, so this function's contract survives intact while the
+        line stops being priced `recoverable`.
+
+        The two assertions below are the whole of that distinction.
         """
-        self.assertNotEqual("delete", _c("sed -i 1d %s" % PROD)["verb"])
+        # the RFX-343 contract, unchanged: this function claims no sed target
+        self.assertIsNone(
+            _writer_overwrite_targets("sed", ["-i", "1d", PROD],
+                                      ["-i", "1d", PROD]))
+        # and RFX-384's axis: the line is no longer priced recoverable
+        self.assertEqual("irreversible", _c("sed -i 1d %s" % PROD)["reversibility"])
 
     def test_gzip_is_not_priced_irreversible(self):
         """`gzip P` removes P, but `gunzip` returns its bytes.
