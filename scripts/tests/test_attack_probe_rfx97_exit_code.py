@@ -144,11 +144,24 @@ class AHarnessFailureIsNotAVerdict(unittest.TestCase):
         self.assertIn("certified nothing", err)
 
     def test_a_keyboard_interrupt_certifies_nothing(self):
-        """An interrupted gate run is not a gate run; BaseException, not Exception."""
+        """An interrupted gate run is not a gate run; BaseException, not Exception.
+
+        The interrupt is caught HERE rather than left to propagate: unittest
+        treats an escaping KeyboardInterrupt as a request to abort the whole
+        run, so a regression in `cli()` would stop the runner mid-suite and
+        suppress the other failures in this file instead of reporting them.
+        Measured on the sabotage arms in qa--306 — narrowing `BaseException` to
+        `Exception` aborted the run with no summary line at all.
+        """
         def interrupted():
             raise KeyboardInterrupt()
 
-        code, _ = self._cli_with_main(interrupted)
+        try:
+            code, _ = self._cli_with_main(interrupted)
+        except KeyboardInterrupt:
+            self.fail("cli() let KeyboardInterrupt escape: an interrupted gate "
+                      "run certified nothing and must exit EXIT_HARNESS_ERROR "
+                      "rather than abort its caller")
         self.assertEqual(probe.EXIT_HARNESS_ERROR, code)
 
 
