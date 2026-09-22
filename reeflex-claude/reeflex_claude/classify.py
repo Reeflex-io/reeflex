@@ -316,23 +316,45 @@ The demo Rego pack treats this field as informational only (see policy/), so
 adding a slug changes no decision.
 
 ==============================================================================
-KNOWN RESIDUAL AFTER RFX-144 (tracked as RFX-153)
+WHAT RFX-153 STILL TRACKS, AND WHAT IT NO LONGER DOES
 ==============================================================================
-A destruction that names EXACTLY ONE target is priced `single`, and R2 requires
-`broad`, so it allows in production:
+The four commands RFX-153's summary names are NOT priced `single` any more.
+`_radius_for_paths` raises a path that names a CONTAINER of records to `broad`
+(the RFX-144 KIND raise, landed 2026-09-07 in 568ce2c), and the radius each one
+carries today is:
 
-    rm /srv/prod/db.sqlite             > /srv/prod/db.sqlite
-    truncate -s 0 /srv/prod/db.sqlite  dd if=/dev/zero of=/srv/prod/db.sqlite
+    rm /srv/prod/db.sqlite                      -> broad
+    > /srv/prod/db.sqlite                       -> broad
+    truncate -s 0 /srv/prod/db.sqlite           -> broad
+    dd if=/dev/zero of=/srv/prod/db.sqlite      -> broad
 
-That is ONE rule (`_radius_for_paths`), not four bugs, and the adapter cannot
-close it without lying: SPEC §4.2 as landed in RFX-131 says a name may claim
-KIND but not CARDINALITY, and a command naming one file has a cardinality of
-one.  The adapter also defaults `target.environment` to "production", so
-pricing a single named file `broad` here turns every `rm <file>` an agent
-issues -- `rm /tmp/scratch.txt` included -- into an approval prompt.  Whether
-the CANON should hold an irreversible destruction of a named production entity
-regardless of cardinality is a policy decision (the RFX-128 / RFX-132 family),
-so it is filed as RFX-153 rather than taken here.
+Measured through the real hook against a core at the deployed version (v0.2.2,
+dev-3--158): all four reach a human, and the rule that holds them is R2
+`reeflex.policy/irreversible_broad_prod` -- NOT R6, the rule landed for this
+ticket.  The cost this block used to predict did not arrive: `rm
+/tmp/scratch.txt` is still `single`/`moderate` and still allows, and no everyday
+row in the 252-case corpus is blocked.  The raise is a KIND claim, which SPEC
+§4.2 permits and which is raise-only -- see `_DATA_CONTAINER_PATH_RE`.
+
+WHAT REMAINS.  A destruction that names exactly one production entity whose ref
+is NOT a data-container path still reaches no rule over the axes: R2 needs
+`broad`, R3 needs `systemic`, and `single`/`scoped` reach neither.  Two routes
+cover it and neither is total:
+
+  * R6 `irreversible_protected_asset_prod` holds it when the ref is a path
+    under `protected_assets` (policy/protected.rego).  Emptying that list turns
+    6 of the corpus' 252 rows from `ask` back to `allow`, so the default floor
+    is load-bearing -- and it is a floor, not a claim of coverage.
+  * A ref that is not a filesystem path at all -- `git branch -D main`, whose
+    target.ref is `main` -- cannot match a path prefix, so under the shipped
+    posture (`default_protected := false`) R6 does not reach it.  Setting
+    `default_protected := true` does hold all three such rows, measured, at a
+    measured cost of 5 false positives across the corpus' 73 everyday rows.
+
+Those three rows are the ones still carrying `residual=RESIDUAL_TICKET` in
+conformance.py.  Whether the canon should hold an irreversible destruction of a
+named production entity regardless of cardinality remains a policy decision
+(the RFX-128 / RFX-132 family).
 
 ==============================================================================
 """
@@ -2585,14 +2607,19 @@ def _radius_for_paths(path_args: list, is_recursive: bool):
     single/scoped = moderate (don't fire R2 on a routine `rm /tmp/x`),
     broad/systemic = destructive_broad / destructive_systemic.
 
-    KNOWN RESIDUAL (RFX-153): a destruction that names exactly one production
-    file -- `rm /srv/prod/db.sqlite`, `> /srv/prod/db.sqlite`, `truncate -s 0
-    /srv/prod/db.sqlite` -- is priced `single` here and therefore cannot reach
-    R2.  That is one rule, not three bugs, and it is what SPEC §4.2 requires:
-    a command that names one file has a cardinality of one, and this adapter
-    may not claim otherwise.  Closing it here would also make every `rm <file>`
-    an approval prompt (the adapter defaults target.environment to production),
-    so it is a policy decision and not this function's to take.
+    RFX-153, AS THIS FUNCTION LEAVES IT.  A destruction naming exactly one
+    production file is priced `single` by the cardinality branch below -- and
+    then RAISED to `broad` by the `_DATA_CONTAINER_PATH_RE` branch at the
+    bottom of this same function when that one file is a container of records.
+    So `rm /srv/prod/db.sqlite`, `> /srv/prod/db.sqlite` and `truncate -s 0
+    /srv/prod/db.sqlite` leave here `broad` and DO reach R2.  The raise is a
+    KIND claim, which SPEC §4.2 permits; the cardinality is still one and this
+    function still does not claim otherwise.
+
+    What this function leaves open is the ref that is neither a data container
+    nor a wildcard -- `rm /srv/app/truncate.log` is `single` on the way out and
+    is held, if at all, by R6 reading `protected_assets`.  See the module
+    docstring for what RFX-153 still tracks.
     """
     count = max(len(path_args), 1)
     is_systemic = any(_is_systemic_path(p) for p in path_args) if path_args else False
