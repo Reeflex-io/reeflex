@@ -49,11 +49,20 @@ spellings — the wide rule closes the same 48 arm spellings and turns 34 of the
 narrow rule closes 48 and moves none of the 36.  TestTheCostOfTheNarrowRule
 below is that second column, so a later widening cannot be made quietly.
 
-WHAT THIS DOES NOT CLOSE, ASSERTED RATHER THAN PROMISED.  A second operation
-named WITHOUT a conjunction after a leading read word (`get_subject_erasure`)
-still elects the read.  TestTheResidualThisDoesNotClose pins it as the limit it
-is; when that test fails, the residual has been closed and the assertion —
-not the claim in a report — is what should be updated.
+WHAT THIS DID NOT CLOSE — AND WHAT RFX-350 THEN DID.  A second operation named
+WITHOUT a conjunction after a leading read word (`get_subject_erasure`) still
+elected the read, and `TestTheResidualThisDoesNotClose` pinned that as the
+limit it was.  RFX-350 closed it; that class is now
+`TestAnElectedReadDoesNotSurviveIrreversible`, which records the closure AND
+its price.
+
+That price is why several tables in this module now pass
+`reversibility="reversible"` where they used to take `_env`'s default.  It is
+not a weakening and it is not cosmetic: those rows are DECLARED READS, so the
+reversible arm is the envelope they actually carry, and on the irreversible arm
+core no longer elects `read` at all.  Every one of those tables has a matching
+irreversible-arm assertion immediately after it, so the move is pinned from
+both sides rather than quietly made.
 
 NOTE ON STYLE: unittest.TestCase, not bare pytest functions — gate.py runs this
 suite with `unittest discover`, where a module of plain `def test_*` functions
@@ -201,9 +210,19 @@ class TestTheVetoIsNarrow(unittest.TestCase):
     """It fires on a conjunction with an UNKNOWN word after it, and nowhere else."""
 
     def test_a_conjunction_between_two_known_reads_is_still_a_read(self):
+        # Scored on the REVERSIBLE arm since RFX-350: these are reads, so that
+        # is the envelope they carry.  RFX-350's clause fires on the axis, so
+        # on an irreversible envelope even an all-known-reads compound lands on
+        # the guarded default -- asserted immediately below rather than left to
+        # be discovered.
         for raw in ("list_and_count", "get_and_list", "read_and_query"):
             with self.subTest(verb=raw):
-                self.assertEqual(_verb(raw), "read")
+                self.assertEqual(_verb(raw, reversibility="reversible"), "read")
+
+    def test_and_on_the_irreversible_arm_even_those_land_on_the_default(self):
+        for raw in ("list_and_count", "get_and_list", "read_and_query"):
+            with self.subTest(verb=raw):
+                self.assertEqual(_verb(raw, reversibility="irreversible"), "delete")
 
     def test_a_known_non_read_after_the_conjunction_still_wins(self):
         # The veto only ever suppresses an elected `read`; it does not touch
@@ -220,13 +239,14 @@ class TestTheVetoIsNarrow(unittest.TestCase):
 
     def test_a_read_with_no_conjunction_is_untouched(self):
         # The names the last resort exists to serve: extra words that are an
-        # object noun phrase, not a second operation.
+        # object noun phrase, not a second operation.  On the REVERSIBLE arm
+        # since RFX-350 -- see TestAnElectedReadDoesNotSurviveIrreversible.
         for raw in ("GetObject", "ListBuckets", "query_status",
                     "list_deleted_objects", "get_pull_request_comments",
                     "list_directory_with_sizes", "search_files",
                     "read_text_file", "getUserProfile"):
             with self.subTest(verb=raw):
-                self.assertEqual(_verb(raw), "read")
+                self.assertEqual(_verb(raw, reversibility="reversible"), "read")
 
     def test_or_and_then_are_covered_not_just_and(self):
         for raw in ("get_or_redact", "list_then_purge", "fetch_then_scrub"):
@@ -264,9 +284,16 @@ class TestTheCostOfTheNarrowRule(unittest.TestCase):
     ]
 
     def test_every_genuine_read_in_the_census_is_still_a_read(self):
+        # RFX-350 MOVED THIS ASSERTION FROM ONE ARM TO THE OTHER, and that is
+        # the whole cost of RFX-350's fix — read the class docstring above and
+        # `TestAnElectedReadDoesNotSurviveIrreversible` below before changing it
+        # back.  These names are declared READS, so the envelope they travel on
+        # is the REVERSIBLE one; this table used to be scored on the
+        # irreversible arm only because RFX-324's rule did not read that axis
+        # and the irreversible arm was where `read` vs `delete` was observable.
         for raw in self.STILL_READS:
             with self.subTest(verb=raw):
-                self.assertEqual(_verb(raw), "read")
+                self.assertEqual(_verb(raw, reversibility="reversible"), "read")
 
     def test_the_table_is_not_empty_and_covers_the_real_corpus(self):
         # A cost column that someone empties is a cost column that passes.
@@ -274,23 +301,100 @@ class TestTheCostOfTheNarrowRule(unittest.TestCase):
         self.assertIn("search_files", self.STILL_READS)
         self.assertIn("GetObject", self.STILL_READS)
 
+    def test_and_on_the_irreversible_arm_every_one_of_them_now_MOVES(self):
+        """RFX-350's cost, pinned as a NUMBER so it cannot grow unnoticed.
 
-class TestTheResidualThisDoesNotClose(unittest.TestCase):
-    """The limit, asserted so it is in the tree and not only in a report.
+        Not a regression and not hidden: a caller asserting that `GetObject`
+        CANNOT BE UNDONE is the contradiction RFX-350's clause refuses to let
+        R1 win, and the clause fires on the axis, not on the name.  If a later
+        round narrows that clause, this test fails and says so.
+        """
+        moved = [raw for raw in self.STILL_READS
+                 if _verb(raw, reversibility="irreversible") != "read"]
+        self.assertEqual(sorted(moved), sorted(self.STILL_READS))
+        # ...and every one of them lands on the GUARDED default, not on an
+        # inert one -- the deletions budget is the point.
+        for raw in self.STILL_READS:
+            with self.subTest(verb=raw):
+                self.assertEqual(_verb(raw, reversibility="irreversible"),
+                                 "delete")
 
-    A second operation named without a conjunction still rides the leading
-    read word.  Closing it needs the wide rule and its 34-of-36 cost, so this
-    round does not close it.  WHEN THIS TEST FAILS, the residual has been
-    closed — check the cost table in TestTheCostOfTheNarrowRule first, then
-    update this assertion.
+
+class TestAnElectedReadDoesNotSurviveIrreversible(unittest.TestCase):
+    """RFX-350, the residual RFX-324 left open — CLOSED, and how.
+
+    This class replaces `TestTheResidualThisDoesNotClose`, whose docstring
+    said: "WHEN THIS TEST FAILS, the residual has been closed — check the cost
+    table in TestTheCostOfTheNarrowRule first, then update this assertion."
+    Both were done; the cost table is updated directly above.
+
+    THE ASYMMETRY THAT WAS OPEN.  `get_subject_erasure` elected `get`, so on an
+    irreversible production envelope it was decided `read_only_internal` and
+    charged nothing by the deletions budget, while the SAME operation named
+    `subject_erasure` — one word shorter — landed on the guarded default.
+    Prefixing a read word to a destruction's name de-escalated it, and the
+    caller supplies the name.
+
+    WHAT CLOSED IT is not a better reading of the NAME.  Every rule that reads
+    only the name was measured and rejected: the wide unknown-word veto (FIX A,
+    23 further declared reads broken on BOTH arms), and — new in RFX-350 — a
+    morphological rule deriving `erasure` -> `erase`, which reaches 1 of the 12
+    arm operations and escalates `get_tags`, `get_writer` and `get_formats` to
+    pay for it.  The clause that closed it reads the reversibility AXIS: core
+    does not hand out `read`, the only value that unlocks R1, as its OWN GUESS
+    about an action the caller says cannot be undone.
     """
 
-    def test_a_second_operation_without_a_conjunction_still_elects_the_read(self):
-        self.assertEqual(_verb("get_subject_erasure"), "read")
+    # The twelve operations, spelled WITHOUT a conjunction.  Four are
+    # nominalisations and eight are bare unknown verbs, deliberately: an arm
+    # set made only of `-ion`/`-ure` words would measure a morphological rule
+    # against its own definition.
+    ARMS_350 = [
+        "get_subject_erasure", "get_account_deactivation",
+        "list_cluster_decommission", "describe_tenant_retirement",
+        "query_record_anonymization", "get_volume_unmount",
+        "search_index_quarantine", "list_user_scrub", "get_backup_archive",
+        "describe_node_commit", "count_package_install", "get_document_redact",
+    ]
 
-    def test_and_the_caller_cannot_be_told_apart_from_a_genuine_read(self):
-        self.assertEqual(_verb("get_subject_erasure"),
-                         _verb("get_pull_request_comments"))
+    def test_a_second_operation_without_a_conjunction_no_longer_elects_the_read(self):
+        for raw in self.ARMS_350:
+            for spelled in _spellings(raw):
+                with self.subTest(verb=spelled):
+                    self.assertEqual(_verb(spelled), "delete")
+
+    def test_the_one_word_asymmetry_is_gone(self):
+        # The pair that states the defect in two lines.
+        self.assertEqual(_verb("subject_erasure"), "delete")
+        self.assertEqual(_verb("get_subject_erasure"), "delete")
+
+    def test_a_DECLARED_read_is_untouched_on_either_arm(self):
+        # The line this clause draws: a caller's own canon word is a
+        # DECLARATION and survives; an election is core's GUESS and does not.
+        # The deliberate mislabel (`verb: "read"` over a delete) is NOT what
+        # this closes -- `_delete_signal_from_ability` and R6 are that defence.
+        for raw in ("read", "list", "get", "query", "describe", "search"):
+            with self.subTest(verb=raw):
+                self.assertEqual(_verb(raw, reversibility="irreversible"), "read")
+                self.assertEqual(_verb(raw, reversibility="reversible"), "read")
+
+    def test_the_same_names_on_a_REVERSIBLE_envelope_are_unchanged(self):
+        # The control that separates this fix from FIX A.  If these move, the
+        # clause has stopped reading the axis and started reading the name.
+        for raw in ("GetObject", "search_files", "query_database",
+                    "read_text_file", "getUserProfile",
+                    "list_directory_with_sizes", "get_pull_request_comments",
+                    "list_commits", "get_subject_erasure"):
+            with self.subTest(verb=raw):
+                self.assertEqual(_verb(raw, reversibility="reversible"), "read")
+
+    def test_RFX_324_stays_closed(self):
+        # The conjunction veto is untouched by RFX-350 and must keep working on
+        # its own, including on the reversible arm where the new clause never
+        # fires at all.
+        for raw in ARM_OPERATIONS:
+            with self.subTest(verb=raw):
+                self.assertEqual(_verb(raw, reversibility="reversible"), "update")
 
 
 @unittest.skipUnless(_opa_available(), "OPA binary not available")
@@ -385,12 +489,27 @@ class TestTheArmsAreRefusedAsADECISION(unittest.TestCase):
         self.assertEqual(trip("list"), (None, None))
 
     def test_4_a_genuine_read_is_still_allowed_after_the_change(self):
+        # RFX-350: on the envelope a genuine read actually carries.  `_env`
+        # defaults to irreversible to ISOLATE THE VERB (see its docstring), and
+        # that default is what made this control read `GetObject` as a read on
+        # an envelope asserting GetObject cannot be undone.
         for raw in ("GetObject", "search_files", "list_directory_with_sizes"):
             with self.subTest(verb=raw):
-                resp = self._decide(raw)
+                resp = self._decide(raw, reversibility="reversible")
                 self.assertEqual(resp["decision"], "allow", resp)
                 self.assertEqual(resp["rule"],
                                  "reeflex.policy/read_only_internal")
+
+    def test_5_the_RFX_350_arms_are_refused_as_a_DECISION(self):
+        # The claim the string assertions do not make: 12 of 12 were ALLOWED
+        # under read_only_internal on `a9ea130`, none of them stopping within
+        # 26 calls in one session.
+        for raw in TestAnElectedReadDoesNotSurviveIrreversible.ARMS_350:
+            with self.subTest(verb=raw):
+                resp = self._decide(raw)
+                self.assertNotEqual(resp["decision"], "allow", resp)
+                self.assertEqual(resp["rule"],
+                                 "reeflex.policy/session_delete_budget")
 
 
 if __name__ == "__main__":

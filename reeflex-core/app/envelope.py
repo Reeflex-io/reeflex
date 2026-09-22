@@ -585,9 +585,18 @@ def _verb_key_variants(raw_verb: str):
     yield "".join(words)               # "hard delete" -> "harddelete"
 
 
-def _verb_last_resort_key(raw_verb: str) -> str | None:
+def _verb_last_resort_key(raw_verb: str, canonical_reversibility: str) -> str | None:
     """LAST RESORT for a compound the canon does not alias wholesale: the
     MOST-GUARDED word it contains, or None if it contains no known word.
+
+    `canonical_reversibility` is REQUIRED and deliberately has no default.  The
+    RFX-350 clause at the end of this function is the only thing standing
+    between an elected `read` and R1 on an irreversible envelope; a default
+    would let a future caller drop that guard by omission and get a silent
+    fail-open instead of a TypeError.  Same reason the parameter is the
+    already-canonicalized axis value and not the raw one: F1 runs first, so a
+    missing or garbage axes block has already become "irreversible" by the
+    time it reaches here.
 
     Ties go to the earliest word, so the verb-first convention this was
     originally added for is preserved exactly ("DeleteObject",
@@ -689,16 +698,93 @@ def _verb_last_resort_key(raw_verb: str) -> str | None:
     # conjunction at all.  The 11 wrong escalations are the shipped tree's own
     # (RFX-304/RFX-308 priced them) and this clause moves none of them.
     #
-    # WHAT THIS DOES NOT CLOSE, STATED.  A second operation named WITHOUT a
-    # conjunction after a leading read word — `get_subject_erasure` — still
-    # elects `get`.  That shape is not reachable by this rule without the cost
-    # of the wider one, and it is the residual a future round owns.
+    # CLOSED BY RFX-350, BELOW.  This clause used to end by recording that a
+    # second operation named WITHOUT a conjunction — `get_subject_erasure` —
+    # still elects `get`, and that the shape was "not reachable by this rule
+    # without the cost of the wider one".  That is true of any rule which
+    # reads only the NAME.  The clause below does not read the name.
     if best_rank == 0:
         for i, word in enumerate(words):
             if word in _VERB_CONJUNCTIONS and any(
                 later not in _VERB_CANON for later in words[i + 1:]
             ):
                 return None
+    # AND AN ELECTED `read` DOES NOT SURVIVE AN IRREVERSIBLE ENVELOPE (RFX-350).
+    #
+    # THE ASYMMETRY THIS CLOSES, measured on `a9ea130`, one field apart:
+    #
+    #   verb "subject_erasure"      irreversible -> `delete`  (the guarded
+    #                                               default twenty lines up)
+    #   verb "get_subject_erasure"  irreversible -> `read`    -> R1 -> ALLOW
+    #
+    # i.e. PREFIXING A READ WORD TO A DESTRUCTION'S NAME DE-ESCALATED IT, and
+    # the caller supplies the name.  `_VERB_DEFAULT_IRREVERSIBLE` exists so an
+    # unrecognised irreversible verb is "deliberately NOT `read`, which would
+    # hand out R1"; the election was walking round the default it was written
+    # to protect.  Measured as DECISIONS on the real pack (deletions budget
+    # 20, irreversible/scoped/internal/production, count 45): 12 of 12 arms —
+    # GDPR erasure, account lifecycle, infra teardown, containment — ALLOWED
+    # under `reeflex.policy/read_only_internal`, none of them stopping within
+    # 26 calls in one session, while canonical `delete` stopped at call 21.
+    #
+    # WHY THIS IS NOT FIX A, WHICH MUST NOT SHIP.  FIX A ("an unknown word
+    # outranks a leading read") breaks `GetObject` on EVERY envelope; RFX-324's
+    # block above records its 34-of-36 cost.  This clause reads the
+    # reversibility AXIS, not the name, so it can only fire on an envelope that
+    # says the action CANNOT BE UNDONE — which a genuine read never is.  Scored
+    # through this elector over the same two corpora RFX-324 and RFX-357 used:
+    #
+    #                          RFX-350 arms   NEW wrong escalations   17268 harvested
+    #                          closed (48)    on the REVERSIBLE arm   names moved @rev
+    #   FIX A (wide veto)         48                 23                   +2024
+    #   this clause               48                  0                       0
+    #
+    # The 17268 names are dev-1--171's harvest of CPython 3.9/3.11/3.12 and
+    # site-packages re-run; on the envelope a read actually travels on, this
+    # clause moves NOT ONE of them (13169 already non-read, before and after).
+    #
+    # WHAT IT COSTS, STATED.  On the IRREVERSIBLE arm 25 of the census's
+    # declared reads now reach the guarded default — `GetObject`,
+    # `query_database`, `list_commits` among them.  Every one of those is a
+    # caller asserting that a read cannot be undone.  It costs a HOLD, names
+    # its reason, and one declared field removes it.  The other direction costs
+    # a customer their data with no human in it.
+    #
+    # A DECLARED verb is untouched, deliberately.  `_canonicalize_verb` returns
+    # before this function whenever the caller's own string matched the canon,
+    # so `verb: "read"` on an irreversible envelope still canonicalises `read`.
+    # That is the DELIBERATE mislabel, which this election cannot see.  The line
+    # this clause draws is narrower and is the one `_verb_is_declared` already
+    # draws: core does not hand out its LEAST-guarded value as its OWN GUESS
+    # on an action the caller says is irreversible.
+    #
+    # WHAT DEFENDS THE DELIBERATE MISLABEL, AND UNDER WHAT CONDITION (dev-3--154).
+    # `_delete_signal_from_ability` and R6 both back this case up, and NEITHER
+    # is unconditional — scored as decisions through `app.decide.process` on the
+    # real pack, one field apart, envelope irreversible/scoped/internal/
+    # production, count 45:
+    #
+    #   verb "read", nothing else declared          allow  R1 read_only_internal
+    #     + action.ability "wordpress/delete-post"  hold   R5 session_delete_budget
+    #     + action.ability "wordpress/get-post"     allow  R1 read_only_internal
+    #     + target.ref "/srv/prod/db.sqlite"        hold   R6 …protected_asset_prod
+    #     + target.ref "/home/app/prod/db.sqlite"   allow  R1 read_only_internal
+    #   verb "delete"                    CONTROL    hold   R5 session_delete_budget
+    #
+    # So both defences are reached only through a field THE SAME CALLER supplies:
+    # an `ability` whose last segment carries a canon delete word, or a
+    # `target.ref` under one of the eight prefixes `protected.rego` ships (the
+    # default posture is `default_protected := false`, so an unlisted path is
+    # unprotected).  Omit both and R1 allows, before this clause and after it —
+    # this clause does not move that case and is not claimed to.  R6 outranking
+    # R1 for an irreversible read is real but is scoped to a declared protected
+    # asset (`r6_require_approval` requires `protected_target`); R1 itself reads
+    # only `action.verb` and `axes.externality` and no reversibility at all, so
+    # it is not the place that refuses the contradiction.  The honest statement
+    # of the residual is the one at the top of this module: only signed
+    # envelopes (SPEC §6, roadmap) close a deliberate mislabel properly.
+    if best_rank == 0 and canonical_reversibility == "irreversible":
+        return None
     return best_word
 
 
@@ -719,7 +805,7 @@ def _canonicalize_verb(raw_verb: str, canonical_reversibility: str) -> str:
     for key in _verb_key_variants(raw_verb):
         if key in _VERB_CANON:
             return _VERB_CANON[key]
-    elected = _verb_last_resort_key(raw_verb)
+    elected = _verb_last_resort_key(raw_verb, canonical_reversibility)
     if elected is not None:
         return _VERB_CANON[elected]
     if canonical_reversibility == "irreversible":
