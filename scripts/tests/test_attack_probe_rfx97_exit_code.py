@@ -40,6 +40,7 @@ forever (RFX-87).
 import importlib.util
 import io
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -206,6 +207,64 @@ class TheJsonReportFailsWithAType(unittest.TestCase):
             self.assertTrue(os.path.exists(target))
             with open(target, encoding="utf-8") as fh:
                 self.assertIn("findings", fh.read())
+
+
+class TheProcessTheRunnerActuallyStartsExitsSeventy(unittest.TestCase):
+    """The two exits that live OUTSIDE `main()`, scored as a process.
+
+    WHY THIS CLASS EXISTS (measured dev-1--216, 2026-09-22, landing the PR that
+    added everything above).  Every test above replaces `probe.main` and calls
+    `probe.cli()` directly.  That scores the helper and cannot see its caller:
+    reverting the module's last line from `sys.exit(cli())` to `sys.exit(main())`
+    left all ten of them GREEN — 243 tests, `OK` — while the process went back to
+    exiting **1** on an unwritable `--json` and **2** on an unrecognised flag.
+    One word, the whole of RFX-179 restored, guard silent.
+
+    The second exit has the same shape and is worse to reach: the production-core
+    refusal fires at IMPORT time, before `main()` exists to be replaced, so no
+    test that imports this module can observe it at all.  Reverting it to
+    `sys.exit("refusing...")` exits 1 — the code for "RFX-84 is still
+    exploitable" — and, again, left the file green.
+
+    So these run the probe the way `bin/rfx-release-gate-run` runs it: as a
+    process, read by `$?`.  Both cases are chosen to be hermetic — argparse
+    rejects the flag, and the host guard refuses, BEFORE either one opens a
+    socket — so this class needs no core, no container and no network, and in
+    particular sends nothing to the host it names.
+    """
+
+    def _run(self, args, base="http://127.0.0.1:1"):
+        env = dict(os.environ)
+        env["REEFLEX_PROBE_BASE"] = base
+        env["REEFLEX_PROBE_PACE"] = "0"
+        env.pop("REEFLEX_PROBE_RESOLVER_MAP", None)
+        return subprocess.run(
+            [sys.executable, PROBE_PATH] + args,
+            env=env, timeout=120,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def test_an_argparse_usage_error_exits_seventy_as_a_process(self):
+        """`sys.exit(main())` would make this 2, which means two tickets open."""
+        done = self._run(["--no-such-flag"])
+        self.assertEqual(
+            probe.EXIT_HARNESS_ERROR, done.returncode,
+            "the process the console's runner starts must report a harness "
+            "failure outside the verdict range; got %d (stderr: %s)"
+            % (done.returncode, done.stderr.decode()[-400:]))
+        self.assertNotEqual(2, done.returncode)
+
+    def test_refusing_the_production_core_is_not_a_verdict(self):
+        """Fires at import, so only a subprocess can score it.
+
+        No request is made: the refusal is above every network call in the
+        module, which is exactly why asserting the exit code here is safe.
+        """
+        done = self._run([], base="https://api.reeflex.io")
+        self.assertEqual(
+            probe.EXIT_HARNESS_ERROR, done.returncode,
+            "refusing to start is a harness outcome, not a count of tickets")
+        self.assertNotEqual(1, done.returncode)
+        self.assertIn(b"refusing to probe production core", done.stderr)
 
 
 if __name__ == "__main__":
