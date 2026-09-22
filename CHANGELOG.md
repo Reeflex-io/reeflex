@@ -7,6 +7,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ### Fixed
 
+- **RFX-146's live guarantee — "25 `kubectl delete namespace` in one session is held by R5" — was certified by an instrument that never read which rule held it, and nothing invoked that instrument at all.** (RFX-146)
+
+  `--budget` on `scripts/attack-probe-rfx144-agent-prices-own-action.py` is the live arm written for RFX-146's closing criterion. It shipped with the fix on 2026-09-07 and was **run by nothing for the fifteen days after**: `--budget` occurred exactly twice in the tree outside its own argparse — a README usage line and this changelog's absence of one — and `gate.py`'s `claude-corpus-live` component invoked the probe bare. That is the same failure RFX-303 fixed for the probe itself, one flag down.
+
+  Run for the first time (dev-1--214) against `reeflex-core` v0.2.2 on a core built for the run, the criterion **holds**: allow ×2, then `require_approval` on calls 3–25 under `reeflex.policy/session_delete_budget`. But `budget_probe()` returned a COUNT and `main()` scored only `held == 0`, so its verdict said "something held the session" while its output line said R5 did. Measured, same 25 calls, changing only the one field that decides whether the `deletions` dimension counts at all:
+
+  ```
+                                     probe printed              exit  verdict
+  shipped tree, shipped pack         hold at call  3            0     PASS   correct
+  adapter verb -> execute            hold at call 21            0     PASS   <- the defect, certified
+  pack: deletions dimension dead     hold at call 21            0     PASS   <- the defect, certified
+  pre-RFX-144 shape (no k8s branch)  0/25 held                  1     FAIL   caught
+  ```
+
+  `objects_touched` charges **every** action unconditionally, so a session long enough to matter is always held by something eventually — which makes "was it held" the one question this probe must not ask. Both blinded arms land on `reeflex.policy/cumulative_budget` at **call 21**, and call 21 is verbatim the number this probe's own docstring, and both of RFX-146's closing Jira comments, cite as the proof that the delete budget works. It stopped being that number when RFX-143's `broad` floor of 10 and RFX-293's `ledger_charge` landed *after* RFX-146 closed; the shipped tree holds at call 3, and 21 is now the defect's signature.
+
+  The verdict is now the **rule id**, never the fact of a hold and never a call number — the floors and limits in `budgets.rego` are declared illustrative defaults an operator may retune, so pinning the arithmetic would turn a retune into a red gate. `score_budget_probe()` charges 1 for each of: nothing held; a single-call rule got there before the cumulative budget was reachable (which the probe already *said* proves nothing about R5, and then did not act on); held by a rule that is not the delete budget. `gate.py` now passes `--budget`, so the criterion runs on every gate run that has a core — it needs no extra setup and costs 25 decide calls.
+
+  **What this is not:** not a live fail-open. Both blinded arms are caught elsewhere — the adapter arm by `tests/test_conformance_bash.py::TestRFX146AuditRecordTruthfulness::test_destructions_are_counted_by_the_delete_budget`, the pack arm by `opa test reeflex-core/policy/` (5 of 75 red; the shipped pack is 75/75). This is an instrument reporting a pass it did not measure, and it is the only instrument that scores the adapter and the pack **together** against a real core.
+
 - **An agent bought back `single` on a whole-table destruction by adding a one-element `ids` array to its own call, and three operations RFX-131 moved to a human went back to `allow`.** (RFX-131 residual)
 
   SPEC §4.2 step 3 reads cardinality off `$input['ids']`, and `$input` is supplied by the agent being governed. Step 2 ("no target list at all" → `broad`) is therefore a branch the agent chooses whether to enter. Measured on `main` `3d097c3` through the real WordPress normalizer and `reeflex-core`'s own policy pack — the same three abilities RFX-131's fix was originally proven on:

@@ -59,7 +59,10 @@ USAGE
 EXIT CODE = the number of ground-truth production destructions that were
 ALLOWED with no human, plus the number of cases where the offline oracle and
 the real core disagreed, plus 1 if any everyday command was blocked, plus 1 if
---strict was asked for and the knob moved nothing.  0 means the gate holds.
+--strict was asked for and the knob moved nothing, plus up to 2 from --budget
+(see score_budget_probe: nothing held; a single-call rule held it before the
+cumulative budget was reachable; held by a rule that is not the delete budget).
+0 means the gate holds.
 CI gates on it directly (gate.py's `claude-corpus-live` component).
 
 VERDICT LINE -- anchored, case-sensitive; gate.py parses EXACTLY this:
@@ -321,10 +324,13 @@ def walk(cases, strict=False, label="default", baseline=None):
     return rows
 
 
+DELETE_BUDGET_RULE = "reeflex.policy/session_delete_budget"
+
+
 def budget_probe(n=25):
     """
     RFX-146: R5's `deletions` dimension accumulates on `input.action.verb ==
-    "delete"` (budgets.rego:26, default limit 20).  Thirty `kubectl delete
+    "delete"` (budgets.rego, default limit 20).  Thirty `kubectl delete
     namespace` in one session used to report verb=execute, so the dimension
     never incremented and sixty production destructions went through on
     default_allow.
@@ -333,15 +339,38 @@ def budget_probe(n=25):
     the FIRST call, and a hold at call 1 proves R2 fired -- it says nothing
     about whether the budget counted anything.  R2/R3 are production-scoped
     and R5 is not, so staging is the only environment where the budget is the
-    ONLY rule that can hold: allow up to the limit, then hold.  A hold at call
-    21 is the budget, and nothing else, doing it.
+    ONLY rule that CAN hold on the first call.
 
-      before RFX-144, staging: allow x25, rule default_allow  (verb=execute)
-      after  RFX-144, staging: allow x20 then hold            (verb=delete)
+    THE VERDICT IS THE RULE ID, NOT THE FACT OF A HOLD, AND NOT THE CALL
+    NUMBER.  Until this was measured (dev-1--214) this function returned a
+    COUNT and main() scored only `held == 0`, so it certified "R5 held the
+    session" from evidence that says only "something held the session".
+    Measured against core v0.2.2, the same 25 calls, with the one field that
+    decides whether the deletions dimension counts at all set to `execute`:
+
+        shipped          allow x2,  hold at call  3   session_delete_budget
+        deletions blind  allow x20, hold at call 21   cumulative_budget
+                                                      (objects_touched, 200)
+
+    Both are holds, and the second reports the very defect this ticket exists
+    to stop as `5/25 held, first at call 21`.  `objects_touched` charges EVERY
+    action unconditionally, so a session long enough to matter is held by
+    something eventually -- which makes "was it held" the one question this
+    probe must not ask.
+
+    AND THE CALL NUMBER MOVED.  Every earlier record of this ticket -- this
+    docstring included -- cited call 21 as the proof.  That was true when
+    `charged_count` was 1; RFX-143's `broad` floor of 10 and RFX-293's
+    `ledger_charge` landed afterwards, so the shipped tree holds at call 3 and
+    21 is now the DEFECT's signature.  Nothing here asserts a call number: the
+    floors and limits in budgets.rego are declared illustrative defaults an
+    operator may retune, so pinning the arithmetic would turn a retune into a
+    red gate.  The rule id is what carries the guarantee.
     """
     session = f"probe-{RUN}-budget-k8s"
     held = 0
     first_hold = None
+    first_rule = None
     print(f"\nRFX-146 R5 fragmentation probe: {n} x 'kubectl delete namespace' "
           f"in ONE session, environment=STAGING so only R5 can hold "
           f"(deletions limit is 20)")
@@ -353,13 +382,47 @@ def budget_probe(n=25):
             held += 1
             if first_hold is None:
                 first_hold = i + 1
+                first_rule = live_rule(r["reason"])
                 print(f"  first hold at call {first_hold}: {r['reason'][:100]}")
         time.sleep(PACE)
-    print(f"  {held}/{n} held, first at call {first_hold}")
-    if first_hold == 1:
-        print("  !! held at call 1 -- something other than the budget is "
-              "holding; this run proves nothing about R5")
-    return held
+    print(f"  {held}/{n} held, first at call {first_hold}, "
+          f"rule={first_rule or '-'}")
+    return {"held": held, "first_hold": first_hold, "first_rule": first_rule}
+
+
+def score_budget_probe(result):
+    """The verdict on a budget run.  Returns (exit_contribution, lines).
+
+    Three ways a run fails to be evidence that R5 held the session, each
+    costing 1, because each is a different thing to go and fix:
+
+      nothing held          the deletions dimension does not count this
+                            destruction -- RFX-146's original defect
+      held at call 1        a single-call rule got there before the cumulative
+                            budget could be reached, so the budget was never
+                            the question; the probe already SAID such a run
+                            proves nothing about R5, it just did not act on it
+      held by another rule  something held the session and it was not the
+                            delete budget
+    """
+    contribution, lines = 0, []
+    if result["held"] == 0:
+        lines.append("    !! R5 never fired -- the deletions budget does not "
+                     "count this destruction")
+        return contribution + 1, lines
+    if result["first_hold"] == 1:
+        lines.append("    !! held at call 1 -- a single-call rule got there "
+                     "before the cumulative budget; this run proves nothing "
+                     "about R5")
+        contribution += 1
+    if result["first_rule"] != DELETE_BUDGET_RULE:
+        lines.append(
+            "    !! the session was held by %s, not by %s -- the delete "
+            "budget is not what stopped the fragmentation"
+            % (result["first_rule"] or "a rule this probe could not read",
+               DELETE_BUDGET_RULE))
+        contribution += 1
+    return contribution, lines
 
 
 def report_divergences(rows) -> list:
@@ -511,11 +574,10 @@ def main() -> int:
         rows += srows
 
     if args.budget:
-        held = budget_probe()
-        if held == 0:
-            print("    !! R5 never fired -- the deletions budget does not count "
-                  "this destruction")
-            exit_code += 1
+        contribution, lines = score_budget_probe(budget_probe())
+        for line in lines:
+            print(line)
+        exit_code += contribution
 
     # RFX-303: counted, not just printed, and computed over EVERY walk this run
     # made -- the strict rows included, which is why it sits after them. A
