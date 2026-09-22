@@ -374,7 +374,21 @@ Steps 1 and 2 sometimes need a fact the call site cannot see. `delete-all-revisi
 
 An adapter SHOULD therefore accept a **registration-time scope declaration** — `container` | `predicate` | `enumerated` — supplied where the action is defined rather than by the agent that calls it, and subject to the same monotonic rule the verb override already follows (§3): **a declaration may raise the derived value or leave it alone; it MUST NOT lower it.** A declaration that arrives with the call rather than with the registration is agent-supplied input and MUST NOT be honoured.
 
-Where nothing is declared, the adapter derives the shape from the evidence in the call — an enumeration if it holds one, a predicate otherwise. The default is `predicate`, which is why the fail-open closes even for actions nobody annotates.
+Where nothing is declared, the adapter derives the shape from the evidence in the call — an enumeration if it holds one, a predicate otherwise.
+
+#### The enumeration is agent-supplied, and that bounds what the default buys
+
+An earlier revision of this section read *"the default is `predicate`, which is why the fail-open closes even for actions nobody annotates."* That sentence was measured false (RFX-131, dev-1--207) and is corrected here rather than softened.
+
+The default is `predicate` **for a call that carries no enumeration** — and whether a call carries one is decided by the agent, because the enumeration arrives in the agent's own input. On an action nobody annotated, an agent that adds a one-element target list moves its call out of step 2 and into step 3, and the axis answers `single`. Measured through a reference adapter and `reeflex-core`'s own policy pack, three whole-container operations went from `require_approval` (R2) to `allow` (R4 default) when a one-element list was added to the call and nothing else changed.
+
+So, stated without the absolute:
+
+- **The declaration is the part of this section that does not depend on the agent.** `reeflex_scope: 'predicate'` is supplied at registration, is outside the agent's reach, and holds whatever the call carries. For an action whose affected set is not its parameters, it is the mechanism this section offers, and an operator who wants that property has to use it.
+- **An adapter MAY treat a container claim in the action's name as a floor on the derived value**, raising `single`/`scoped` to `broad` — the same raise-only, kind-not-cardinality permission step 1 already grants, applied one step further down. `truncate`, `drop-table` and `empty-trash` answer *what kind of thing is being operated on*; `bulk`, `every` and `all` answer *how many*, and the second kind of word remains forbidden here.
+- **A name list narrows this gap and does not close it**, because a substring list is incomplete by construction — which is the finding this whole section was written on. `core/wipe-postmeta` with a one-element list was measured still reaching `single` after a reference adapter added such a floor.
+
+Whether an undeclared enumeration should be honoured **at all** — that is, whether reaching `single` or `scoped` ought to require `reeflex_scope: 'enumerated'`, on the reading that an adapter which cannot tell a target list from a parameter list has not enumerated anything — is **open**. It would close the gap for every action rather than for the named ones, and it would also route every unannotated single-entity delete to a human. That trade is a deployment-posture question of the same kind as RFX-132 and is not settled here.
 
 ### What this does and does not buy
 

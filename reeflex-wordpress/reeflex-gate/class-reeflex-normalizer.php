@@ -278,11 +278,18 @@ final class Reeflex_Normalizer {
 	 * Ability name segments (lowercase) that imply a bulk blast radius.
 	 *
 	 * NO LONGER READ BY resolve_blast_radius() (RFX-131 / SPEC §4.2): a name may
-	 * make a container claim (step 1) but MUST NOT make a cardinality claim, and
-	 * every case this list used to catch is now reached without it —
-	 *   - with no ids array, step 2 already returns 'broad';
-	 *   - with an ids array, the enumeration is authoritative and this list would
-	 *     have raised above it, which §4.2 forbids.
+	 * make a container claim (step 1) but MUST NOT make a cardinality claim.
+	 * These are CARDINALITY words — "bulk", "every", "all" answer *how many*,
+	 * which is the question §4.2 forbids a name to answer — so they stay out of
+	 * the axis. PREDICATE_KIND_SEGMENTS below is the separate, raise-only KIND
+	 * list, and the distinction between the two is the whole of §4.2.
+	 *
+	 * This block used to carry a second bullet reading "with an ids array, the
+	 * enumeration is authoritative". That was measured false (dev-1--207): the
+	 * `ids` array is agent-supplied, so honouring it unconditionally let the
+	 * agent choose which branch of §4.2 its own call was judged under. See
+	 * PREDICATE_KIND_SEGMENTS.
+	 *
 	 * It is retained because resolve_reversibility() and infer_kind() still read
 	 * bulk signals for their own purposes, where a name IS the available evidence.
 	 *
@@ -290,6 +297,61 @@ final class Reeflex_Normalizer {
 	 */
 	private const BULK_SEGMENTS = array(
 		'bulk', 'batch', 'mass', 'every', 'all',
+	);
+
+	/**
+	 * Ability name segments (lowercase) naming a CONTAINER as the thing operated
+	 * on — a table, a schema, a cache, the trash — rather than entities within
+	 * one. RAISE-ONLY, and only as far as `broad`.
+	 *
+	 * WHAT THIS IS FOR (RFX-131 residual, measured dev-1--207). Step 3 reads
+	 * cardinality off `$input['ids']`, and `$input` is supplied by the agent
+	 * being governed. For an ability whose affected set is a container, an `ids`
+	 * array is not an enumeration of that set — it is a parameter that happens to
+	 * be present, which is exactly the case SPEC §4.2 describes as "the
+	 * enumeration must be OF THE AFFECTED ENTITIES, not of the parameters".
+	 * Measured against the shipped code on main 3d097c3, through the real
+	 * normalizer and reeflex-core's real pack:
+	 *
+	 *   core/truncate-postmeta {}            -> broad  -> require_approval
+	 *   core/truncate-postmeta {ids:[1]}     -> single -> ALLOW (R4 default)
+	 *   core/empty-trash       {}            -> broad  -> require_approval
+	 *   core/empty-trash       {ids:[1]}     -> single -> ALLOW (R4 default)
+	 *   db/drop-table          {}            -> broad  -> require_approval
+	 *   db/drop-table          {ids:[1]}     -> single -> ALLOW (R4 default)
+	 *
+	 * Those three abilities are the ones RFX-131's own fix was proven on. One
+	 * array in the agent's own call returned all three to the verdict the ticket
+	 * was filed to remove.
+	 *
+	 * WHY A NAME IS ALLOWED TO DO THIS AND NOT THE OTHER THING. §4.2 draws the
+	 * line at kind-vs-cardinality: a name may answer "is the target a container?"
+	 * — a claim about KIND, made by whoever registered the ability, and it may
+	 * only raise — and may not answer "how many entities does this affect?".
+	 * `truncate` and `drop-table` are kind words. `bulk` and `all` are not, which
+	 * is why BULK_SEGMENTS stays out of this axis.
+	 *
+	 * WHAT IT DOES NOT DO, SAID PLAINLY. A substring list is incomplete by
+	 * construction — that incompleteness is the finding RFX-131 was filed on, and
+	 * this list inherits it. An ability whose name carries no container word
+	 * (`plugins/deactivate-all {ids:[1]}` was measured, and stays `single`) is
+	 * still lowered by an agent-supplied array. The complete answer is the
+	 * registration-time declaration `reeflex_scope: 'predicate'`, which already
+	 * works and which §4.2 already names as the honest source; this list narrows
+	 * the gap for abilities nobody annotated, it does not close it.
+	 *
+	 * The raise is capped at `broad` on purpose: `systemic` is R3, denied even
+	 * with approval, and whether these abilities belong there is the open
+	 * question on RFX-132 that belongs to the owner. `broad` is exactly the value
+	 * the same call already produces without the `ids` array, so the fix asserts
+	 * nothing this adapter was not already asserting.
+	 *
+	 * @var array<int,string>
+	 */
+	private const PREDICATE_KIND_SEGMENTS = array(
+		'truncate', 'drop-table', 'drop-database', 'drop-schema',
+		'droptable', 'dropdatabase', 'dropschema',
+		'empty-trash', 'emptytrash', 'flush',
 	);
 
 	/**
@@ -912,6 +974,12 @@ final class Reeflex_Normalizer {
 	 *      >= BROAD_MIN → broad, 2..BROAD_MIN-1 → scoped, 1 → single. A name
 	 *      signal MUST NOT raise above this: an enumeration is evidence, a name
 	 *      is not.
+	 *   3b. …UNLESS the ability names a CONTAINER as the thing operated on, in
+	 *      which case the list is a parameter rather than the affected set and
+	 *      the value is floored at 'broad' (PREDICATE_KIND_SEGMENTS). $input is
+	 *      agent-supplied; without this floor the agent selects which of steps 2
+	 *      and 3 judges its own call. Raise-only, capped at 'broad', and
+	 *      incomplete — read the constant's block before relying on it.
 	 *
 	 * What changed in RFX-131 and why it is not a tuning tweak: "no ids" used to
 	 * return 'single', so `core/truncate-postmeta` — a table wipe whose name
@@ -971,10 +1039,47 @@ final class Reeflex_Normalizer {
 		if ( $ids_count >= self::BROAD_MIN ) {
 			return 'broad';
 		}
+
+		// 3b. THE ENUMERATION MUST BE OF THE AFFECTED ENTITIES, NOT OF THE
+		//     PARAMETERS (SPEC §4.2). $input is agent-supplied, so without this
+		//     the agent picks which branch of §4.2 judges its own call: sending
+		//     `ids` on a container operation walked it out of step 2 and into a
+		//     cardinality of one. Raise-only, and only to 'broad' — the value the
+		//     same call already produces with no `ids` at all.
+		//
+		//     Deliberately NOT gated on $declared: 'enumerated' asserts nothing
+		//     beyond what the ids array shows (see above), so it cannot lower
+		//     this floor either. An operator who needs the enumeration honoured
+		//     on a container-named ability declares 'enumerated' AND renames it;
+		//     a declaration that could lower would be the §4.2 monotonic rule
+		//     broken, which is the thing this axis exists to hold.
+		if ( self::names_a_container_kind( $ability_lower ) ) {
+			return 'broad';
+		}
+
 		if ( $ids_count > 1 ) {
 			return 'scoped';
 		}
 		return 'single';
+	}
+
+	/**
+	 * Does the ability's NAME claim a container as the thing being operated on?
+	 *
+	 * A claim about KIND, which §4.2 permits a name to make, and which may only
+	 * raise. See PREDICATE_KIND_SEGMENTS for the measurement this exists for and
+	 * for what it does not cover.
+	 *
+	 * @param string $ability_lower Lowercased ability name.
+	 * @return bool
+	 */
+	private static function names_a_container_kind( string $ability_lower ): bool {
+		foreach ( self::PREDICATE_KIND_SEGMENTS as $signal ) {
+			if ( false !== strpos( $ability_lower, $signal ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	// ------------------------------------------------------------------

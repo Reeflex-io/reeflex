@@ -7,6 +7,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ### Fixed
 
+- **An agent bought back `single` on a whole-table destruction by adding a one-element `ids` array to its own call, and three operations RFX-131 moved to a human went back to `allow`.** (RFX-131 residual)
+
+  SPEC §4.2 step 3 reads cardinality off `$input['ids']`, and `$input` is supplied by the agent being governed. Step 2 ("no target list at all" → `broad`) is therefore a branch the agent chooses whether to enter. Measured on `main` `3d097c3` through the real WordPress normalizer and `reeflex-core`'s own policy pack — the same three abilities RFX-131's fix was originally proven on:
+
+  ```
+                                          BEFORE (main 3d097c3)              AFTER
+  core/truncate-postmeta {}               require_approval / R2              require_approval / R2
+  core/truncate-postmeta {"ids":[1]}      ALLOW / default_allow              require_approval / R2
+  core/empty-trash       {}               require_approval / R2              require_approval / R2
+  core/empty-trash       {"ids":[1]}      ALLOW / default_allow              require_approval / R2
+  db/drop-table          {}               require_approval / R2              require_approval / R2
+  db/drop-table          {"ids":[1]}      ALLOW / default_allow              require_approval / R2
+  ```
+
+  The conformance suite was green over the hole because it never varied the ability and the input independently: every `enumerated/*` vector used a genuinely enumerable ability, and every `predicate/*` vector omitted `ids`. The cell "predicate-shaped ability × non-empty `ids`" was empty, and it is the one cell the agent controls. `agent-declared-count-may-not-lower-a-predicate` already guarded the agent's `count`; nothing guarded the agent's `ids`.
+
+  The WordPress adapter now floors the derived value at `broad` when the ability's name claims a **container** as the thing operated on — the raise-only, kind-not-cardinality permission §4.2 already grants step 1, applied one step further down. It is capped at `broad` on purpose: that is exactly the value the same call already produces with no `ids`, so nothing new is asserted, and `systemic` (R3, denied even with approval) stays the open RFX-132 question. `BULK_SEGMENTS` stays out of the axis — `bulk`/`every`/`all` answer *how many*, which a name still may not answer, and `name-must-not-raise-above-an-enumeration` is green before and after.
+
+  **It narrows the gap and does not close it, which is measured rather than estimated:** `core/wipe-postmeta {"ids":[1]}` still reaches `single` and `allow`, because a substring list is incomplete by construction — the finding RFX-131 was filed on in the first place. The part that does not depend on the agent is the registration-time `reeflex_scope: 'predicate'` declaration, which already works. §4.2 previously claimed "the default is `predicate`, which is why the fail-open closes even for actions nobody annotates"; that sentence is corrected rather than softened, and whether reaching `single`/`scoped` should require a declaration at all is written up there as open.
+
+  Two vectors added to the shared `blast-radius.json` (22 → 24); both fail on `3d097c3` and pass after, the other 14 WordPress cases and all 16 `decisions.json` rows are unmoved.
+
 - **`reeflex-claude status --strict` — the command `check` names as "the hook to hang CI on" — reported `COVERAGE: every tool reaches the gate` and exited 0 on a machine where no settings file wired the hook at all.** (RFX-325 residual)
 
   `posture.assess()` reads the settings files at Claude Code's fixed locations and, when none of them names our hook, falls back to the `REEFLEX_CLAUDE_MATCHER` stamp that `setup` writes into the settings `env` block. The fallback exists for one real case: a `claude --settings <path>` launch, whose path a hook is never told. But "no file names our hook" is also, and far more often, what **the gate not being wired** looks like — and Claude Code exports a settings file's `env` block to the processes it spawns, so the stamp outlives the hook entry `setup` wrote beside it. Remove the entry, keep the block, and a wide stamp certified a gate that was gone.
