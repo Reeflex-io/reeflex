@@ -2272,6 +2272,21 @@
       "expect_target_ref": null
     },
     {
+      "id": "everyday-prefixgroup-function-definition",
+      "tool": "Bash",
+      "input": {
+        "command": "deploy () { rm -rf /var/lib/pgsql; }"
+      },
+      "effect": "defining a function does not run its body; bash destroys nothing",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": null,
+      "expect_blast_radius": null,
+      "expect_target_ref": null
+    },
+    {
       "id": "gap-program-on-stdin",
       "tool": "Bash",
       "input": {

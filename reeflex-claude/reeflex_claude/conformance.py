@@ -1166,6 +1166,16 @@ CASES = [
     _c("everyday-prefixgroup-arith", "if ((RETRIES + 1)); then :; fi",
        "arithmetic behind a keyword; bash reads `rm`-shaped words as "
        "variable names here", "allow", "everyday"),
+    # A function DEFINITION is a bare word followed by an unquoted `(`, it is
+    # valid bash, and defining it runs nothing -- so it must stay allowed. It
+    # was added chasing a sabotage arm (over-wideness) that it turned out NOT
+    # to discriminate: measured under that break the line still prices
+    # execute/recoverable/scoped, because the `)` survives as the command word.
+    # Kept because it pins a real shape, not because it catches that arm.
+    _c("everyday-prefixgroup-function-definition",
+       "deploy () { rm -rf /var/lib/pgsql; }",
+       "defining a function does not run its body; bash destroys nothing",
+       "allow", "everyday"),
 
     # ------------------------------------------------------------------
     # gap -- the destruction is NOT IN the command string, so no string

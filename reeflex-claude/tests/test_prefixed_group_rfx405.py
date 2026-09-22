@@ -110,6 +110,29 @@ NOT_GROUPS_BEHIND_A_PREFIX = [
     ("arithmetic_bare",          "((RETRIES + 1))"),
     ("case_pattern",             "case $x in (a) echo hi;; esac"),
     ("quoted_text",              "time echo '(rm -rf %s)'" % _V),
+    # A FUNCTION DEFINITION: a bare word followed by an unquoted `(`, valid
+    # bash, and defining it runs nothing -- so it must stay allowed.
+    #
+    # RECORDED HONESTLY, BECAUSE THE ROUND THAT ADDED THESE TWO ROWS ADDED THEM
+    # ON A HYPOTHESIS THAT TURNED OUT TO BE FALSE.  Widening
+    # `_peel_prefixed_group` to step over ANY leading word (sabotage arm C)
+    # breaks only `test_the_peel_only_steps_over_words_this_module_already_
+    # drops` -- an assertion about a frozenset.  These rows were expected to
+    # make that arm break BEHAVIOUR as well.  They do not: measured under the
+    # arm, `deploy () { rm -rf V; }` segments to `) { rm -rf V` and still
+    # prices execute/recoverable/scoped, because the `)` survives as the
+    # command word and matches nothing either.
+    #
+    # So the standing reading is that arm C has NO reachable behavioural
+    # consequence that could be constructed here -- a bare word before an
+    # unquoted `(` is a bash syntax error nearly everywhere, and the one place
+    # it is not, the peel does not reach a destructive command word.  The
+    # narrowness of `_PREFIX_WORDS` is cheap insurance, not a load-bearing
+    # guard, and the frozenset assertion is the only instrument that sees it.
+    # These two rows stay because they pin a real shape that must stay allowed,
+    # not because they discriminate that arm.
+    ("function_definition_spaced",  "deploy () { rm -rf %s; }" % _V),
+    ("function_definition_tight",   "cleanup() { rm -rf %s; }" % _V),
 ]
 
 
