@@ -425,6 +425,19 @@ def score_budget_probe(result):
     return contribution, lines
 
 
+def summarise_budget(result):
+    """One clause for the anchored verdict line. Names the RULE, always.
+
+    No parentheses and no newline: gate.py's CORPUS_LIVE_RE captures
+    everything between the outer `(` and `)` of that one line.
+    """
+    if result["held"] == 0:
+        return "R5 delete budget NEVER fired over 25 fragmented deletions"
+    return ("R5 delete budget: %d/25 held, first at call %d by %s"
+            % (result["held"], result["first_hold"],
+               result["first_rule"] or "an unreadable rule"))
+
+
 def report_divergences(rows) -> list:
     """
     RFX-303(3): print every live-vs-oracle disagreement with BOTH verdicts and
@@ -573,11 +586,14 @@ def main() -> int:
             exit_code += 1
         rows += srows
 
+    budget_detail = None
     if args.budget:
-        contribution, lines = score_budget_probe(budget_probe())
+        budget = budget_probe()
+        contribution, lines = score_budget_probe(budget)
         for line in lines:
             print(line)
         exit_code += contribution
+        budget_detail = summarise_budget(budget)
 
     # RFX-303: counted, not just printed, and computed over EVERY walk this run
     # made -- the strict rows included, which is why it sits after them. A
@@ -623,6 +639,16 @@ def main() -> int:
               "divergences, %d everyday blocked"
               % (len(rows), BASE, len(allowed), len(diverged),
                  len(blocked_everyday)))
+    # The budget verdict rides on the ANCHORED line, not only in the block
+    # above it. gate.py shows `tail=22` on a pass, and the residual list
+    # between the two is as long as the corpus's open tickets -- so the budget
+    # block drifts out of the window as rows are added, and it did: in the
+    # first CI run of this flag the component said PASS with no visible sign
+    # that the 25-call session had happened at all. A reader must be able to
+    # see that the measurement RAN, which is this probe's own founding
+    # complaint (RFX-303).
+    if budget_detail:
+        detail += "; " + budget_detail
     print("CORPUS-LIVE: %s (%s)" % ("PASS" if exit_code == 0 else "FAIL", detail))
 
     return exit_code
