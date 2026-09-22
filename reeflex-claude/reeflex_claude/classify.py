@@ -69,20 +69,35 @@ human (R2) rather than being refused outright (R3).
 ==============================================================================
 AXIS MAPPING RATIONALE (SPEC §4)
 ==============================================================================
-All three axes are ALWAYS set.  Safe-conservative defaults (SPEC §2):
-  unknown reversibility -> irreversible
-  unknown blast_radius  -> systemic
-  unknown externality   -> internal  (coding-agent tools are software; "physical"
-                                      is reserved for SCADA/robotics/energy -- not
-                                      applicable here; internal is the conservative
-                                      choice for an unknown software tool)
+All three axes are ALWAYS set.  SPEC §2 names a safe-conservative default per
+axis for an adapter that cannot determine one; what THIS adapter emits on its
+unknown-tool path is listed beside it, because the two are not the same:
 
-Note: the general SPEC §2 note about "unknown externality -> physical" applies to
-adapters that cannot determine externality.  For this adapter, we CAN determine
-externality for all known tool types; the unknown-tool fallback uses "internal"
-because a coding agent tool is not expected to have physical-world effects, and
-over-firing "physical" on e.g. a linter would be actively misleading.  The
-upgrade path is to refine the allow-list of known tools.
+  SPEC §2 default for an axis an adapter cannot determine:
+    reversibility -> irreversible,  blast_radius -> systemic,
+    externality   -> physical
+
+  What THIS adapter emits when it cannot identify the tool:
+    unknown reversibility -> irreversible
+    unknown blast_radius  -> broad      (see "WHY `broad`" below)
+    unknown externality   -> outbound   (RFX-214)
+
+`physical` is reserved for SCADA/robotics/energy and is deliberately not used
+here: over-firing it on e.g. a linter would be actively misleading.  But the
+value this path emitted instead, until RFX-214, was `internal` -- and `internal`
+is the one member R5's `external_sends` budget does not charge.  A tool the
+adapter had just said it could not identify was therefore exempt from the one
+budget an operator configures to bound exactly that traffic, and tightening the
+limit did not reach it.  The conservative externality for an admitted-ignorance
+path is the member the budget CHARGES.  `internal` stays correct wherever this
+adapter genuinely KNOWS the operation is local -- the known-tool table below is
+unaffected -- and the upgrade path is still to refine that allow-list.
+
+The `unknown externality ->` line above is not decoration.  It is parsed by
+tests/test_unknown_floor_docstring_rfx214.py and asserted equal to what
+classify() actually emits, which test_classify.py in turn pins to the member
+budgets.rego charges.  This line said `internal` for fifteen days after the fix
+landed and shipped that way in two released wheels, so it is now guarded.
 
 Bash READ:
   reversibility: reversible   (no state change)
