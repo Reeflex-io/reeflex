@@ -124,6 +124,7 @@ import urllib.request
 import zipfile
 
 PYPI_JSON = "https://pypi.org/pypi/{dist}/{version}/json"
+PYPI_JSON_LATEST = "https://pypi.org/pypi/{dist}/json"
 HTTP_TIMEOUT = 60
 
 # Files that exist in a working tree as a build by-product and are never part of
@@ -205,7 +206,12 @@ WAIVED_COLLISIONS = {
 # It follows the waiver's three properties, for the same reasons:
 #
 #   1. it names the version the INDEX is serving, so it cannot silently cover a
-#      different artefact;
+#      different artefact -- AND, since RFX-379, that name is no longer taken on
+#      trust.  The two customer-facing sentences are printed from a measurement
+#      of the index; `index_serves` is cross-checked against it and a divergence
+#      is reported as MISDESCRIBED.  It was a hand-typed string reprinted as a
+#      fact, which is the one thing a table in this file is not allowed to be:
+#      the claim a check exists to verify cannot be the claim it takes as given;
 #   2. it must name a ticket -- an unexplained annotation is how a gate's
 #      output rots into noise;
 #   3. IT SELF-EXPIRES.  The entry applies only while the package is
@@ -341,6 +347,46 @@ def fetch_wheel(dist: str, version: str):
     raise IndexUnreachable("%s==%s is on the index but ships no wheel" % (dist, version))
 
 
+def fetch_served_version(dist: str):
+    """The version this index calls latest for `dist`, or None if it has none.
+
+    `fetch_wheel` above can only ever answer "is THIS exact version there".  It
+    is therefore structurally unable to answer the one question the flagged-lag
+    line puts in front of a reader — *what does `pip install <dist>` serve right
+    now* — which is why that sentence was printed from a hand-typed field
+    instead of measured (RFX-379).  This is the missing instrument: the
+    dist-scoped JSON document, whose `info.version` is what the index itself
+    calls the latest release.
+
+    Two limits, stated because the line built on this is customer-facing:
+
+      * `info.version` is the index's own notion of latest.  A newest release
+        that is YANKED or a PRE-RELEASE is not what `pip install <dist>` would
+        resolve to, and this function does not model either — it reports what
+        the index says, and the caller says so in those words rather than
+        claiming to have simulated pip.
+      * a 404 here means the index has no release of this package AT ALL, which
+        is a different fact from "not this version" and is returned as None
+        rather than raised.  Everything else is an outage and must fail closed,
+        for the same reason `fetch_wheel` does: a declaration checked against an
+        index that did not answer is a declaration that was not checked.
+    """
+    url = PYPI_JSON_LATEST.format(dist=dist)
+    try:
+        with urllib.request.urlopen(url, timeout=HTTP_TIMEOUT) as resp:
+            meta = json.load(resp)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None  # the package has no release on this index at all
+        raise IndexUnreachable("%s -> HTTP %s" % (url, exc.code))
+    except Exception as exc:  # noqa: BLE001 - urllib raises a wide family here
+        raise IndexUnreachable("%s -> %s" % (url, exc))
+    served = (meta.get("info") or {}).get("version")
+    if not served:
+        raise IndexUnreachable("%s -> the index answered with no info.version" % url)
+    return served
+
+
 # ---------------------------------------------------------------------------
 # comparison
 # ---------------------------------------------------------------------------
@@ -411,8 +457,9 @@ def compare(wheel_bytes: bytes, pkg_dir: str, module: str) -> dict:
 # the check
 # ---------------------------------------------------------------------------
 
-def check(repo_root: str, fetch=fetch_wheel, only=None, waivers=None, flagged=None):
-    """Return (ok, lines). `fetch` is injectable so the selftest needs no network."""
+def check(repo_root: str, fetch=fetch_wheel, only=None, waivers=None, flagged=None,
+          served=fetch_served_version):
+    """Return (ok, lines). `fetch` and `served` are injectable so the selftest needs no network."""
     if waivers is None:
         waivers = WAIVED_COLLISIONS
     if flagged is None:
@@ -424,6 +471,7 @@ def check(repo_root: str, fetch=fetch_wheel, only=None, waivers=None, flagged=No
     out, collisions, unreachable, matched, unpublished = [], [], [], [], []
     waived, used_waivers = [], set()
     flagged_lags, used_flags = [], set()
+    misdescribed = []
 
     if not packages:
         out.append("  no directory with a [project] name+version was found")
@@ -446,14 +494,35 @@ def check(repo_root: str, fetch=fetch_wheel, only=None, waivers=None, flagged=No
             if flag:
                 used_flags.add(dist)
                 flagged_lags.append("%s==%s (%s)" % (dist, version, flag["ticket"]))
+                # RFX-379.  These two sentences are the only place this whole
+                # component speaks about the artefact a customer actually gets,
+                # and until now BOTH were printed out of `flag["index_serves"]`
+                # — a string typed by the person who wrote the entry, which
+                # nothing ever compared against the index.  A declaration
+                # asserting the one fact the check does not verify is the shape
+                # this file exists to refuse, so the sentence is measured now
+                # and the declared value is demoted to a cross-check.
+                try:
+                    actually_serves = served(dist)
+                except IndexUnreachable as exc:
+                    unreachable.append(dist)
+                    out.append("  %s==%s: INDEX-UNREACHABLE (%s)" % (dist, version, exc))
+                    continue
+                shown = (actually_serves if actually_serves
+                         else "no release at all")
                 out.append("  %s==%s: UNPUBLISHED — the tree is ahead of the index, "
                            "which is not a collision, BUT the index still serves "
                            "%s==%s and %s: %s"
-                           % (dist, version, dist, flag["index_serves"],
-                              flag["ticket"], flag["why"]))
+                           % (dist, version, dist, shown, flag["ticket"], flag["why"]))
                 out.append("      `pip install %s` keeps serving %s until this "
                            "version is published; the tree moving is not the "
-                           "customer getting the fix." % (dist, flag["index_serves"]))
+                           "customer getting the fix.  (Measured on the index "
+                           "just now as its latest release, not read out of the "
+                           "declaration.)" % (dist, shown))
+                if actually_serves != flag["index_serves"]:
+                    misdescribed.append(
+                        "%s (the entry names %s, the index serves %s)"
+                        % (dist, flag["index_serves"], shown))
             else:
                 out.append("  %s==%s: UNPUBLISHED — the tree is ahead of the index, "
                            "which is not a collision" % (dist, version))
@@ -557,6 +626,32 @@ def check(repo_root: str, fetch=fetch_wheel, only=None, waivers=None, flagged=No
                    "index, so the lag this entry warns about is over and it warns "
                    "about nothing. Delete it from UNPUBLISHED_WITH_A_TICKET" % line)
 
+    # RFX-379, third state: the entry is still USED — the package really is
+    # ahead of the index — and the version it names is no longer the one the
+    # index serves.  Reported, counted, and NOT a failure, and the trade is
+    # measured rather than assumed:
+    #
+    #   * the harm was the false SENTENCE, and that harm is already gone: the
+    #     two customer-facing lines above are measured now, so they are right
+    #     whatever the declaration says.  What is left is a bookkeeping
+    #     discrepancy in a table, not a wrong statement about an artefact.
+    #   * failing here would reintroduce the exact cost RFX-377 measured.  This
+    #     state can be entered with NO change to the tree — someone uploads an
+    #     intermediate version and `main` goes red afterwards, on a sha nobody
+    #     touched, blocking whoever merges next.  That is the shape that cost
+    #     six blocked pull requests on 2026-09-20, and it is not worth paying
+    #     twice for a field that no longer decides anything.
+    #   * the resurrection path is why the line has to exist at all.  An entry
+    #     EXPIRES when the release happens (non-failing, above), nothing forces
+    #     its deletion, and the next version bump brings it back into use
+    #     carrying the version it named a release ago.  Measured end to end in
+    #     qa--281's three-step repro.
+    for line in misdescribed:
+        out.append("  MISDESCRIBED DECLARATION: %s — the lag is real, but the "
+                   "version this entry names is not the one the index serves. The "
+                   "lines above are measured, so nothing false was printed; fix "
+                   "`index_serves` in UNPUBLISHED_WITH_A_TICKET" % line)
+
     if collisions:
         out.append("PUBLISHED-CONTENT: FAIL (%s published under a version string the "
                    "tree still declares, with different content — a customer running "
@@ -582,6 +677,12 @@ def check(repo_root: str, fetch=fetch_wheel, only=None, waivers=None, flagged=No
     if expired or expired_flags:
         detail += (", %d EXPIRED declaration(s) describing an artefact no longer "
                    "under test — delete them" % (len(expired) + len(expired_flags)))
+    # Same reasoning as the expiry debt: a discrepancy only a log-scroller sees
+    # is the quiet rot these tables' rules exist to prevent, so it rides on the
+    # anchored line gate.py shows as the component detail.
+    if misdescribed:
+        detail += (", %d declaration(s) MISDESCRIBING the version the index serves "
+                   "— fix `index_serves`" % len(misdescribed))
     out.append("PUBLISHED-CONTENT: PASS (%s)" % detail)
     return True, out
 
@@ -740,8 +841,15 @@ def selftest() -> int:
         f = {"reeflex-demo": {"index_serves": "1.0.0", "ticket": "RFX-DEMO",
                               "why": "the old wheel does the bad thing"}}
 
+        # `served` is the RFX-379 instrument and it is injected in every arm
+        # below, for the reason arm 6 exists: an arm that reaches the real
+        # index is an arm whose verdict depends on the network.  `serves_100`
+        # is "the index agrees with the declaration"; the arms that need a
+        # disagreement build their own.
+        serves_100 = lambda d: "1.0.0"  # noqa: E731
+
         # 7e. flagged + still unpublished -> PASS, and the ticket is ON the line
-        ok, lines = check(root, fetch=lambda d, v: None, flagged=f)
+        ok, lines = check(root, fetch=lambda d, v: None, flagged=f, served=serves_100)
         record("flagged lag -> PASS, names the ticket and the served version",
                ok and any("UNPUBLISHED" in l and "RFX-DEMO" in l and "1.0.0" in l
                           for l in lines)
@@ -750,7 +858,7 @@ def selftest() -> int:
         # 7f. the control for 7e: an UNPUBLISHED package with NO entry must
         #     stay plain.  Without this, 7e could pass because every
         #     UNPUBLISHED line had grown a ticket.
-        ok, lines = check(root, fetch=lambda d, v: None, flagged={})
+        ok, lines = check(root, fetch=lambda d, v: None, flagged={}, served=serves_100)
         record("an unflagged lag stays a plain UNPUBLISHED line",
                ok and any("UNPUBLISHED" in l for l in lines)
                and not any("RFX-DEMO" in l or "NOT routine" in l for l in lines))
@@ -795,6 +903,97 @@ def selftest() -> int:
                           flagged=f_absent)
         record("a lag flag for a package this run did not examine is not judged",
                ok and not any("EXPIRED LAG FLAG" in l for l in lines))
+
+        # --- RFX-379: the declared `index_serves` is cross-checked, and the
+        #     customer-facing sentence is measured -----------------------------
+        # Every arm here pairs with a control, because the failure this closes
+        # is precisely a claim asserted with no complement to prove it.
+
+        # 7i. THE DEFECT. The lag is real, the entry still names 1.0.0, and the
+        #     index has moved to 1.0.1. Before this change both sentences said
+        #     1.0.0 and the run was indistinguishable from a correct one.
+        serves_101 = lambda d: "1.0.1"  # noqa: E731
+        ok, lines = check(root, fetch=lambda d, v: None, flagged=f, served=serves_101)
+        record("a declaration naming a version the index left is reported",
+               any("MISDESCRIBED DECLARATION" in l and "1.0.0" in l and "1.0.1" in l
+                   for l in lines))
+        record("...and the customer-facing sentence names the MEASURED version",
+               any("keeps serving 1.0.1" in l for l in lines)
+               and not any("keeps serving 1.0.0" in l for l in lines))
+        record("...and it is counted on the anchored line, not only in the body",
+               any("PUBLISHED-CONTENT:" in l and "MISDESCRIBING" in l for l in lines))
+        record("...and it does NOT fail the gate (the RFX-377 reversal holds)", ok)
+
+        # 7i-ii. THE CONTROL for 7i. Same fixture, same lag, index agrees with
+        #     the declaration -> no report at all. Without this, 7i could pass
+        #     because every flagged lag had grown a MISDESCRIBED line.
+        ok, lines = check(root, fetch=lambda d, v: None, flagged=f, served=serves_100)
+        record("a declaration the index agrees with is NOT reported",
+               ok and not any("MISDESCRIBED" in l for l in lines)
+               and any("keeps serving 1.0.0" in l for l in lines))
+
+        # 7j. THE RESURRECTION, which is the path that makes 7i reachable and
+        #     which the ticket did not have. An entry EXPIRES when the release
+        #     happens (7g, non-failing), nothing forces its deletion, and the
+        #     NEXT bump brings it back into use still naming the version it
+        #     named a release ago. Driven here as the two steps in order.
+        ok, lines_expired = check(
+            root, fetch=lambda d, v: (_fake_wheel("reeflex_demo", tree_files), "t"),
+            flagged=f, served=serves_100)
+        bumped = {"__init__.py": "VERSION = 1\n"}  # same content, new version below
+        with open(os.path.join(root, "reeflex-demo", "pyproject.toml"), "w") as fh:
+            fh.write('[project]\nname = "reeflex-demo"\nversion = "1.2.4"\n')
+        ok, lines_back = check(root, fetch=lambda d, v: None, flagged=f,
+                               served=serves_101)
+        with open(os.path.join(root, "reeflex-demo", "pyproject.toml"), "w") as fh:
+            fh.write('[project]\nname = "reeflex-demo"\nversion = "1.2.3"\n')
+        record("an entry expires, is not deleted, and comes back into use",
+               any("EXPIRED LAG FLAG" in l for l in lines_expired)
+               and any("NOT routine" in l for l in lines_back))
+        record("...and the resurrected entry cannot print the version it left",
+               any("MISDESCRIBED DECLARATION" in l for l in lines_back)
+               and not any("keeps serving 1.0.0" in l for l in lines_back))
+
+        # 7k. THE OUTAGE CONTROL the ticket asks for by name: an index that does
+        #     not answer must NOT read as a declaration misdescribing itself.
+        #     Note `fetch` is healthy here and reports the lag -- the ONLY
+        #     variable against 7e is that the new instrument is down, which is
+        #     what makes this a control over the new branch and not over 7h's.
+        def served_boom(d):
+            raise IndexUnreachable("simulated outage on the dist-scoped document")
+
+        ok, lines = check(root, fetch=lambda d, v: None, flagged=f, served=served_boom)
+        record("an index outage is not read as a misdescription",
+               not ok and any("fails closed" in l for l in lines)
+               and not any("MISDESCRIBED" in l for l in lines))
+
+        # 7l. a package the index has NO release of at all. 404 on the
+        #     dist-scoped document is a fact, not an outage, and the line must
+        #     say what it is rather than repeating the declaration or crashing.
+        ok, lines = check(root, fetch=lambda d, v: None, flagged=f,
+                          served=lambda d: None)
+        record("an index serving no release at all says so, and is a misdescription",
+               ok and any("no release at all" in l for l in lines)
+               and any("MISDESCRIBED DECLARATION" in l for l in lines))
+
+        # 7m. the instrument is consulted ONLY where its answer is printed. A
+        #     future edit that hoists the call into the package loop would make
+        #     every green run spend a network request per package and would put
+        #     an outage in front of a comparison that needs no index-latest at
+        #     all -- caught here rather than in a release round.
+        calls = []
+
+        def served_counting(d):
+            calls.append(d)
+            return "1.0.0"
+
+        check(root, fetch=lambda d, v: (_fake_wheel("reeflex_demo", tree_files), "t"),
+              flagged=f, served=served_counting)
+        record("a published package costs no index-latest lookup", calls == [])
+        check(root, fetch=lambda d, v: None, flagged={}, served=served_counting)
+        record("an UNFLAGGED lag costs no index-latest lookup either", calls == [])
+        check(root, fetch=lambda d, v: None, flagged=f, served=served_counting)
+        record("a flagged lag costs exactly one", calls == ["reeflex-demo"])
 
         # 8. discovery finds the package by walking, not by a hardcoded list
         record("discovery finds the package",
