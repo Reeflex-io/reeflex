@@ -879,6 +879,12 @@ _SHELL_KEYWORDS = frozenset([
     "if", "while", "until", "for", "select", "case", "esac", "in",
 ])
 
+# RFX-405.  The prefix words `_peel_prefixed_group` may step over to reach a
+# subshell group behind them -- exactly the words this module already drops
+# before it reads a command word, and no others.  `_UNBOUNDED_WRAPPERS` is
+# excluded deliberately: see that function's docstring.
+_PREFIX_WORDS = _SHELL_KEYWORDS | _WRAPPER_COMMANDS
+
 # Shells: `sh -c '<inner>'` is expanded and <inner> classified in its place.
 _SHELL_COMMANDS = frozenset(["sh", "bash", "zsh", "dash", "ksh", "ash", "busybox"])
 
@@ -3448,6 +3454,59 @@ def _peel_group(segment: str) -> str:
     return text[lo:hi]
 
 
+def _peel_prefixed_group(segment: str) -> str:
+    """
+    `_peel_group`, but reaching a group that sits BEHIND a prefix word.
+
+    RFX-405.  `_peel_group` strips a `(` only at position 0 of the segment, and
+    it runs in `_shell_segments` BEFORE `_peel_wrappers` drops the prefix words.
+    Nothing peels the group again once the prefix is gone, so every prefix this
+    module already knows how to drop restored RFX-329's escape in full:
+
+        { (rm -rf /var/lib/pgsql); }              -> execute/recoverable/scoped
+        time (rm -rf /var/lib/pgsql)              -> execute/recoverable/scoped
+        if (rm -rf /var/lib/pgsql); then :; fi    -> execute/recoverable/scoped
+
+    `_safe_split` tokenises `{ (rm -rf V)` as ['{', '(rm', '-rf', 'V)'];
+    `_peel_wrappers` drops `{`; and the surviving command word is the literal
+    `(rm`, which matches no branch of `_infra_destructive` or
+    `_classify_bash_delete`.  The line falls to the default Bash EXECUTE arm and
+    the target ref is mangled, so R6 cannot rescue it either -- the same failure
+    RFX-329 described, one construct out.  Nine prefixes bash actually accepts
+    were measured escaping, against the SAME nine with the bare command denying.
+
+    THE CONDITION IS DELIBERATELY NARROW.  A word is consumed only when it is
+    one this module already drops (`_SHELL_KEYWORDS` or `_WRAPPER_COMMANDS`)
+    AND what follows it begins with `(` AND `_peel_group` actually takes
+    something off.  Anything else is returned untouched, so the ordinary path
+    is unchanged and `_peel_wrappers` still does the prefix work downstream.
+
+    `_UNBOUNDED_WRAPPERS` (`xargs`, `parallel`) is NOT in the set on purpose:
+    those two carry a meaning `_peel_wrappers` reports to the caller, and
+    consuming them here would drop it.  They cannot precede a group in bash
+    anyway -- an external command takes no subshell as an argument.
+
+    Each turn of the loop consumes at least one whole word, so it terminates.
+    """
+    text = _peel_group(segment)
+
+    while True:
+        head, sep, rest = text.partition(" ")
+        if not sep:
+            return text
+        if os.path.basename(head).lower() not in _PREFIX_WORDS:
+            return text
+        rest = rest.lstrip()
+        if not rest.startswith("("):
+            return text
+        peeled = _peel_group(rest)
+        if peeled == rest:
+            # `((...))` is arithmetic and `_peel_group` leaves it alone; so can
+            # this.  Returning the segment unchanged keeps the existing reading.
+            return text
+        text = peeled
+
+
 def _shell_c_payload(tokens: list):
     """
     Return the program text of a `sh -c '<inner>'` invocation, else None.
@@ -3619,7 +3678,10 @@ def _shell_segments(command: str, depth: int = 0,
         # of the command.  Done here so every consumer of a segment sees it:
         # `_classify_segment`, and `_sql_reachable`, which could not see the
         # client in `(psql -c '...')` either.
-        segment = _peel_group(segment)
+        # RFX-405: and again behind a prefix word, because `_peel_group` only
+        # reaches a `(` at position 0 and this step runs before the prefix is
+        # dropped -- `if (rm -rf V); then` left `(rm` as the command word.
+        segment = _peel_prefixed_group(segment)
         if not segment:
             continue
 

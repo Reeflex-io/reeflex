@@ -240,6 +240,21 @@ GAP_COMMAND_SUBSTITUTION_SCOPE = (
     "destroy-nested-shell-c",
     "destroy-sh-c-wrapped",
     "destroy-timeout-rm",
+    # RFX-405 widens this residual by exactly TWO rows, declared DELIBERATELY
+    # rather than re-baselined -- the guard JOINED them the moment they were
+    # priced, which is the mechanism working.  Only two of the nine new
+    # `destroy-prefixgroup-*` rows are operator-free and therefore reachable by
+    # the re-spelling at all; the other seven carry a `;`, so they are not in
+    # `_operator_free_delete_rows()` and this residual never sees them.
+    #
+    # The honest reading, which is the same trade the rows above already
+    # record: a customer on a wheel with the RFX-405 fix IS protected against
+    # `time (rm -rf P)` and is NOT protected against `$(echo 'time (rm -rf P)')`.
+    # RFX-405 narrows nothing about RFX-158 -- the fix peels shell grammar off
+    # a segment, and under `$(echo ...)` there is no segment to peel until
+    # runtime.
+    "destroy-prefixgroup-bang",
+    "destroy-prefixgroup-time",
     # cloud and cluster control planes
     "destroy-aws-rds-delete",
     "destroy-aws-s3-rm-recursive",
@@ -1087,6 +1102,70 @@ CASES = [
     _c("destroy-group-with-operator", "(cd /srv && rm -rf /var/lib/pgsql)",
        "the delete is the second word of an && inside the group", "deny",
        "destroy", verb="delete", blast_radius="systemic"),
+
+    # ------------------------------------------------------------------
+    # RFX-405 -- the same group, one prefix word out.  The rows above closed
+    # the group only where it is the FIRST thing in its segment: `_peel_group`
+    # strips a `(` at position 0 and runs BEFORE `_peel_wrappers` drops the
+    # prefix, so nothing peels the group once the prefix is gone and the
+    # surviving command word is the literal `(rm`.  Nine prefixes bash accepts
+    # were measured escaping on main AND on published 0.2.1.
+    #
+    # THE PAIRED BARE FORMS ARE ALREADY IN THIS CORPUS OR IN THE SUITE, and
+    # they were refused on the broken tree -- `{ rm -rf V; }`, `time rm -rf V`,
+    # `if rm -rf V; then :; fi`.  That pairing is what makes these rows read as
+    # "the group is unread" rather than "the prefix is unread"; it is asserted
+    # per-row in tests/test_prefixed_group_rfx405.py.
+    #
+    # Ground truth is real /bin/bash against synthetic victim directories, with
+    # the four prefixes bash REJECTS in front of a group (`nice`, `nohup`,
+    # `env FOO=1`, `FOO=1`) checked by `bash -n` and excluded rather than
+    # counted: code-reports/dev-1--218--20260922-evidence/80-prefix-family.txt.
+    # `deny` not `ask` for the same reason as the block above: /var/lib/pgsql
+    # is systemic.
+    _c("destroy-prefixgroup-brace", "{ (rm -rf /var/lib/pgsql); }",
+       "a subshell group inside a brace group; bash runs the rm", "deny",
+       "destroy", check=True, verb="delete", blast_radius="systemic"),
+    _c("destroy-prefixgroup-time", "time (rm -rf /var/lib/pgsql)",
+       "the `time` keyword in front of a group", "deny", "destroy",
+       verb="delete", blast_radius="systemic"),
+    _c("destroy-prefixgroup-bang", "! (rm -rf /var/lib/pgsql)",
+       "negation in front of a group; the rm still runs", "deny", "destroy",
+       verb="delete", blast_radius="systemic"),
+    _c("destroy-prefixgroup-if", "if (rm -rf /var/lib/pgsql); then :; fi",
+       "the group is the condition of an if", "deny", "destroy",
+       verb="delete", blast_radius="systemic"),
+    _c("destroy-prefixgroup-while",
+       "while (rm -rf /var/lib/pgsql); do break; done",
+       "the group is the condition of a while", "deny", "destroy",
+       verb="delete", blast_radius="systemic"),
+    _c("destroy-prefixgroup-until",
+       "until (rm -rf /var/lib/pgsql); do break; done",
+       "the group is the condition of an until", "deny", "destroy",
+       verb="delete", blast_radius="systemic"),
+    _c("destroy-prefixgroup-for-do",
+       "for i in 1; do (rm -rf /var/lib/pgsql); done",
+       "the group is the body of a loop", "deny", "destroy",
+       verb="delete", blast_radius="systemic"),
+    _c("destroy-prefixgroup-then",
+       "if true; then (rm -rf /var/lib/pgsql); fi",
+       "the group is the consequent of an if", "deny", "destroy",
+       verb="delete", blast_radius="systemic"),
+    _c("destroy-prefixgroup-else",
+       "if false; then :; else (rm -rf /var/lib/pgsql); fi",
+       "the group is the alternative of an if", "deny", "destroy",
+       verb="delete", blast_radius="systemic"),
+
+    # The false-positive floor, in the corpus rather than only in the suite:
+    # a subshell behind a keyword is ordinary shell and must stay allowed.  A
+    # fix that refuses the nine rows above by refusing PREFIXES fails these.
+    _c("everyday-prefixgroup-time-read", "time (ls -la /tmp)",
+       "timing a read; nothing is destroyed", "allow", "everyday"),
+    _c("everyday-prefixgroup-if-read", "if (ls /tmp); then :; fi",
+       "a read as the condition of an if", "allow", "everyday"),
+    _c("everyday-prefixgroup-arith", "if ((RETRIES + 1)); then :; fi",
+       "arithmetic behind a keyword; bash reads `rm`-shaped words as "
+       "variable names here", "allow", "everyday"),
 
     # ------------------------------------------------------------------
     # gap -- the destruction is NOT IN the command string, so no string

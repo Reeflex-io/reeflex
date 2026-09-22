@@ -60,6 +60,8 @@
         "destroy-nested-shell-c",
         "destroy-sh-c-wrapped",
         "destroy-timeout-rm",
+        "destroy-prefixgroup-bang",
+        "destroy-prefixgroup-time",
         "destroy-aws-rds-delete",
         "destroy-aws-s3-rm-recursive",
         "destroy-az-group-delete",
@@ -2087,6 +2089,186 @@
       "residual": null,
       "expect_verb": "delete",
       "expect_blast_radius": "systemic",
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-prefixgroup-brace",
+      "tool": "Bash",
+      "input": {
+        "command": "{ (rm -rf /var/lib/pgsql); }"
+      },
+      "effect": "a subshell group inside a brace group; bash runs the rm",
+      "expect": "deny",
+      "family": "destroy",
+      "check": true,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic",
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-prefixgroup-time",
+      "tool": "Bash",
+      "input": {
+        "command": "time (rm -rf /var/lib/pgsql)"
+      },
+      "effect": "the `time` keyword in front of a group",
+      "expect": "deny",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic",
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-prefixgroup-bang",
+      "tool": "Bash",
+      "input": {
+        "command": "! (rm -rf /var/lib/pgsql)"
+      },
+      "effect": "negation in front of a group; the rm still runs",
+      "expect": "deny",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic",
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-prefixgroup-if",
+      "tool": "Bash",
+      "input": {
+        "command": "if (rm -rf /var/lib/pgsql); then :; fi"
+      },
+      "effect": "the group is the condition of an if",
+      "expect": "deny",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic",
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-prefixgroup-while",
+      "tool": "Bash",
+      "input": {
+        "command": "while (rm -rf /var/lib/pgsql); do break; done"
+      },
+      "effect": "the group is the condition of a while",
+      "expect": "deny",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic",
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-prefixgroup-until",
+      "tool": "Bash",
+      "input": {
+        "command": "until (rm -rf /var/lib/pgsql); do break; done"
+      },
+      "effect": "the group is the condition of an until",
+      "expect": "deny",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic",
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-prefixgroup-for-do",
+      "tool": "Bash",
+      "input": {
+        "command": "for i in 1; do (rm -rf /var/lib/pgsql); done"
+      },
+      "effect": "the group is the body of a loop",
+      "expect": "deny",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic",
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-prefixgroup-then",
+      "tool": "Bash",
+      "input": {
+        "command": "if true; then (rm -rf /var/lib/pgsql); fi"
+      },
+      "effect": "the group is the consequent of an if",
+      "expect": "deny",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic",
+      "expect_target_ref": null
+    },
+    {
+      "id": "destroy-prefixgroup-else",
+      "tool": "Bash",
+      "input": {
+        "command": "if false; then :; else (rm -rf /var/lib/pgsql); fi"
+      },
+      "effect": "the group is the alternative of an if",
+      "expect": "deny",
+      "family": "destroy",
+      "check": false,
+      "residual": null,
+      "expect_verb": "delete",
+      "expect_blast_radius": "systemic",
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-prefixgroup-time-read",
+      "tool": "Bash",
+      "input": {
+        "command": "time (ls -la /tmp)"
+      },
+      "effect": "timing a read; nothing is destroyed",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": null,
+      "expect_blast_radius": null,
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-prefixgroup-if-read",
+      "tool": "Bash",
+      "input": {
+        "command": "if (ls /tmp); then :; fi"
+      },
+      "effect": "a read as the condition of an if",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": null,
+      "expect_blast_radius": null,
+      "expect_target_ref": null
+    },
+    {
+      "id": "everyday-prefixgroup-arith",
+      "tool": "Bash",
+      "input": {
+        "command": "if ((RETRIES + 1)); then :; fi"
+      },
+      "effect": "arithmetic behind a keyword; bash reads `rm`-shaped words as variable names here",
+      "expect": "allow",
+      "family": "everyday",
+      "check": false,
+      "residual": null,
+      "expect_verb": null,
+      "expect_blast_radius": null,
       "expect_target_ref": null
     },
     {
