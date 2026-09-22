@@ -349,7 +349,10 @@ cover it and neither is total:
     target.ref is `main` -- cannot match a path prefix, so under the shipped
     posture (`default_protected := false`) R6 does not reach it.  Setting
     `default_protected := true` does hold all three such rows, measured, at a
-    measured cost of 5 false positives across the corpus' 73 everyday rows.
+    measured cost of 5 false positives across the corpus' 96 everyday rows.
+    Both counts are of the corpus AT THIS COMMIT and nothing guards them: the
+    corpus has gone 82 -> 84 -> 252 rows since 2026-08-22, so re-count before
+    citing either rather than trusting the denominator written here.
 
 Those three rows are the ones still carrying `residual=RESIDUAL_TICKET` in
 conformance.py.  Whether the canon should hold an irreversible destruction of a
