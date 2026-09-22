@@ -62,12 +62,66 @@ is worse than no tripwire. One bulk `opa eval` from Python has no such cap,
 takes ~1 subprocess, and -- the real reason -- can BISECT and print the exact
 envelope, which `eval_conflict_error at reeflex.rego:331` cannot.
 
+THE GRID WENT BLIND ONCE ALREADY, AND THAT IS WHY THE COVERAGE TEST EXISTS
+==========================================================================
+The paragraph below said "add the field as a DIMENSION" from the day this file
+landed, and nothing enforced it. Measured on main `954ed28` (dev-1 round 210),
+14 days later, this grid reached SIX of the pack's NINE rule ids:
+
+    reached  authority_change_prod, default_allow, irreversible_broad_prod,
+             irreversible_protected_asset_prod, irreversible_systemic_prod,
+             read_only_internal
+    NOT      unclassified_action     (R0 reads `provenance.undeclared`)
+             session_delete_budget   (R5 reads `cumulative` / `params`)
+             cumulative_budget       (same)
+
+A rule this grid cannot REACH contributes no pairs, so every guard separating it
+from another rule was unexercised here. The other totality grid in the repo --
+`test_protected_asset_rfx153.TestPrecedenceIsTotalAcrossTheGrid`, which
+`reeflex.rego`'s own R5 guard comment cites -- reached a DIFFERENT six: it fixes
+`ability` at `bash/rm` and never uses `verb: read`, so it cannot reach
+`authority_change_prod` or `read_only_internal`. Between them the two grids
+reached eight of nine; `cumulative_budget` was reached by neither.
+
+Guards fell in the gap between them. Each `not rN_...` line in `reeflex.rego` was
+deleted ALONE and the three published instruments re-run; the ones NO instrument
+caught were:
+
+    decision -> cumulative_budget    not r3_deny
+                                     not r2_require_approval
+                                     not r0_unclassified
+    decision -> authority_change_prod
+                                     not budget_require_approval
+
+The whole `cumulative_budget` body is there because that rule id was reachable by
+NEITHER grid. The R7 line is the headline: delete it and
+
+    opa test reeflex-core/policy/        GREEN
+    this file, as it stood on main        GREEN
+    TestPrecedenceIsTotalAcrossTheGrid    GREEN
+    a real core, app.decide.process()     HTTP 500  reeflex.core/fail_closed
+
+on `ssh/revoke-key` against /srv/prod/ssh/authorized_keys in production, count 25
+-- a session one call over the shipped deletions budget of 20. On the unmodified
+pack that same envelope answers 200 / session_delete_budget, so the collision is
+reachable rather than contrived.
+
+NOT every budget guard is blind, and the difference was measured rather than
+assumed: the SAME deletion in the R1 body is caught, by `opa test`, because the
+pack's own _test.rego files reach that pair.
+
+So `test_the_grid_reaches_every_rule_id_the_pack_can_emit` below reads the rule
+ids out of the PACK and fails if the grid cannot produce one of them. The
+instruction is now enforced rather than advised.
+
 WHAT THIS FILE DOES NOT CLAIM
 =============================
-It is a grid, not a proof. An envelope shape outside the grid -- a rule keyed
-on a field no dimension here varies -- can still collide unseen. When you add a
-rule that reads a NEW input field, add that field as a DIMENSION below; the
-grid is the thing to extend, not a list of cases to append to.
+It is a grid, not a proof. Reaching every rule id is necessary, not sufficient:
+it does not establish that every co-satisfiable PAIR is present, only that no
+rule is entirely absent. An envelope shape outside the grid can still collide
+unseen. When you add a rule that reads a NEW input field, add that field as a
+DIMENSION below; the grid is the thing to extend, not a list of cases to append
+to -- and the coverage test will say so if you forget.
 
 It also says nothing about WHICH rule should win a genuine tie. That is a
 precedence decision for whoever owns the two rules. This file only insists that
@@ -84,6 +138,7 @@ import itertools
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import unittest
@@ -128,25 +183,56 @@ REF = [
     "",                      # absent / unknown
 ]
 
-#: 2 * 3 * 2 * 2 * 2 * 5 * 3
-EXPECTED_GRID_SIZE = 720
+#: WHICH CLASSIFICATION INPUTS CORE GUESSED (R0). `provenance` is COMPUTED by
+#: core, never caller-supplied, so these are the shapes core's own Python layer
+#: hands the pack when the adapter left a field out and the conservative default
+#: filled it. R0's three clauses all key on `provenance.undeclared`, and nothing
+#: else in the pack reads it -- so with no dimension here, `unclassified_action`
+#: could not fire on this grid at all and every pair involving it was unreachable.
+UNDECLARED = [
+    [],                                          # adapter declared everything
+    ["axes.reversibility"],
+    ["axes.blast_radius"],
+    ["target.environment"],
+    ["axes.reversibility", "target.environment"],
+]
+
+#: WHAT THE SESSION HAS ALREADY SPENT (R5). budgets.rego reads `input.cumulative`
+#: (ledger.py, SPEC §4.1) and `input.params.amount`/`.currency`. Neither was
+#: varied here before: `params` was hardcoded `{}` and `cumulative` was absent,
+#: so no configured dimension could trip and BOTH R5 rule ids were unreachable.
+#: One entry per dimension in budgets.rego's `default_budgets`, each just over
+#: its shipped limit, plus the all-quiet control.
+BUDGET = [
+    ({}, {}),                                                        # CONTROL
+    ({}, {"count_by_verb": {"delete": 21}, "total_count": 21}),      # deletions > 20
+    ({"amount": 200000, "currency": "EUR"},
+     {"amount_by_currency": {"EUR": 900000}}),                       # money > 5000
+    ({}, {"count_by_externality": {"outbound": 201},
+          "total_count": 201}),                                      # objects_touched > 200
+]
+
+#: 2 * 3 * 2 * 2 * 2 * 5 * 3 * 5 * 4
+EXPECTED_GRID_SIZE = 14400
 
 
-def _envelope(rev, blast, ext, env, verb, ability, ref, i):
+def _envelope(rev, blast, ext, env, verb, ability, ref, undeclared, budget, i):
     """An Action Envelope in the shape the reference adapters emit."""
-    return {
+    params, cumulative = budget
+    out = {
         "reeflex_version": "0.1",
         "agent": {
             "id": "agent:totality-grid",
             "on_behalf_of": "user:synthetic",
             # One session per point. A shared session_id would let R5's
             # cumulative budgets trip partway through the grid and silently
-            # change which rule is under test.
+            # change which rule is under test -- the BUDGET dimension states
+            # each point's prior spend explicitly instead.
             "session_id": f"totality_grid_{i:05d}",
         },
         "action": {"namespace": "grid", "verb": verb, "ability": ability},
         "target": {"kind": "command", "ref": ref, "environment": env},
-        "params": {},
+        "params": params,
         "magnitude": {"count": 1},
         "axes": {"reversibility": rev, "blast_radius": blast, "externality": ext},
         "approval": {"present": False},
@@ -157,14 +243,25 @@ def _envelope(rev, blast, ext, env, verb, ability, ref, i):
             "signature": "ed25519:grid_placeholder",
         },
     }
+    # Both keys are OPTIONAL on the wire and both are read defensively by the
+    # pack (`object.get(input, [...], default)`), so the empty case must be an
+    # ABSENT key rather than an empty object -- otherwise the control points
+    # stop being the shape a first call in a session actually has.
+    if undeclared:
+        out["provenance"] = {"undeclared": undeclared}
+    if cumulative:
+        out["cumulative"] = cumulative
+    return out
 
 
 def _grid():
     return [
-        _envelope(rev, blast, ext, env, verb, ability, ref, i)
-        for i, (rev, blast, ext, env, verb, ability, ref) in enumerate(
+        _envelope(rev, blast, ext, env, verb, ability, ref, undeclared, budget, i)
+        for i, (rev, blast, ext, env, verb, ability, ref, undeclared, budget)
+        in enumerate(
             itertools.product(
-                REVERSIBILITY, BLAST_RADIUS, EXTERNALITY, ENVIRONMENT, VERB, ABILITY, REF
+                REVERSIBILITY, BLAST_RADIUS, EXTERNALITY, ENVIRONMENT, VERB,
+                ABILITY, REF, UNDECLARED, BUDGET
             )
         )
     ]
@@ -251,6 +348,51 @@ class TestDecisionTotality(unittest.TestCase):
             len({json.dumps(e, sort_keys=True) for e in grid}),
             EXPECTED_GRID_SIZE,
             "grid contains duplicate points -- a dimension is not varying",
+        )
+
+    def test_the_grid_reaches_every_rule_id_the_pack_can_emit(self) -> None:
+        """The grid must be able to REACH every rule, or the pairs it misses
+        are pairs nothing checks.
+
+        A conflict is a PAIR of bodies, not a rule. `decision` can only produce
+        two values on an envelope that satisfies two bodies at once -- so a rule
+        this grid can never reach contributes no pairs at all, and every guard
+        that exists to separate it from another rule is unexercised. Before the
+        `provenance` and `cumulative`/`params` dimensions were added, the grid
+        reached 6 of 9 rule ids: `unclassified_action`, `session_delete_budget`
+        and `cumulative_budget` were unreachable. Four load-bearing guards could
+        then be deleted one at a time with this file, `opa test` AND the RFX-153
+        precedence grid all green -- all three in the `cumulative_budget` body,
+        plus `not budget_require_approval` in the R7 body, the last of which
+        makes a real core answer HTTP 500 on a reachable envelope (dev-1 round
+        210; the full 26-guard table is in that round's evidence).
+
+        This is the assertion that makes the docstring's "add the dimension"
+        instruction enforceable rather than advisory: a rule added on a field no
+        dimension varies fails HERE, and the failure names it.
+        """
+        pack_rule_ids = set()
+        for rego in pathlib.Path(_policy_dir()).glob("*.rego"):
+            if rego.name.endswith("_test.rego"):
+                continue
+            pack_rule_ids |= set(
+                re.findall(r'"(reeflex\.policy/[a-z0-9_]+)"', rego.read_text())
+            )
+        self.assertTrue(pack_rule_ids, "read no rule ids out of the pack at all")
+
+        ok, decisions = _eval(_grid())
+        self.assertTrue(ok, f"pack did not evaluate: {json.dumps(decisions)[:400]}")
+        reached = {d["rule"] for d in decisions}
+
+        self.assertEqual(
+            pack_rule_ids - reached, set(),
+            "the grid cannot reach every rule the pack can emit, so any "
+            "precedence conflict involving an unreachable rule is invisible "
+            "here.\n"
+            f"  pack emits ({len(pack_rule_ids)}): {sorted(pack_rule_ids)}\n"
+            f"  grid reaches ({len(reached)}): {sorted(reached)}\n"
+            "Add the input field the missing rule reads as a DIMENSION above -- "
+            "extend the grid, do not append a case.",
         )
 
     def test_every_envelope_yields_exactly_one_decision(self) -> None:
