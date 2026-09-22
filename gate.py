@@ -1081,7 +1081,16 @@ class Gate:
             # one's cumulative ledger.
             "REEFLEX_PROBE_RUN": "gate-%d" % int(time.time()),
         }
-        code, out = self.run_cmd([sys.executable, probe], env_extra=env)
+        # --budget is RFX-146's leg: 25 `kubectl delete namespace` in ONE
+        # session, staging, which must be held by the delete budget and by
+        # nothing else. It shipped with the fix on 2026-09-07 and was invoked
+        # by NOTHING for the fifteen days after -- `--budget` appeared once in
+        # a README usage line and once in its own argparse, and this component
+        # ran the probe bare. Same failure as the one this component was
+        # written for, one flag down. It needs no extra setup: the core is
+        # already here, and it costs 25 decide calls.
+        code, out = self.run_cmd([sys.executable, probe, "--budget"],
+                                 env_extra=env)
         ok, detail = parse_corpus_live(code, out)
         # tail 22 on a pass is chosen to reach the "LIVE vs OFFLINE ORACLE"
         # block: a reader must be able to see that the comparison HAPPENED, not
