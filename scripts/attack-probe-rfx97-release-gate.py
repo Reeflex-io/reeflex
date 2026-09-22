@@ -98,11 +98,21 @@ USAGE
     --json PATH   also write the machine-readable verdict table
     --only A1,A4  run a subset
 
-EXIT CODE = the number of evasions still exploitable.  0 means every evasion in
-the table above is closed, so a release cut here closes RFX-97.  CI can gate on
-it directly.  The list is deliberately APPEND-ONLY: an evasion that has been
-found once stays in the gate forever, because "we fixed that" is a claim about
-a commit and this file is the only thing that checks it against an artefact.
+EXIT CODE = the number of tickets this run could not certify.  0 means every
+evasion in the table above is closed, so a release cut here closes RFX-97.  CI
+can gate on it directly.  The list is deliberately APPEND-ONLY: an evasion that
+has been found once stays in the gate forever, because "we fixed that" is a
+claim about a commit and this file is the only thing that checks it against an
+artefact.
+
+    EXIT 70 IS NOT A VERDICT.  Every value from 0 to the number of tickets is
+    a statement about the artefact, so a failure of this harness must not
+    produce one: a crash, an `argparse` usage error, a refusal to start, or a
+    `--json` report that could not be written all exit `EXIT_HARNESS_ERROR`
+    (70) instead.  Read 70 as "this run certified nothing" and go and look at
+    stderr; read 1 as "RFX-84 is still exploitable".  Before qa--306 both of
+    those were 1 — an unwritable `--json` path turned a run that closed 6 of 6
+    into a process that exited with the code for a live evasion.
 
 THE DISCIPLINE THIS FILE ENCODES (and why a naive probe reports the opposite)
 ============================================================================
@@ -148,8 +158,38 @@ import json
 import os
 import sys
 import time
+import traceback
 import urllib.error
 import urllib.request
+
+#: Exit code for a failure of THIS HARNESS, as opposed to a verdict about the
+#: artefact.  It is deliberately outside the range a verdict can occupy: the
+#: verdict is a COUNT of tickets this run could not certify, so every value
+#: from 0 to len(ATTACKS) already means something specific, and 1 in particular
+#: means "RFX-84 is still exploitable — do not cut this release".
+#:
+#: WHY THIS EXISTS (measured qa--306, 2026-09-22, against a core built from
+#: main a5142f2 on a spare port).  `--json` was pointed at a directory that did
+#: not exist.  The run itself was perfect — all six attacks executed, the table
+#: printed `A release cut from this artefact would close 6 of 6` and
+#: `still exploitable: none` — and then the unwritable path raised
+#: FileNotFoundError out of `main()`, CPython printed a traceback, and the
+#: process exited **1**.  A run that certified every known evasion reported the
+#: exit code that means one of them is open.  The console's runner does
+#: `--json "$L.json"` and records `probe rc=$?`, so the two readings land in the
+#: same log line with nothing to tell them apart.
+#:
+#: The rule this encodes: **only a value RETURNED by `main()` is a verdict.**
+#: Anything else — a crash, an argparse usage error, a report that could not be
+#: written — is this harness failing, and says nothing about the artefact.
+#: 70 is `EX_SOFTWARE` from sysexits.h, chosen because it is conventional and
+#: far outside any plausible ticket count.
+EXIT_HARNESS_ERROR = 70
+
+
+class HarnessError(Exception):
+    """This harness could not do its job.  Never a statement about the artefact."""
+
 
 BASE = os.environ.get("REEFLEX_PROBE_BASE", "https://api-dev.reeflex.io").rstrip("/")
 TOKEN = os.environ.get("REEFLEX_PROBE_TOKEN", "reeflex-eval-public-2026")
@@ -165,7 +205,11 @@ RESOLVER_MAP = os.environ.get("REEFLEX_PROBE_RESOLVER_MAP", "")
 # HARD GUARD: production core is out of scope for this harness, entirely.
 _host = BASE.split("://", 1)[-1].split("/", 1)[0].lower()
 if _host in ("api.reeflex.io", "reeflex.io", "www.reeflex.io"):
-    sys.exit("refusing to probe production core (%s) — api-dev / localhost only" % _host)
+    # Not `sys.exit("...")`: that exits 1, and 1 is a verdict meaning one
+    # ticket could not be certified.  Refusing to start is a harness outcome.
+    print("refusing to probe production core (%s) — api-dev / localhost only"
+          % _host, file=sys.stderr)
+    sys.exit(EXIT_HARNESS_ERROR)
 
 # Budgets this harness assumes (budgets.rego default_budgets).
 MONEY_LIMIT = 5000
@@ -1279,6 +1323,27 @@ ATTACKS = {"A1": attack_a1, "A2": attack_a2, "A3": attack_a3,
            "A4": attack_a4, "A5": attack_a5, "A6": attack_a6}
 
 
+def write_json_report(path, payload):
+    """Write the machine-readable verdict table, or raise HarnessError.
+
+    Separated from `main()` so the failure has a type.  An unwritable `--json`
+    path is not a finding about the artefact — the verdict is already computed
+    and already on stdout — but it is not nothing either: the caller asked for
+    a record of this run and did not get one, and a release gate whose evidence
+    silently went missing should not read as a clean pass.  So it becomes
+    EXIT_HARNESS_ERROR at the entry point rather than either a verdict or a
+    zero.
+    """
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+    except OSError as exc:
+        raise HarnessError(
+            "could not write the JSON report to %s: %s\n"
+            "   the verdict table above is valid and was measured; what is "
+            "missing is the machine-readable copy of it" % (path, exc)) from exc
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", dest="json_out", default="")
@@ -1370,11 +1435,11 @@ def main():
     print("\nfingerprint: %s" % json.dumps(facts))
 
     if args.json_out:
-        with open(args.json_out, "w", encoding="utf-8") as fh:
-            json.dump({"base": BASE, "run": RUN, "fingerprint": facts,
-                       "findings": findings, "tickets": tickets,
-                       "verification_readback": _VERIFICATION_READBACK,
-                       "transcript": _TRANSCRIPT}, fh, indent=2)
+        write_json_report(args.json_out,
+                          {"base": BASE, "run": RUN, "fingerprint": facts,
+                           "findings": findings, "tickets": tickets,
+                           "verification_readback": _VERIFICATION_READBACK,
+                           "transcript": _TRANSCRIPT})
         print("wrote %s (%d calls)" % (args.json_out, len(_TRANSCRIPT)))
 
     # Exit code = every ticket this run could not certify, so CI can gate on
@@ -1422,5 +1487,50 @@ def main():
     return len(open_) + len(overblock) + len(incon)
 
 
+def cli():
+    """Entry point: turn `main()` into a process exit code.
+
+    THE WHOLE POINT OF THIS FUNCTION is the distinction the exit code above
+    cannot make on its own.  `main()`'s RETURN VALUE is a verdict — a count of
+    tickets this run could not certify, which a release decision can be gated
+    on.  Every other way out of `main()` is this harness failing, and a harness
+    failure that exits 1 or 2 is indistinguishable from "one ticket open" or
+    "two tickets open" in the only channel the console's runner records
+    (`probe rc=$?`).
+
+    Three ways out, all of them reached in practice:
+
+      * an uncaught exception — measured qa--306: `--json` pointed at a
+        directory that did not exist, after a run that closed 6 of 6, exited 1;
+      * a `SystemExit` raised inside `main()` — `argparse` exits **2** on an
+        unrecognised flag, and 2 is a verdict meaning two tickets are open.
+        This is not hypothetical: the runner passed stale `--base-url`/`--token`
+        flags on 2026-08-22 and got exactly that (see the console note on
+        RFX-179);
+      * a `HarnessError` raised deliberately, as `write_json_report` does.
+
+    None of them says anything about the artefact, so none of them may return a
+    number that reads as if it did.
+    """
+    try:
+        verdict_code = main()
+    except HarnessError as exc:
+        print("\n!! HARNESS FAILURE — this run certified nothing: %s" % exc,
+              file=sys.stderr)
+        return EXIT_HARNESS_ERROR
+    except SystemExit as exc:
+        print("\n!! HARNESS FAILURE — the harness exited (%s) before it could "
+              "score the artefact; this is not a verdict" % exc.code,
+              file=sys.stderr)
+        return EXIT_HARNESS_ERROR
+    except BaseException:
+        traceback.print_exc()
+        print("\n!! HARNESS FAILURE — the run crashed; any verdict table "
+              "printed above is incomplete and this exit code is not a count "
+              "of tickets", file=sys.stderr)
+        return EXIT_HARNESS_ERROR
+    return verdict_code
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(cli())
