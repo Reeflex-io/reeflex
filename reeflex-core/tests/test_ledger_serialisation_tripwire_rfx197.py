@@ -25,27 +25,58 @@ Dockerfile at main 7f9ebf8): that race does NOT occur. Six barrier-released
 simultaneous /v1/decide calls on one session let through exactly 20 deletes,
 identical to the sequential control.
 
-It does not occur for ONE REASON ONLY: app/server.py builds
-`http.server.HTTPServer`, which is single-threaded, so requests never overlap.
-That is a property of the dev-server choice, not a designed guard, and nothing
-in the codebase records that the budget's correctness depends on it.
+At the time that was measured it did not occur for ONE REASON ONLY: app/server.py
+built `http.server.HTTPServer`, which is single-threaded, so requests never
+overlapped. That was a property of the dev-server choice, not a designed guard.
 
-RFX-198's most obvious fix is to make the server concurrent (ThreadingHTTPServer,
-or an ASGI server with workers). Doing that ALONE silently converts a guarantee
-that currently holds into one that does not. This test is the tripwire: it passes
-today, and it goes red the moment the server becomes concurrent without the
-ledger gaining a guard that spans the read-decide-write.
+WHAT HAS HAPPENED SINCE, and why this file was rewritten (dev-1--217,
+2026-09-22). Both halves of the coupling moved:
 
-It is deliberately an invariant, not an assertion that the server must stay
-single-threaded: EITHER the server serialises, OR the ledger exposes a
-per-session guard. Satisfying either arm makes it pass.
+  RFX-198 landed. app/server.py now builds `PooledHTTPServer`, a bounded
+  ThreadPoolExecutor; the deployed core reports
+  `"server":{"concurrency":"pool","workers":32}` on /healthz. Requests DO
+  overlap now.
+
+  RFX-197 landed too, in the same merge train. decide.process() holds
+  `ledger.session_guard(session_id)` across compute_cumulative -> evaluate ->
+  append_entry, with a per-stripe RLock AND a POSIX record lock, so the cycle
+  is atomic across threads and across processes.
+
+So the second arm is what carries the invariant today, and that is the correct
+outcome — the ordering rule on RFX-197 ("fix the guard before or with RFX-198,
+never after") was respected.
+
+THIS FILE DID NOT NOTICE EITHER EVENT. `_server_class_used_by_run` matched the
+substring "HTTPServer(" against "PooledHTTPServer(" and kept answering
+`http.server.HTTPServer`, which is not a mixin subclass — so `concurrent` was
+False for every possible tree and the invariant became a tautology that could
+not fail for any input. Measured 2026-09-22 against the shipped image
+ghcr.io/reeflex-io/reeflex-core:v0.2.2: with session_guard renamed out of
+_GUARD_NAMES, so that BOTH arms were violated, this file was still green.
+
+The behavioural half of that measurement, on the same image, .118, spare port:
+8 barrier-released simultaneous /v1/decide calls on one session, budget 20,
+step 5 -> exactly 4 allowed, peak 8 in flight. Same probe against the same
+image with session_guard's body replaced by a bare `yield` -> 8 allowed, 40
+deletes through, ZERO holds, while the SEQUENTIAL control still held at 20.
+That is what this tripwire is protecting and what it could no longer see.
+
+It remains an invariant, not an assertion that the server must stay
+single-threaded: EITHER the server serialises, OR decide.process() holds a
+per-session guard ACROSS the read and the write. Satisfying either arm makes
+it pass. What changed is that both terms are now read from behaviour — a
+class's dispatch, and the AST span of the `with` block — rather than from a
+substring and a module attribute name.
 """
 
+import ast
+import http.server
 import inspect
 import socketserver
+import textwrap
 import unittest
 
-from app import ledger, server
+from app import decide, ledger, server
 
 
 # The name a fix for RFX-197 is expected to introduce: a context manager (or
@@ -54,24 +85,105 @@ from app import ledger, server
 _GUARD_NAMES = ("session_guard", "session_lock", "hold_session", "atomic_session")
 
 
+def _constructor_names(src: str) -> list:
+    """Every identifier `src` CALLS, as exact identifiers.
+
+    Separate from the resolver below so the substring bug that made this file
+    vacuous has a unit test of its own: "PooledHTTPServer" must come back as
+    "PooledHTTPServer" and never as "HTTPServer".
+    """
+    tree = ast.parse(textwrap.dedent(src))
+    names = []
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Call):
+            continue
+        if isinstance(n.func, ast.Name):
+            names.append(n.func.id)
+        elif isinstance(n.func, ast.Attribute):
+            names.append(n.func.attr)
+    return names
+
+
 def _server_class_used_by_run():
     """The server class app.server.run() actually constructs.
 
     Read out of run()'s source rather than by calling it, because run() binds a
     socket and blocks in serve_forever().
+
+    RESOLVED BY AST, AND OUT OF `app.server`, NOT OUT OF `http.server`.
+    The first version of this helper substring-matched run()'s source for
+    "HTTPServer(" and returned `http.server.HTTPServer`. RFX-198 replaced the
+    stdlib server with `PooledHTTPServer(...)` -- whose name CONTAINS
+    "HTTPServer(" -- so the helper kept answering `http.server.HTTPServer`
+    about a 32-worker pool, and the invariant below silently went constant.
+    A name that merely ends in the substring must not resolve to the stdlib
+    class it is not.
     """
-    src = inspect.getsource(server.run)
-    for name in ("ThreadingHTTPServer", "ForkingHTTPServer", "HTTPServer"):
-        if f"http.server.{name}(" in src or f"{name}(" in src:
-            return getattr(__import__("http.server", fromlist=[name]), name)
+    for name in _constructor_names(inspect.getsource(server.run)):
+        if not name.endswith("Server"):
+            continue
+        cls = getattr(server, name, None) or getattr(
+            __import__("http.server", fromlist=[name]), name, None
+        )
+        if isinstance(cls, type) and issubclass(cls, socketserver.BaseServer):
+            return cls
     raise AssertionError(
         "could not determine which server class app.server.run() builds; this "
         "tripwire cannot evaluate its invariant and must not silently pass"
     )
 
 
-def _ledger_exposes_a_cross_call_guard() -> bool:
-    return any(hasattr(ledger, n) for n in _GUARD_NAMES)
+def _serves_requests_concurrently(cls) -> bool:
+    """Whether `cls` can have two requests in flight at once.
+
+    Asked as a PROPERTY OF THE CLASS, not as a list of known class names.
+    `socketserver.BaseServer.process_request` calls finish_request inline on
+    the accept thread -- that, and only that, is what makes requests serialise.
+    Every way of not serialising (ThreadingMixIn, ForkingMixIn, RFX-198's
+    bounded ThreadPoolExecutor, an asyncio bridge someone writes next year)
+    has to override it to hand the request somewhere else.
+    """
+    if issubclass(cls, (socketserver.ThreadingMixIn, socketserver.ForkingMixIn)):
+        return True
+    return cls.process_request is not socketserver.BaseServer.process_request
+
+
+def _guard_spans_the_read_decide_write() -> bool:
+    """Whether decide.process() actually HOLDS a guard across the cycle.
+
+    Not `hasattr(ledger, "session_guard")`. A module-level name proves a guard
+    was written, not that the read and the write happen inside it, and the
+    thing this file's invariant is about is the span. Checked on the AST of
+    decide.process: some `with <guard>(...)` block must contain BOTH the
+    compute_cumulative call and an append_entry call.
+    """
+    if not any(hasattr(ledger, n) for n in _GUARD_NAMES):
+        return False
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(decide.process)))
+
+    def called_names(node) -> set:
+        return {
+            n.func.id
+            for n in ast.walk(node)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        }
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.With):
+            continue
+        holds_guard = any(
+            isinstance(item.context_expr, ast.Call)
+            and isinstance(item.context_expr.func, ast.Name)
+            and item.context_expr.func.id in _GUARD_NAMES
+            for item in node.items
+        )
+        if not holds_guard:
+            continue
+        inside = called_names(node)
+        if "compute_cumulative" in inside and "append_entry" in inside:
+            return True
+    return False
 
 
 class TestLedgerSerialisationTripwire(unittest.TestCase):
@@ -86,15 +198,15 @@ class TestLedgerSerialisationTripwire(unittest.TestCase):
         in sequence — no restart and no second replica required.
         """
         cls = _server_class_used_by_run()
-        concurrent = issubclass(cls, (socketserver.ThreadingMixIn,
-                                      socketserver.ForkingMixIn))
-        guarded = _ledger_exposes_a_cross_call_guard()
+        concurrent = _serves_requests_concurrently(cls)
+        guarded = _guard_spans_the_read_decide_write()
 
         self.assertTrue(
             (not concurrent) or guarded,
             msg=(
                 "app.server.run() now builds %s, which serves requests "
-                "concurrently, but app.ledger exposes none of %s.\n\n"
+                "concurrently, but no %s block in decide.process() spans both "
+                "compute_cumulative and append_entry.\n\n"
                 "R5's cumulative budget is enforced as a read-decide-write in "
                 "decide.process():\n"
                 "    cumulative = compute_cumulative(session_id, ...)\n"
@@ -108,6 +220,46 @@ class TestLedgerSerialisationTripwire(unittest.TestCase):
                 "transactional store) before or with RFX-198 — not after."
                 % (cls.__name__, list(_GUARD_NAMES))
             ),
+        )
+
+    def test_the_invariant_still_has_two_terms_that_can_both_take_both_values(self):
+        """The test this file did not have, and the reason it went quiet.
+
+        `(not concurrent) or guarded` is only a tripwire while BOTH terms can
+        change. Between 2026-08-22 and this round, `concurrent` was False for
+        every conceivable tree: the resolver substring-matched "HTTPServer("
+        against RFX-198's "PooledHTTPServer(" and answered
+        `http.server.HTTPServer`, which is not a mixin subclass. The assertion
+        above therefore could not fail for ANY input — measured on 2026-09-22
+        by renaming session_guard out of _GUARD_NAMES on a tree whose server
+        is a 32-worker pool: both arms violated, tripwire still green.
+
+        So: pin the discriminator against the stdlib in BOTH directions, and
+        pin that a subclass name is not read as the stdlib class it merely
+        ends with.
+        """
+        self.assertFalse(
+            _serves_requests_concurrently(http.server.HTTPServer),
+            "plain HTTPServer finishes the request on the accept thread; if "
+            "this reads concurrent the discriminator is stuck on True",
+        )
+        self.assertTrue(
+            _serves_requests_concurrently(http.server.ThreadingHTTPServer),
+            "ThreadingHTTPServer serves requests concurrently; if this reads "
+            "serial the discriminator is stuck on False and the invariant "
+            "above is a tautology",
+        )
+
+        names = _constructor_names(
+            "def run():\n"
+            "    server = PooledHTTPServer((host, port), H, workers=32)\n"
+        )
+        self.assertIn("PooledHTTPServer", names)
+        self.assertNotIn(
+            "HTTPServer", names,
+            "a class whose name ENDS in HTTPServer must not resolve to "
+            "http.server.HTTPServer — that substring match is exactly what "
+            "silenced this tripwire through RFX-198",
         )
 
     def test_the_read_and_the_write_are_still_two_unguarded_calls(self):
