@@ -9,11 +9,39 @@ core, no envelope.py), and reports:
   1. CONFLICTS  -- any input where two `decision :=` bodies are both true with
                    different values (Rego raises; would fail-closed to deny).
   2. UNDEFINED  -- any input where no rule produces a decision.
-  3. COVERAGE   -- which rule fires for how many of the grid points; a rule
-                   with 0 is unreachable on any envelope shape.
+  3. COVERAGE   -- which rule fires for how many of the grid points, against the
+                   rule-id inventory READ OUT OF THE PACK.  A rule with 0 here
+                   is unreachable ON THIS GRID; see the next section before
+                   reading that as "dead".
+  3b. FINE-FIELD -- the grid varies the closed enums and holds every
+                   FINE-GRAINED field constant, so rules that read those fields
+                   cannot fire on it however many points it has.  This section
+                   probes them directly, so section 3's silence is attributed
+                   rather than left to the reader.
   4. R1-INERT   -- re-evaluates every grid point with R1 deleted and diffs the
                    DECISION (not the rule label). Zero diffs => R1 changes no
                    outcome and is a label, not a rule.
+
+WHAT THE GRID HOLDS CONSTANT, AND WHY IT IS WRITTEN HERE (RFX-128, dev-1--206).
+The grid's envelope carries `action` as {namespace, verb} and no `ability`, no
+`target.ref` and no `provenance`.  Three of the pack's nine rule ids read
+exactly those fields:
+
+    authority_change_prod             action.ability      (authority.rego, R7)
+    irreversible_protected_asset_prod target.ref          (protected.rego, R6)
+    unclassified_action               provenance.undeclared        (reeflex.rego, R0)
+
+So they cannot fire on any grid point, and until this section existed the
+script's own `ALL_RULES` was a SIX-ITEM HARDCODED LIST written before those
+three rules existed -- so it printed `UNREACHABLE ON THE WHOLE GRID: none`, a
+reassuring line, over a run in which a third of the pack was never exercised.
+Measured: the 756 fresh-session points answer `allow` 714/756 (94.4%) on the
+pack at 3904c65 AND byte-identically on the pack at 3d097c3, five weeks and
+three new rules later, with 0 of 756 decisions differing.  Set
+`action.ability = users/assign-role` on the same 756 points and `allow` drops to
+534 (70.6%) with R7 on 180 of them.  The number was a property of the
+instrument, not of the pack -- which is why the inventory is now DERIVED and the
+blind fields are named in output.
 """
 from __future__ import annotations
 
@@ -21,6 +49,7 @@ import itertools
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -61,6 +90,79 @@ STATES = [
                               "count_by_externality": {}, "amount_by_currency": {}},
      {}, True),
 ]
+
+
+#: Rule ids the grid CANNOT reach, and the field each one reads.  Used only to
+#: attribute section 3's silence; the inventory itself is read out of the pack.
+FINE_FIELD_RULES = {
+    "reeflex.policy/authority_change_prod": "action.ability",
+    "reeflex.policy/irreversible_protected_asset_prod": "target.ref",
+    "reeflex.policy/unclassified_action": "provenance.undeclared",
+}
+
+RULE_ID_RE = re.compile(r'"rule":\s*"(reeflex\.policy/[a-z_]+)"')
+
+
+def pack_rule_ids(policy_dir: pathlib.Path) -> set[str]:
+    """Every rule id the pack can emit, READ OUT OF THE PACK.
+
+    This used to be a hardcoded list and drifted three rules behind the tree
+    (RFX-128).  Deriving it means a rule added tomorrow shows up in section 3
+    as never-fired instead of being silently absent from the check.
+    """
+    ids: set[str] = set()
+    for f in sorted(policy_dir.glob("*.rego")):
+        if f.name.endswith("_test.rego"):
+            continue
+        ids |= set(RULE_ID_RE.findall(f.read_text()))
+    return ids
+
+
+def fine_field_inputs():
+    """Envelopes that populate the fields the grid holds constant.
+
+    Deliberately small: enough to establish that each fine-field rule is
+    reachable and to show what it answers, not a second cross product.  Each
+    carries a NEUTRAL twin so a hold here is attributable to the fine field
+    rather than to the axes.
+    """
+    def env(label, **over):
+        e = {
+            "agent": {"id": "agent:fine", "session_id": "fine"},
+            "action": {"namespace": "fine", "verb": "update"},
+            "target": {"environment": "production"},
+            "axes": {"reversibility": "irreversible", "blast_radius": "single",
+                     "externality": "internal"},
+            "magnitude": {"count": 1},
+            "params": {},
+            "approval": {"present": False},
+            "cumulative": {"total_count": 0, "count_by_verb": {},
+                           "count_by_externality": {}, "amount_by_currency": {},
+                           "window_seconds": 3600},
+        }
+        for k, v in over.items():
+            if isinstance(v, dict) and isinstance(e.get(k), dict):
+                e[k] = {**e[k], **v}
+            else:
+                e[k] = v
+        return (label, e)
+
+    return [
+        env("action.ability  authority-bearing",
+            action={"namespace": "fine", "verb": "update",
+                    "ability": "users/assign-role"}),
+        env("action.ability  neutral (control)",
+            action={"namespace": "fine", "verb": "update",
+                    "ability": "posts/update-title"}),
+        env("target.ref      declared protected prefix",
+            target={"environment": "production", "ref": "/srv/prod/data"}),
+        env("target.ref      undeclared path (control)",
+            target={"environment": "production", "ref": "/tmp/scratch"}),
+        env("provenance      reversibility guessed",
+            provenance={"undeclared": ["axes.reversibility"]}),
+        env("provenance      nothing guessed (control)",
+            provenance={"undeclared": []}),
+    ]
 
 
 def build_inputs():
@@ -143,16 +245,38 @@ def main():
     print("\n3. COVERAGE (grid points per rule):")
     for rule, n in sorted(coverage.items(), key=lambda kv: -kv[1]):
         print(f"     {n:6d}  {rule}")
-    ALL_RULES = [
-        "reeflex.policy/irreversible_systemic_prod",
-        "reeflex.policy/irreversible_broad_prod",
-        "reeflex.policy/session_delete_budget",
-        "reeflex.policy/cumulative_budget",
-        "reeflex.policy/read_only_internal",
-        "reeflex.policy/default_allow",
-    ]
-    dead = [r for r in ALL_RULES if r not in coverage]
-    print(f"     UNREACHABLE ON THE WHOLE GRID: {dead or 'none'}")
+    inventory = pack_rule_ids(POLICY_DIR)
+    print(f"     rule-id inventory READ FROM THE PACK: {len(inventory)} ids")
+    if not inventory:
+        print("     !! read 0 rule ids out of the pack -- the inventory scan "
+              "found nothing, so the line below would be vacuous. Not printing it.")
+        return
+    unseen = sorted(inventory - set(coverage))
+    surprise = sorted(set(coverage) - inventory)
+    if surprise:
+        print(f"     !! fired but NOT in the inventory (scan is behind the "
+              f"pack): {surprise}")
+    print(f"     NEVER FIRED ON THIS GRID: {unseen or 'none'}")
+    for r in unseen:
+        why = FINE_FIELD_RULES.get(r)
+        print(f"       {r}"
+              + (f" -- reads {why}, which this grid holds constant; see 3b"
+                 if why else
+                 " -- reads no field this grid holds constant; look at it"))
+
+    # 3b. The fields the grid cannot vary, probed directly, so that the line
+    # above is attributed rather than left to the reader.
+    print("\n3b. FINE-FIELD PROBE (the fields the grid holds constant):")
+    fine = eval_all(POLICY_DIR, fine_field_inputs())
+    for label, (dec, rule) in fine.items():
+        print(f"     {label:44} {dec:17} {rule}")
+    reached = {rule for dec, rule in fine.values()
+               if dec not in ("ERROR", "UNDEFINED")}
+    still_unseen = sorted(set(unseen) - reached)
+    print(f"     NEVER FIRED IN THIS RUN AT ALL: {still_unseen or 'none'}")
+    if still_unseen:
+        print("       ^ these are the ones worth looking at: neither the grid "
+              "nor the fine-field probe reached them.")
 
     # 4. R1-inert: same grid with r1_allow stubbed to never hold.
     print("\n4. R1 DECISION EFFECT (grid re-evaluated with R1 removed):")
