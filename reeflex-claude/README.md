@@ -579,24 +579,34 @@ has to finish in time.
   lines against command substitution's 0.83%.  Cost of the part that shipped:
   **472 of 57,027** command lines in this box's own shell scripts, and 0 of
   the corpus's 68 agent-shaped rows.
-  **`REEFLEX_CLAUDE_STRICT=1` does cover five of the six** —
+  **`REEFLEX_CLAUDE_STRICT=1` covers 4 of the 8 `gap-` rows** —
   measured, not asserted: they are all unrecognised *execute* commands, which
-  strict mode prices `irreversible`+`broad`.  The `ssh` case is not one of
-  them (it is classified `emit`, not unrecognised).
+  strict mode prices `irreversible`+`broad`.  Of the other four, **3 are
+  already refused without the knob** (the command-substitution rows, above)
+  and **1 is out of its reach** — the `ssh` case, which is classified `emit`
+  rather than unrecognised, so the lever misses it and an operator should know
+  that.  These four numbers are recomputed from the corpus by
+  `test_readme_strict_numbers_are_recomputed_from_the_corpus`, so they cannot
+  drift away from the code again the way `five of the six` did.
 - **REEFLEX_CLAUDE_STRICT**: unset by default so coding agents are not blocked on
   every `npm install`.  When set, every UNRECOGNISED command is priced
   irreversible + broad, so in production it reaches a human — measured live on
-  the conformance corpus, **it moves 23 of 82 verdicts**, including `pytest`,
-  `npm install` and `make build` from `allow` to `ask`, and five of the six
-  RFX-158 gaps above (three of those five — the command-substitution rows —
-  are refused now without the knob, so what strict still adds there is the
-  other two).  That is the whole point of the knob: it is the noisy
-  setting, and today it is the broadest lever this adapter ships for the
-  commands the classifier cannot read.  It is not the only way to cover them:
-  a policy-side rule, or parsing the wrapper the destruction hides behind, both
-  reach cases strict mode does not (the `ssh` family above is one).  Before
-  RFX-145 it was neither noisy nor safe — it moved
-  **zero** verdicts and only changed a word in the audit log.
+  the conformance corpus, **it moves 66 of the 252 conformance cases**, every
+  one of them `allow` → `ask` and **none of them to `deny`** — so the knob
+  raises work to a human and does not by itself stop anything.  **58 of those
+  66 are `everyday-` rows** — ordinary developer work such as `pytest`,
+  `npm install` and `make build` — and 4 are the RFX-158 gap rows above.  That
+  proportion is the price of the knob and is stated here rather than left to be
+  discovered: it is the noisy setting, and today it is the broadest lever this
+  adapter ships for the commands the classifier cannot read.  It is not the
+  only way to cover them: a policy-side rule, or parsing the wrapper the
+  destruction hides behind, both reach cases strict mode does not (the `ssh`
+  family above is one).  Before RFX-145 it was neither noisy nor safe — it
+  moved **zero verdicts in the tightening direction** and only changed a word
+  in the audit log.  All four numbers in this paragraph are recomputed from the
+  corpus by `test_readme_strict_numbers_are_recomputed_from_the_corpus`; the
+  `23 of 82` they replace was true when RFX-145 landed and had been false for
+  two corpus growths before anyone read it off the shipped wheel.
   UPGRADE: use a per-command allow-list in policy instead.
 - **approval re-submission**: the hook sets `approval.present = false` at
   interception.  Re-submission with `approval.present = true` after human

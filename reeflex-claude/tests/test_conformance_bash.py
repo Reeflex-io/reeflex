@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import sys
 import unittest
 
@@ -547,15 +548,39 @@ class TestRFX145StrictModeMovesADecision(unittest.TestCase):
                 for c in conformance.CASES}
 
     def test_strict_and_default_verdict_sets_differ(self):
+        """
+        RFX-145's PASS CRITERION asked, in its own words, for "a test that
+        fails if the strict and non-strict verdict sets are equal over the
+        conformance corpus".  This is that test, and ASSERTING ONLY THAT THEY
+        DIFFER IS NOT ENOUGH -- measured, qa--304, not reasoned.
+
+        Restore RFX-145's exact defect in the shipped tree (the strict branch
+        of `_classify_bash_execute` lifts reversibility to `irreversible` and
+        leaves blast_radius at `scoped`) and the sets still DIFFER, on three
+        rows, so the non-emptiness assertion stays GREEN:
+
+            destroy-noop-prefix-redirect-andand   ask -> allow
+            destroy-noop-prefix-redirect-brace    ask -> allow
+            destroy-noop-prefix-truncate          ask -> allow
+
+        Tightened: 0.  Loosened: 3.  So the guard named by this ticket's own
+        closing criterion certified a SAFETY knob on the evidence that it had
+        loosened three decisions.  `test_strict_only_ever_tightens` below is
+        what actually caught that defect; this one has to ask for the
+        direction, not merely for a difference.
+        """
         os.environ.pop("REEFLEX_CLAUDE_STRICT", None)
         default = self._verdicts()
         os.environ["REEFLEX_CLAUDE_STRICT"] = "1"
         strict = self._verdicts()
-        changed = {k: (default[k], strict[k]) for k in default if default[k] != strict[k]}
+        rank = {"allow": 0, "ask": 1, "deny": 2}
+        tightened = {k: (default[k], strict[k]) for k in default
+                     if rank[strict[k]] > rank[default[k]]}
         self.assertTrue(
-            changed,
-            "REEFLEX_CLAUDE_STRICT changed no verdict over the whole corpus -- "
-            "it is documented as the knob for tightening the adapter",
+            tightened,
+            "REEFLEX_CLAUDE_STRICT tightened no verdict over the whole corpus "
+            "-- it is documented as the knob for TIGHTENING the adapter, so a "
+            "verdict set that merely differs does not discharge RFX-145",
         )
 
     def test_strict_only_ever_tightens(self):
@@ -614,6 +639,88 @@ class TestRFX145StrictModeMovesADecision(unittest.TestCase):
         os.environ["REEFLEX_CLAUDE_STRICT"] = "1"
         self.assertEqual("allow", policy_oracle(classify("Bash", {"command": "ls -la"})))
         self.assertEqual("allow", policy_oracle(classify("Read", {"file_path": "/x"})))
+
+    def test_readme_strict_numbers_are_recomputed_from_the_corpus(self):
+        """
+        The README quantifies this knob for an operator deciding whether to set
+        it.  Those numbers were measured once and then pinned by nothing.
+
+        MEASURED, qa--304, on the wheel a customer installs (reeflex-claude
+        0.2.1 from PyPI) and on main: the README said strict "moves 23 of 82
+        verdicts" and covered "five of the six" RFX-158 gaps.  The corpus was
+        202 rows on the published wheel and 252 on main; strict moved 46 and 66
+        of them; and the gap family had grown from 6 rows to 8.  Every number
+        in the paragraph was wrong, on the artefact that ships the paragraph,
+        and the guards beside it stayed green throughout -- because they pin
+        the SETS and nothing read the prose.
+
+        So this reads the prose.  Adding a corpus row now reddens here until
+        the sentence is updated, which is the intended cost: a number a README
+        presents as measured should not be able to outlive the measurement.
+        """
+        readme = pathlib.Path(__file__).resolve().parent.parent / "README.md"
+        # Normalised, because the claims are prose and wrap across lines; a
+        # guard that a reflow can silently unpin is the defect it exists for.
+        text = " ".join(readme.read_text(encoding="utf-8").split())
+
+        os.environ.pop("REEFLEX_CLAUDE_STRICT", None)
+        default = self._verdicts()
+        os.environ["REEFLEX_CLAUDE_STRICT"] = "1"
+        strict = self._verdicts()
+        moved = [k for k in default if default[k] != strict[k]]
+
+        gap_ids = [c["id"] for c in conformance.cases(family="gap")]
+        covered = [i for i in gap_ids if strict[i] == "ask"]
+        already_refused = [i for i in gap_ids if strict[i] == "deny"]
+        uncovered = [i for i in gap_ids if strict[i] == "allow"]
+
+        measured = {
+            "corpus total": len(conformance.CASES),
+            "verdicts moved": len(moved),
+            "everyday rows moved": len([k for k in moved if k.startswith("everyday-")]),
+            "gap rows moved": len([k for k in moved if k.startswith("gap-")]),
+            "gap rows total": len(gap_ids),
+            "gap rows covered by strict": len(covered),
+            "gap rows already refused": len(already_refused),
+            "gap rows out of reach": len(uncovered),
+        }
+
+        # Each claim is anchored on the README's own wording so that rewording
+        # the sentence fails loudly here rather than silently unpinning it.
+        claims = {
+            "verdicts moved": r"it moves (\d+) of the \d+ conformance cases",
+            "corpus total": r"it moves \d+ of the (\d+) conformance cases",
+            "everyday rows moved": r"(\d+) of those \d+ are `everyday-` rows",
+            "gap rows moved": r"and (\d+) are the RFX-158 gap rows above",
+            "gap rows covered by strict": r"covers (\d+) of the \d+ `gap-` rows",
+            "gap rows total": r"covers \d+ of the (\d+) `gap-` rows",
+            "gap rows already refused": r"(\d+) are already refused without the knob",
+            "gap rows out of reach": r"(\d+) is out of its reach",
+        }
+
+        wrong = []
+        for name, pattern in claims.items():
+            hit = re.search(pattern, text)
+            if hit is None:
+                wrong.append(
+                    f"{name}: README no longer carries the sentence this guard "
+                    f"reads (pattern {pattern!r}). Measured value is "
+                    f"{measured[name]} -- put it back in a form this matches, "
+                    f"or the number is unpinned again.")
+                continue
+            if int(hit.group(1)) != measured[name]:
+                wrong.append(f"{name}: README says {hit.group(1)}, "
+                             f"corpus measures {measured[name]}")
+        self.assertEqual([], wrong, "\n".join(wrong))
+
+        # The README also states the DIRECTION and the CEILING of the knob:
+        # every move is allow -> ask and none reaches deny. That is what makes
+        # it "the noisy setting" rather than an off switch, so it is asserted
+        # rather than only written down.
+        self.assertEqual(
+            [], [k for k in moved if not (default[k] == "allow" and strict[k] == "ask")],
+            "the README says every verdict strict moves goes allow -> ask; "
+            "some row now moves differently, so the sentence needs rewriting")
 
 
 class TestSpecArtefactIsInSync(unittest.TestCase):
