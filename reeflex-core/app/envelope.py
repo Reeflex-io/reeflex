@@ -746,21 +746,43 @@ def _verb_last_resort_key(raw_verb: str, canonical_reversibility: str) -> str | 
     # WHAT IT COSTS, STATED.  On the IRREVERSIBLE arm 25 of the census's
     # declared reads now reach the guarded default — `GetObject`,
     # `query_database`, `list_commits` among them.  Every one of those is a
-    # caller asserting that a read cannot be undone, which is the same
-    # contradiction R6 already refuses to let R1 win (see reeflex.rego's R1
-    # block: "an irreversible action is never read-only, whatever the verb
-    # says").  It costs a HOLD, names its reason, and one declared field
-    # removes it.  The other direction costs a customer their data with no
-    # human in it.
+    # caller asserting that a read cannot be undone.  It costs a HOLD, names
+    # its reason, and one declared field removes it.  The other direction costs
+    # a customer their data with no human in it.
     #
     # A DECLARED verb is untouched, deliberately.  `_canonicalize_verb` returns
     # before this function whenever the caller's own string matched the canon,
     # so `verb: "read"` on an irreversible envelope still canonicalises `read`.
-    # That is the DELIBERATE mislabel, which this election cannot see and which
-    # `_delete_signal_from_ability` and R6 are the defences for.  The line this
-    # clause draws is narrower and is the one `_verb_is_declared` already
+    # That is the DELIBERATE mislabel, which this election cannot see.  The line
+    # this clause draws is narrower and is the one `_verb_is_declared` already
     # draws: core does not hand out its LEAST-guarded value as its OWN GUESS
     # on an action the caller says is irreversible.
+    #
+    # WHAT DEFENDS THE DELIBERATE MISLABEL, AND UNDER WHAT CONDITION (dev-3--154).
+    # `_delete_signal_from_ability` and R6 both back this case up, and NEITHER
+    # is unconditional — scored as decisions through `app.decide.process` on the
+    # real pack, one field apart, envelope irreversible/scoped/internal/
+    # production, count 45:
+    #
+    #   verb "read", nothing else declared          allow  R1 read_only_internal
+    #     + action.ability "wordpress/delete-post"  hold   R5 session_delete_budget
+    #     + action.ability "wordpress/get-post"     allow  R1 read_only_internal
+    #     + target.ref "/srv/prod/db.sqlite"        hold   R6 …protected_asset_prod
+    #     + target.ref "/home/app/prod/db.sqlite"   allow  R1 read_only_internal
+    #   verb "delete"                    CONTROL    hold   R5 session_delete_budget
+    #
+    # So both defences are reached only through a field THE SAME CALLER supplies:
+    # an `ability` whose last segment carries a canon delete word, or a
+    # `target.ref` under one of the eight prefixes `protected.rego` ships (the
+    # default posture is `default_protected := false`, so an unlisted path is
+    # unprotected).  Omit both and R1 allows, before this clause and after it —
+    # this clause does not move that case and is not claimed to.  R6 outranking
+    # R1 for an irreversible read is real but is scoped to a declared protected
+    # asset (`r6_require_approval` requires `protected_target`); R1 itself reads
+    # only `action.verb` and `axes.externality` and no reversibility at all, so
+    # it is not the place that refuses the contradiction.  The honest statement
+    # of the residual is the one at the top of this module: only signed
+    # envelopes (SPEC §6, roadmap) close a deliberate mislabel properly.
     if best_rank == 0 and canonical_reversibility == "irreversible":
         return None
     return best_word
