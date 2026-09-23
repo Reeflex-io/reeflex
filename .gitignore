@@ -84,3 +84,26 @@ htmlcov/
 coverage.xml
 *.prof
 site/
+
+# -----------------------------------------------------------------------------
+# Per-round agent scratch -- probes, A/B captures, throwaway venvs, policy-pack
+# copies, captured core/app/connector output.
+#
+# RFX-212 measured this class in reeflex-app in August 2026 and fixed it there;
+# its own claim recorded that "the MONOREPO was not checked for the same gap".
+# Checked 2026-09-23: it has the gap and it is larger. Across all 245 worktrees
+# of this repo a `git add -A` would stage 5905 untracked files, of which 1414
+# sit under `.scratch*` alone. Excluding throwaway virtualenvs as instrument
+# noise, 525 of the remaining files carry a credential-shaped string, and one
+# worktree alone accounts for 328 of them.
+#
+# This is a list, so it is only as wide as the names on it -- a directory named
+# outside these prefixes is stageable again. `scripts/tests/
+# test_scratch_output_is_ignored.py` pins it and states that limit.
+.scratch*/
+.rfx*/
+.walk*/
+.venv-*/
+.rig/
+.probe*/
+.cache/
