@@ -1585,6 +1585,11 @@ def selftest():
           not _dr.search("    uses: ./.github/workflows/smoke-other.yml\n"))
     check("delegation rejects the path as a mid-line substring",
           not _dr.search("    run: echo uses: ./.github/workflows/smoke-pypi.yml\n"))
+    # Found by the per-mutation census of the five checks above: with the `\s*$`
+    # end anchor deleted they all stayed green, so that anchor was pinned by
+    # nothing and a job parked as `...yml.disabled` would have read as wired.
+    check("delegation rejects a path parked behind a suffix",
+          not _dr.search("    uses: ./.github/workflows/smoke-pypi.yml.disabled\n"))
     # And the wiring itself, at selftest time. `--pypi run` (the default) never
     # calls verify_delegation, so on a local or default run nothing else in this
     # program would notice the job being renamed away.
