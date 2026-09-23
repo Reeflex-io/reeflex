@@ -196,6 +196,39 @@ charged_count := max([object.get(input, ["magnitude", "count"], 1), current_coun
 # first i where floor + (i-1) > limit, i.e. 10 + (i-1) > 20 -> 12. Charging the
 # floor on the cumulative side too puts it at 3, which is what this rule buys.
 #
+# "PUTS IT AT 3" WAS A PREDICTION WHEN IT WAS WRITTEN. IT HAS NOW BEEN WALKED
+# (dev-3--162, 2026-09-22), on the image `api-dev.reeflex.io` is running —
+# resolved from that container's own image id, not rebuilt — against the
+# published v0.2.1 as the control arm, same normalizer, same probe, one scratch
+# ledger per arm (restored_entries 0), target.environment=staging:
+#
+#   arm                            ledger charge   first non-allow   accounts destroyed
+#                                  per call        (rule)            before the gate asked
+#   ------------------------------ PRE = published v0.2.1 --------------------------------
+#   A  users/delete ids[3001..3045]      45        call  1  R5 delete        0
+#   B  users/delete role=subscriber       1        call 12  R5 delete      495
+#   CONTROL users/list (read)             1        never within 25         n/a
+#   ------------------------------ POST = the deployed v0.2.2 ---------------------------
+#   A  users/delete ids[3001..3045]      45        call  1  R5 delete        0
+#   B  users/delete role=subscriber      10        call  3  R5 delete       90
+#   CONTROL users/list (read)            10        call 21  cumulative_budget  n/a
+#
+# The PRE column reproduces the reading recorded above, which is what licenses
+# attributing the POST column to this rule. The read control is scored because
+# `objects_touched` charges every action, so "was it held" cannot certify the
+# delete budget — the rule id is read out of the decision, and only the delete
+# arms are held by `session_delete_budget`.
+#
+# WHAT THAT LEAVES OPEN, AND IT IS RFX-165's OWN SENTENCE. The arms are still
+# not charged alike: 45 against 10. So the ticket's goal — "make the axes
+# independent of how much the caller chose to disclose" — is delivered at the
+# DECISION layer (both arms are require_approval/irreversible_broad_prod in
+# production, measured live on api-dev) and is NOT delivered at the BUDGET
+# layer. The residual is 90 accounts, down from 495. It is not closable by
+# raising `count_floor.broad`: the enumerated arm's charge is DATA (45 here,
+# 4500 for a bigger call), so every constant floor below it leaves a gap. That
+# is a statement about the shape of the fix, not a defect in this table.
+#
 # THE TABLE STAYS IN THIS FILE. decide.py reads THIS rule out of the same
 # evaluation that produced the verdict and hands the number to append_entry; it
 # does NOT re-derive it. A Python copy of `count_floor` is exactly the unchecked
