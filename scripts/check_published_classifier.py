@@ -258,6 +258,10 @@ MIN_SCORED_CASES = 40
 # 0 fail-noisy, so the comparator demonstrably prints PASS on the same run
 # shape). code-reports/dev-2--113--20260921-evidence/.
 _LAG_345 = {"ticket": "RFX-382", "index_serves": "0.2.1"}
+# RFX-405 -- same republish, same artefact, so the same ticket and the same
+# `index_serves`; a separate constant only so the two families can expire
+# independently if one of them is ever republished alone.
+_LAG_405 = {"ticket": "RFX-382", "index_serves": "0.2.1"}
 # WHAT IT HOLDS AGAIN, AND WHY THE TABLE DID NOT STAY EMPTY (RFX-158, this PR).
 # This change makes the adapter refuse a command word it cannot resolve, and it
 # re-prices one row that was already scored. Four cases therefore start
@@ -364,6 +368,41 @@ PUBLISHED_LAG: dict = {
     "everyday-tee-append-abbreviated":        {"ticket": "RFX-339", "index_serves": "0.2.1"},
     "everyday-git-clean-dry-run-abbreviated": {"ticket": "RFX-339", "index_serves": "0.2.1"},
     "everyday-git-push-dry-run-abbreviated":  {"ticket": "RFX-339", "index_serves": "0.2.1"},
+    # ------------------------------------------------------------------
+    # RFX-405 (this PR). A subshell group behind a prefix word. `_peel_group`
+    # strips a `(` only at position 0 of a segment and runs BEFORE the prefix
+    # is dropped, so `{ (rm -rf P); }`, `time (rm -rf P)` and
+    # `if (rm -rf P); then :; fi` left the literal `(rm` as the command word
+    # and fell to the default Bash EXECUTE arm. Nine prefixes bash accepts.
+    #
+    # MEASURED against the wheel the index serves, not inferred from the diff:
+    # `reeflex-claude==0.2.1` fails open on all nine
+    # (dev-1--218 `42-pypi-behaviour-fix-BEFORE-lag.txt`: 31 fail-open, 9 of
+    # them these, 0 declared, FAIL). The comparator demonstrably prints the
+    # other verdict on the same run shape -- the same run PASSes 30 other
+    # declared rows.
+    #
+    # THE THREE `everyday-prefixgroup-*` ROWS THIS PR ALSO ADDS ARE
+    # DELIBERATELY NOT HERE, for the same reason `destroy-group-with-operator`
+    # was not: 0.2.1 already agrees with the tree on all three, so declaring
+    # them would be STALE on arrival and `audit` would fail them. They are the
+    # half of RFX-405 that pins what must STAY allowed -- `time (ls -la /tmp)`
+    # is not a delete -- and the published wheel never got that wrong.
+    #
+    # THE TICKET IS RFX-382, NOT RFX-405. RFX-405 is the classifier defect and
+    # this PR closes it in the tree; following it lands a reader on a ticket
+    # that says "fixed", which is not what an entry in this table means. What
+    # clears these rows is a REPUBLISH of reeflex-claude, which is RFX-382's
+    # delivery half and is owner-gated. Nothing here performs or decides it.
+    "destroy-prefixgroup-brace":  _LAG_405,
+    "destroy-prefixgroup-time":   _LAG_405,
+    "destroy-prefixgroup-bang":   _LAG_405,
+    "destroy-prefixgroup-if":     _LAG_405,
+    "destroy-prefixgroup-while":  _LAG_405,
+    "destroy-prefixgroup-until":  _LAG_405,
+    "destroy-prefixgroup-for-do": _LAG_405,
+    "destroy-prefixgroup-then":   _LAG_405,
+    "destroy-prefixgroup-else":   _LAG_405,
 }
 
 # --------------------------------------------------------------------------
@@ -436,6 +475,7 @@ SEAT_ANCHOR = "PUBLISHED-LITELLM-SEAT"
 # Same ticket and the same reason as the arm above: RFX-382, the republish, not
 # RFX-345, which is the defect this PR closes in the tree.
 _SEAT_LAG_345 = {"ticket": "RFX-382", "index_serves": "0.2.0"}
+_SEAT_LAG_405 = {"ticket": "RFX-382", "index_serves": "0.2.0"}
 # WHAT IT HOLDS AGAIN (RFX-158, this PR): the same four cases as the arm above,
 # reached one distribution further out, and MEASURED ON THIS ARM rather than
 # mirrored from the other — `reeflex-litellm==0.2.0` installed from the index,
@@ -498,6 +538,23 @@ SEAT_PUBLISHED_LAG: dict = {
     "everyday-tee-append-abbreviated":        {"ticket": "RFX-339", "index_serves": "0.2.0"},
     "everyday-git-clean-dry-run-abbreviated": {"ticket": "RFX-339", "index_serves": "0.2.0"},
     "everyday-git-push-dry-run-abbreviated":  {"ticket": "RFX-339", "index_serves": "0.2.0"},
+    # RFX-405, reached one distribution further out. MEASURED ON THIS ARM and
+    # not mirrored from the table above: `reeflex-litellm==0.2.0` from the
+    # index, its floor resolving whatever `reeflex-claude` it admits, scored
+    # through the seat's own normaliser -- dev-1--218
+    # `52-seat-fix-BEFORE-lag.txt`: the same nine ids fail open, 0 declared,
+    # FAIL, and NOT the three `everyday-prefixgroup-*` rows. `index_serves`
+    # names `reeflex-litellm`'s version because that is the distribution THIS
+    # arm installs; the two tables expire on different clocks.
+    "destroy-prefixgroup-brace":  _SEAT_LAG_405,
+    "destroy-prefixgroup-time":   _SEAT_LAG_405,
+    "destroy-prefixgroup-bang":   _SEAT_LAG_405,
+    "destroy-prefixgroup-if":     _SEAT_LAG_405,
+    "destroy-prefixgroup-while":  _SEAT_LAG_405,
+    "destroy-prefixgroup-until":  _SEAT_LAG_405,
+    "destroy-prefixgroup-for-do": _SEAT_LAG_405,
+    "destroy-prefixgroup-then":   _SEAT_LAG_405,
+    "destroy-prefixgroup-else":   _SEAT_LAG_405,
 }
 
 TICKET_RE = re.compile(r"RFX-\d+")

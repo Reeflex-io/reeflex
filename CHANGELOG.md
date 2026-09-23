@@ -27,6 +27,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
   **What this is not:** not a live fail-open. Both blinded arms are caught elsewhere — the adapter arm by `tests/test_conformance_bash.py::TestRFX146AuditRecordTruthfulness::test_destructions_are_counted_by_the_delete_budget`, the pack arm by `opa test reeflex-core/policy/` (5 of 75 red; the shipped pack is 75/75). This is an instrument reporting a pass it did not measure, and it is the only instrument that scores the adapter and the pack **together** against a real core.
 
+- **A subshell group one word behind a prefix escaped the classifier entirely: `if (rm -rf /var/lib/pgsql); then :; fi` was priced `execute/recoverable/scoped` and allowed.** (RFX-405)
+
+  RFX-329 closed the bare subshell group. It closed it only where the group is the *first* thing in its segment: `_peel_group` strips a `(` at position 0, and `_shell_segments` calls it **before** `_peel_wrappers` drops the prefix word. Nothing peels the group once the prefix is gone, so `_safe_split` leaves the literal `(rm` as the command word, it matches no branch of `_infra_destructive` or `_classify_bash_delete`, and the line falls to the default Bash EXECUTE arm. The target ref is mangled too, so R6 cannot rescue it either.
+
+  Nine prefixes that bash actually accepts were measured escaping, each against the **same prefix carrying the bare command**, which was already refused — that pairing is what makes this the group and not the prefix:
+
+  ```
+                                                GROUP              BARE TWIN
+  { (rm -rf /var/lib/pgsql); }                  allow      deny  { rm -rf …; }
+  time (rm -rf /var/lib/pgsql)                  allow      deny  time rm -rf …
+  ! (rm -rf /var/lib/pgsql)                     allow      deny  ! rm -rf …
+  if (rm -rf …); then :; fi                     allow      deny  if rm -rf …; then :; fi
+  while (rm -rf …); do break; done              allow      deny  while rm -rf …; do …
+  until (rm -rf …); do break; done              allow      deny  until rm -rf …; do …
+  for i in 1; do (rm -rf …); done               allow      deny  for i in 1; do rm -rf …
+  if true; then (rm -rf …); fi                  allow      deny  if true; then rm -rf …
+  if false; then :; else (rm -rf …); fi         allow      deny  if false; … else rm -rf …
+  ```
+
+  Ground truth is real `/bin/bash` against freshly seeded synthetic victim directories, destruction read off the filesystem: 9 of 9 destroy. The four prefixes bash **rejects** in front of a group (`nice`, `nohup`, `env FOO=1`, `FOO=1` — an external command takes no subshell as an argument) were checked with `bash -n` and excluded rather than counted. Every verdict is `reeflex-core/app/opa.py` against `reeflex-core/policy/*.rego` under `opa eval`, fed the envelope the adapter itself builds, with `decide.py` Step 6's two overwrites reproduced; that pack was proved **byte-identical** to the one the deployed v0.2.2 core runs.
+
+  `_peel_prefixed_group` steps over a leading word and peels again, and the condition is deliberately narrow: only a word this module **already drops** (`_SHELL_KEYWORDS` or `_WRAPPER_COMMANDS`), only when what follows begins with `(`, and only when `_peel_group` actually takes something off. `_UNBOUNDED_WRAPPERS` (`xargs`, `parallel`) is excluded on purpose — those two carry a meaning `_peel_wrappers` reports to the caller.
+
+  **The false-positive floor is part of the change, not an afterthought:** `time (ls -la /tmp)`, `if (ls /tmp); then :; fi`, `{ (echo hi); }`, `if ((RETRIES + 1)); then :; fi`, `case $x in (a) …` and `(cd /tmp && ls)` all stay allowed; `time (ls -la /tmp)` is now priced *more* accurately (`read/reversible/single` instead of a mangled execute). Thirteen corpus rows added — nine destructive, four `everyday-prefixgroup-*` that pin what must stay allowed. (The `everyday-prefixgroup-function-definition` row arrived in this branch's second commit and this sentence said twelve/three until qa--315 counted the diff.)
+
+  **It is live on the published wheel and a republish is what clears that**, not this merge: `reeflex-claude==0.2.1` and the `reeflex-litellm==0.2.0` seat each fail open on the same nine, measured on each arm separately and declared against RFX-382 in both lag tables. The three benign rows are deliberately **not** declared — 0.2.1 already agrees with the tree on them, so an entry would be `STALE` on arrival.
+
+  **The first version of this fix stepped over ONE prefix word, and every bash-valid PAIR was still unread** (measured by qa--315 while landing the branch, and closed in the same commit range). `_peel_prefixed_group` returned the moment the word after a prefix was not `(`, and `_shell_segments` manufactures such pairs out of ordinary code because it splits on `;` and leaves the keyword attached: `if true; then time (rm -rf /var/lib/pgsql); fi` arrives as the segment `then time (rm -rf …)`. The nine rows above are nine strings, and one string is not a class — so the complement was enumerated instead, eight shell contexts x twelve wrapper words, filtered to the sixteen combinations `bash -n` accepts:
+
+  ```
+  BEFORE the walk   12 of 16 escaped   every one destroys a synthetic victim dir under real /bin/bash
+  AFTER  the walk    0 of 16 escaped   benign forms unchanged; corpus untouched, so no README or lag-table number moves
+  ```
+
+  Only `bare` and `subshell` — the two contexts with no keyword in front of the wrapper — were read correctly before. Only `!` and `time` are reachable as the inner word: an external command takes no subshell as an argument, so `sudo`, `nice`, `env`, `command` and `xargs` are syntax errors in that position (checked with `bash -n`, excluded rather than counted), which is also why the wider walk drops no wrapper meaning the single-word step did not already drop. The walk **commits only if it reaches a group**, so a segment with no group in it is handed to `_peel_wrappers` exactly as it arrived — pinned by `TestTheWalkCommitsOnlyWhenItReachesAGroup`, and watched failing: restoring the single-word step reddens 31 assertions, **all of them in the two new classes**, with the nine original rows staying green.
+
+  Widening `GAP_COMMAND_SUBSTITUTION_SCOPE` by two ids (`destroy-prefixgroup-bang`, `destroy-prefixgroup-time`) is deliberate and not a re-baseline: those are the only two of the nine that are operator-free and therefore reachable by the RFX-158 re-spelling at all. RFX-405 narrows nothing about RFX-158 — under `$(echo …)` there is no segment to peel until runtime.
+
 - **An agent bought back `single` on a whole-table destruction by adding a one-element `ids` array to its own call, and three operations RFX-131 moved to a human went back to `allow`.** (RFX-131 residual)
 
   SPEC §4.2 step 3 reads cardinality off `$input['ids']`, and `$input` is supplied by the agent being governed. Step 2 ("no target list at all" → `broad`) is therefore a branch the agent chooses whether to enter. Measured on `main` `3d097c3` through the real WordPress normalizer and `reeflex-core`'s own policy pack — the same three abilities RFX-131's fix was originally proven on:
