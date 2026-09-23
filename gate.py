@@ -1564,6 +1564,41 @@ def selftest():
     check("neither leg keeps a private exit-code-only verdict",
           not any("USAGE_RE_TMPL" in fn.__code__.co_names
                   for fn in (Gate.run_entrypoints, Gate.run_pypi_smoke)))
+
+    # RFX-107 closed on TWO things: "gate.py --selftest covers the parse, AND
+    # deleting the smoke-pypi job from gate.yml makes the gate RED in a trial
+    # run". qa--334 ran the second and it holds — the job removed, pypi-smoke
+    # goes FAIL and the gate goes RED, 21 components and exactly one differing.
+    # The first was never true, here or at the merge commit f36739b:
+    # `DELEGATE_RE` is referenced only by its definition and its one call site,
+    # so the pattern that decides whether DELEGATED is honest was pinned by
+    # nothing. Every sibling component above is held to "rejects prose mention";
+    # this one was not. So it is now.
+    _dr = Gate.DELEGATE_RE
+    check("delegation accepts the real workflow_call wiring line",
+          bool(_dr.search("  smoke-pypi:\n    uses: ./.github/workflows/smoke-pypi.yml\n")))
+    check("delegation rejects a COMMENTED-OUT wiring line",
+          not _dr.search("    # uses: ./.github/workflows/smoke-pypi.yml\n"))
+    check("delegation rejects a prose mention",
+          not _dr.search("# the smoke-pypi job invokes .github/workflows/smoke-pypi.yml\n"))
+    check("delegation rejects a uses: pointing at a DIFFERENT workflow",
+          not _dr.search("    uses: ./.github/workflows/smoke-other.yml\n"))
+    check("delegation rejects the path as a mid-line substring",
+          not _dr.search("    run: echo uses: ./.github/workflows/smoke-pypi.yml\n"))
+    # And the wiring itself, at selftest time. `--pypi run` (the default) never
+    # calls verify_delegation, so on a local or default run nothing else in this
+    # program would notice the job being renamed away.
+    _gy = os.path.join(REPO_ROOT, Gate.DELEGATE_WORKFLOW)
+    check("the shipped gate.yml really does carry the job DELEGATED points at",
+          os.path.exists(_gy) and bool(_dr.search(open(_gy, encoding="utf-8").read())))
+    # MEASURED LIMIT, stated rather than implied (qa--334). This is a check on
+    # the TEXT of gate.yml, not on whether the job can execute. A smoke-pypi job
+    # that is present and correctly wired but carries `if: false` was run through
+    # the whole gate: it scored DELEGATED (verified wired) and the summary was
+    # byte-identical to the honest tree's, 21 components. So "a job exists that
+    # invokes the smoke" is what this verifies; "the smoke ran" is not. Closing
+    # that needs a rule for which `if:` expressions count, which is a decision
+    # this round did not take.
     # claude-corpus-live: the live arm's verdict, same discipline (RFX-303).
     # The FAIL cases matter more than the PASS one here: this component's whole
     # job is to go red on a disagreement between the two planes, and it spent
