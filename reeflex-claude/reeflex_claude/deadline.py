@@ -21,7 +21,10 @@ customer-reachable conditions broke that precondition:
 
 So the fix is not another error handler.  It is a clock: a deadline strictly
 inside the runner's timeout, and a real answer on stdout before the runner can
-kill us -- whatever the socket or the classifier is still doing.
+kill us -- for as long as the work we are waiting on lets a timer thread run.
+That covers a blocked socket and a classifier executing Python, which is
+findings A and B above.  It does not cover work that holds the GIL for the
+whole wait; see the limitations section at the end of this docstring.
 
 THE ONE NUMBER, AND WHY YOU CAN ONLY LOWER IT
 ---------------------------------------------
@@ -63,6 +66,20 @@ Nothing here can help when the hook never starts (a missing command, a broken
 PATH: RFX-205) or when the event never reaches the hook at all (the matcher:
 RFX-204/206).  Those are a different layer and have their own tickets.  This
 module is only about a hook that DID start and must finish in time.
+
+A DEADLINE THAT IS A PYTHON THREAD CANNOT PREEMPT WORK THAT HOLDS THE GIL.
+`arm()` schedules a `threading.Timer`.  CPython's `sre` engine does not release
+the GIL for the duration of a single `re.search`, so while one match is running
+the timer thread does not get scheduled and the deadline fires late by however
+long that match takes -- measured by qa--233 as lateness independent of the
+budget, and |fired - work_end| = 0.00 on every regex arm.  This is a property of
+the runtime, not something this module can defend against; the durable bound on
+regex time is bounding the INPUT.  RFX-338 is the instance that was reachable in
+a shipped wheel: `_SENSITIVE_PATH_RE` ran uncapped on Write/Edit `file_path`,
+and classify.py now bounds that field at `MAX_FILE_PATH_CHARS` before any
+pattern touches it.  `test_deadline_declares_what_it_cannot_preempt.py` measures
+the preemption property and requires this section to keep declaring it, so the
+promise above cannot drift back to an unconditional one.
 """
 
 from __future__ import annotations
