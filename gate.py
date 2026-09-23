@@ -1405,6 +1405,18 @@ class Gate:
             # the loop rather than from a hand-written set of keys is the point:
             # a fourth list would go stale the same way the transcript did, and
             # a step added tomorrow is covered the moment it is added here.
+            #
+            # WHAT THIS DOES NOT SEE, stated so nobody reads it as wider than it
+            # is. It scores "did this step emit a COMPONENT line", not "did it
+            # emit the RIGHT one". Two cases survive it: a step that emits a
+            # verdict under a misspelled key (still one line, so still counted),
+            # and one of the FOUR components `pytest suites` emits going missing
+            # while its siblings report (the step as a whole still emitted). The
+            # single-component steps are 22 of the 23, and the defect this was
+            # written for — a step whose only `self.component(...)` call was
+            # deleted — is fully covered. Widening it to key-level would need
+            # each step to declare the keys it owns, i.e. the hand-written list
+            # this deliberately avoids; that trade is recorded, not hidden.
             if not any(COMPONENT_RE.match(l) for l in self.lines[before:]):
                 silent_steps.append(re.split(r"\s{2,}", header, 1)[0])
             self.emit("")
