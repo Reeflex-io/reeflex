@@ -12,6 +12,10 @@ Env vars:
                         Added as "Authorization: Bearer <token>" when set and
                         non-blank. NEVER logged, never placed in an exception
                         message or any other output produced by this package.
+  REEFLEX_APPROVER_TOKEN  optional bearer token used ONLY on the resolve
+                        route. Unset (the common case) it falls back to
+                        REEFLEX_TOKEN, so a single-token setup is unchanged.
+                        See approver_token() for why the two exist.
   REEFLEX_PRINCIPAL    "type:id" of the principal resolving holds, e.g.
                         "human:leo" or "agent:triage-bot". Split on the FIRST
                         colon (an id may itself contain colons). Required only
@@ -65,6 +69,35 @@ def core_token() -> str:
     Never logged: callers must not print or embed this value in any message.
     """
     return os.environ.get("REEFLEX_TOKEN", "").strip()
+
+
+def approver_token() -> str:
+    """Return the bearer token for the RESOLVE route, or "" if none is set.
+
+    RFX-245: reeflex-core has two independent allowlists over one header, and
+    they do not overlap. `REEFLEX_AUTH_TOKEN` (the shared gate token) is what
+    `GET /v1/holds` accepts; `REEFLEX_RESOLVER_TOKENS` (a credential bound to
+    one approving principal) is what `POST /v1/holds/{id}/resolve` accepts in
+    addition -- and only there, deliberately, so that an approver's credential
+    never becomes a key to submitting action envelopes
+    (reeflex-core/app/server.py::_authorized).
+
+    Measured against core v0.2.2, one token at a time, both verbs:
+
+        REEFLEX_TOKEN = gate token      -> list 200, approve 403 principal_not_verified
+        REEFLEX_TOKEN = approver token  -> list 401 unauthorized, approve 200 VERIFIED
+
+    So while this package read one token for every route, a human could either
+    find a hold id or approve it, never both -- and the id is not guessable.
+    Two names for two allowlists is the smallest thing that can express that.
+
+    Falls back to core_token() when unset, so every existing single-token
+    configuration keeps sending exactly the header it sent before.
+
+    Never logged: callers must not print or embed this value in any message.
+    """
+    explicit = os.environ.get("REEFLEX_APPROVER_TOKEN", "").strip()
+    return explicit or core_token()
 
 
 def verify_ssl() -> bool:
