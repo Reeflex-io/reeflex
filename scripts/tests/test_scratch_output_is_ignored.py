@@ -20,6 +20,7 @@ measured example that this rule does not cover and this guard does not claim to.
 """
 
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -33,6 +34,16 @@ REPO = Path(
 
 # Directory names read off the 2026-09-23 census of this repo's worktrees, plus
 # one synthetic name per prefix so the guard pins the PATTERN and not the sample.
+#
+# EVERY SAMPLE HERE MUST BE REACHABLE ONLY BY THE RULE IT IS MEANT TO PIN.
+# Measured qa--329, 2026-09-23, by deleting each added rule alone and re-running
+# this file: `.walk*/` and `.cache/` came out GREEN under that arm, i.e. nothing
+# here reached them. `.walk-rfx64/run-a.log` is a `.log`, so with `.walk*/` gone
+# the long-standing `*.log` rule still ignores it and the sample cannot tell the
+# two rules apart; `.cache/` had no sample at all. Either rule could have been
+# deleted later with this guard still green. The two entries marked below close
+# that, and `test_each_scratch_rule_is_load_bearing` asserts the property
+# directly rather than leaving it to whoever picks the next sample.
 MUST_BE_IGNORED = [
     ".scratch/decisions.jsonl",
     ".scratch-dev1-217/capture.txt",
@@ -43,8 +54,10 @@ MUST_BE_IGNORED = [
     ".venv-241/lib/python3.12/site-packages/x.py",
     ".venv-before/pyvenv.cfg",
     ".walk-rfx64/run-a.log",
+    ".walk-rfx100/probe.json",   # non-`.log`: the only sample `.walk*/` alone reaches
     ".rig/arm.sh",
     ".probe-rfx342/out.json",
+    ".cache/http/body.bin",      # `.cache/` had no sample at all
 ]
 
 # The over-wideness arm. These are ordinary tracked-source paths and repo
@@ -60,6 +73,43 @@ MUST_NOT_BE_IGNORED = [
     ".dockerignore",
     "README.md",
 ]
+
+
+# The rules RFX-212 added, in the order they appear in `.gitignore`. Listed here
+# rather than parsed so that renaming or dropping one reddens this file by name.
+SCRATCH_RULES = [
+    ".scratch*/",
+    ".rfx*/",
+    ".walk*/",
+    ".venv-*/",
+    ".rig/",
+    ".probe*/",
+    ".cache/",
+]
+
+
+def _ignored_under(gitignore_text: str, path: str) -> bool:
+    """True iff `path` is ignored by `gitignore_text` alone, evaluated in a
+    throwaway repo so the real tree is never mutated to answer the question.
+
+    `--no-index` because the question is "do these RULES hide this path", not
+    "what does this checkout's index say" -- the distinction `_is_ignored`
+    documents. Gated on exit STATUS, never on output.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(["git", "init", "-q", tmp], check=True,
+                       capture_output=True, text=True)
+        Path(tmp, ".gitignore").write_text(gitignore_text)
+        r = subprocess.run(
+            ["git", "check-ignore", "-q", "--no-index", "--", path],
+            cwd=tmp, capture_output=True, text=True,
+        )
+        if r.returncode not in (0, 1):
+            raise AssertionError(
+                "git check-ignore failed on %r: rc=%s stderr=%s"
+                % (path, r.returncode, r.stderr.strip())
+            )
+        return r.returncode == 0
 
 
 def _is_ignored(path: str, no_index: bool = False) -> bool:
@@ -121,6 +171,42 @@ class TestScratchOutputIsIgnored(unittest.TestCase):
         # so a change that breaks only that plane cannot go unnoticed.
         self.assertTrue(_is_ignored(".scratch/x", no_index=True), "no-index: nothing ignored")
         self.assertFalse(_is_ignored("README.md", no_index=True), "no-index: all ignored")
+
+    def test_each_scratch_rule_is_load_bearing(self):
+        """Every rule above must have a sample that ONLY that rule reaches.
+
+        Without this, a sample can be redundantly covered by an older, narrower
+        rule and the new one is pinned by nothing -- deletable later with this
+        file still green. Measured qa--329: that was true of `.walk*/` (its only
+        sample was a `.log`, already caught by the long-standing `*.log`) and of
+        `.cache/` (no sample at all). This asserts the property instead of
+        trusting whoever picks the next sample.
+
+        Instrument limit, stated: the throwaway repo carries only the ROOT
+        `.gitignore`, so a sample a nested `.gitignore` also covered would read
+        as load-bearing here. Every sample above is a root dot-directory, where
+        no nested file applies.
+        """
+        text = (REPO / ".gitignore").read_text()
+        unpinned = []
+        for rule in SCRATCH_RULES:
+            self.assertEqual(
+                1, text.count("\n%s\n" % rule),
+                "anchor: %r is not present exactly once in .gitignore" % rule,
+            )
+            without = text.replace("\n%s\n" % rule, "\n")
+            # A sample pins `rule` iff the full ruleset ignores it and the
+            # ruleset minus `rule` does not.
+            if not any(
+                _ignored_under(text, p) and not _ignored_under(without, p)
+                for p in MUST_BE_IGNORED
+            ):
+                unpinned.append(rule)
+        self.assertEqual(
+            [], unpinned,
+            "These rules are reached by no sample in MUST_BE_IGNORED, so deleting "
+            "them leaves this guard green: %s" % unpinned,
+        )
 
 
 if __name__ == "__main__":
