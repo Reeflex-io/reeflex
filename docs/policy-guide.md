@@ -82,7 +82,7 @@ one block's body is true for any given envelope.
 
 ## 2. LEVEL 1 — change a threshold
 
-The smallest possible change: one constant.
+The smallest possible change: one number in a data file.
 
 **Work in a copy — never edit the checked-in policy in place.** So a mistake
 can't dirty the shipped `reeflex-core/policy/` (which must stay
@@ -93,10 +93,11 @@ the copy:
 cp -r reeflex-core/policy my-policy
 ```
 
-The constant you'll change lives in `my-policy/reeflex.rego`:
+The threshold you'll change lives in `my-policy/budgets.rego`, in the
+`default_budgets` table:
 
 ```rego
-delete_session_budget := 20
+"deletions": {"limit": 20},
 ```
 
 This is R5's fragmentation-resistance budget (SPEC §4.1): the maximum
@@ -105,42 +106,58 @@ approval. Say your risk tolerance is lower and you want that budget at 5,
 not 20. Edit the one line:
 
 ```rego
-delete_session_budget := 5
+"deletions": {"limit": 5},
 ```
 
-That's the entire code change. But changing a constant is a real behavior
-change, and your test suite is the proof of what changed — including tests
-you didn't intend to touch. Run the suite against your copy:
+That's the entire change, and it is **data, not code**. `budgets.rego` holds
+`default_budgets` (applies to every principal) and `principal_budgets`
+(per-session overrides) across four dimensions — `money`, `deletions`,
+`external_sends`, `objects_touched` — each aggregating over heterogeneous
+verbs. No Python and no `reeflex.rego` edit is involved: the rules that read
+the table (`reeflex.policy/session_delete_budget` for `deletions`,
+`reeflex.policy/cumulative_budget` for every other dimension) are untouched.
+
+??? note "If you are following an older copy of this guide: the constant moved"
+
+    Before RFX-11 generalised R5, this limit was a bare constant
+    `delete_session_budget := 20` in `reeflex.rego`. **That identifier is not in
+    `reeflex.rego` and not anywhere else in the shipped pack** — RFX-11's PR
+    replaced it with the `default_budgets` table above. The LEVEL 2 walkthrough
+    further down still refers to it by the old name; that section carries its own
+    staleness warning (RFX-255).
+
+But changing a threshold is a real behavior change, and your test suite is the
+proof of what changed — including tests you didn't intend to touch. Run the
+suite against your copy:
 
 ```bash
 opa test my-policy/ -v
 ```
 
-**What actually happened when I ran this against the copy** (the shipped
-`reeflex-core/policy/` stays untouched): the shipped test
-`test_r5_under_budget_allows` uses a fixture tuned to sit under the *old*
-budget of 20 (prior deletes = 3, this batch = 5, total = 8 — under 20, over
-5). At this point you have only the **nine shipped tests** — the two boundary
-tests below aren't added yet — so the count is out of nine:
+**What actually happened when I ran this** (measured 2026-09-23 against
+`reeflex-core/policy` at commit `ecb7753`; the shipped `reeflex-core/policy/`
+stays untouched). The pack ships **75 tests**, and lowering the limit to 5
+breaks **two** of them — in **two different files**:
 
 ```
-FAILURES
+data.reeflex.policy_test.test_r5_under_budget_allows: FAIL
+data.reeflex.policy_test.test_one_call_earlier_still_allows: FAIL
 --------------------------------------------------------------------------------
-data.reeflex.policy_test.test_r5_under_budget_allows: FAIL (1.0406ms)
-  ...
-  my-policy/reeflex_test.rego:108   | | Fail got.decision = "allow"
---------------------------------------------------------------------------------
-PASS: 8/9
-FAIL: 1/9
+PASS: 73/75
+FAIL: 2/75
 ```
 
-That failure is `opa test` doing its job: total = 8 is now *over* the new
-budget of 5, so the fixture's old assumption ("8 is under budget") is no
-longer true, and the test correctly says so. **Lowering a shared constant
-means re-checking every fixture that was tuned against the old value** — this
-is not a bug in `opa test`, it is the reason you run it before deploying.
-Fix the fixture to match the new intent ("a small batch under the new budget
-still allows"):
+**Lowering a shared threshold means re-checking every fixture that was tuned
+against the old value.** That is not a bug in `opa test`; it is the reason you
+run it before deploying. The two failures are not the same kind of thing, and
+telling them apart is the whole point of this step.
+
+### Failure 1 — a stale fixture. Fix it.
+
+`my-policy/reeflex_test.rego`'s `test_r5_under_budget_allows` is tuned to sit
+under the *old* budget of 20 (prior deletes = 3, this batch = 5, total = 8 —
+under 20, over 5). Its old assumption ("8 is under budget") is simply no longer
+true. Fix the fixture to match the new intent:
 
 ```diff
 -# R5 UNDER BUDGET: prior deletes = 3, this batch = 5; total = 8 <= 20.
@@ -162,13 +179,47 @@ still allows"):
  }
 ```
 
-Then add a test that proves the new boundary — a batch that trips **5** but
-would not have tripped **20**:
+### Failure 2 — not a stale fixture. It is the pack telling you what 5 costs.
+
+`my-policy/budgets_count_test.rego`'s `test_one_call_earlier_still_allows`
+pins a `broad` delete of one record with 10 prior deletes as `allow`. It fails
+at a limit of 5 and **no edit to its numbers can make it pass**, because of
+something LEVEL 1 does not otherwise touch: `budgets.rego`'s `count_floor`
+charges a `broad` action at least **10**, whatever `magnitude.count` says
+(RFX-143). A `deletions` limit of 5 is *below that floor*, so the first broad
+delete in a fresh session is already over budget. Measured, same envelope,
+only the limit differing:
+
+```bash
+$ cat > env.json <<'EOF'
+{"action":{"verb":"delete"},"target":{"environment":"staging","ref":null},
+ "axes":{"reversibility":"recoverable","blast_radius":"broad","externality":"internal"},
+ "magnitude":{"count":1},"cumulative":{"count_by_verb":{"delete":0},"total_count":0},
+ "approval":{"present":false}}
+EOF
+
+$ opa eval -d reeflex-core/policy -i env.json 'data.reeflex.policy.decision' --format raw
+{"decision":"allow","reason":"no high-risk axis matched","rule":"reeflex.policy/default_allow"}
+
+$ opa eval -d my-policy -i env.json 'data.reeflex.policy.decision' --format raw
+{"decision":"require_approval","reason":"session delete budget exceeded (fragmentation guard)",
+ "rule":"reeflex.policy/session_delete_budget"}
+```
+
+So this failure is a verdict on your threshold, not on the fixture: if 5 really
+is your tolerance, holding every broad delete for a human is what you are
+choosing. If it is not, pick a limit above the `broad` floor of 10. Either way,
+decide it deliberately — that is the check doing its job.
+
+### Add a test that proves the new boundary
+
+A batch that trips **5** but would not have tripped **20**:
 
 ```rego
-# LEVEL 1 (docs/policy-guide.md): with delete_session_budget lowered to 5, a
+# LEVEL 1 (docs/policy-guide.md): with the `deletions` limit lowered to 5, a
 # first-call batch of 6 (prior_deletes defaults to 0) now trips the budget —
-# it would NOT have tripped the shipped default of 20.
+# it would NOT have tripped the shipped default of 20. blast_radius is
+# `scoped`, whose count_floor is 1, so `magnitude.count` is the charge.
 test_lowered_budget_trips_at_six if {
 	envelope := {
 		"action": {"verb": "delete"},
@@ -197,28 +248,34 @@ test_lowered_budget_five_is_still_allowed if {
 }
 ```
 
-Re-run the same command. Raw output, verified against the copy:
+Re-run the same command. Raw output, measured against the copy with the
+Failure-1 fixture corrected and these two tests added:
 
 ```
 $ opa test my-policy/ -v
 ...
-data.reeflex.policy_test.test_r1_read_internal_allow: PASS (2.1634ms)
-data.reeflex.policy_test.test_r2_irreversible_broad_prod_require_approval: PASS (2.1482ms)
-data.reeflex.policy_test.test_r3_irreversible_systemic_prod_deny: PASS (1.5904ms)
-data.reeflex.policy_test.test_r4_default_allow: PASS (2.0952ms)
-data.reeflex.policy_test.test_precedence_deny_over_require_approval: PASS (1.6273ms)
-data.reeflex.policy_test.test_r5_budget_exceeded_triggers_require_approval: PASS (2.1634ms)
-data.reeflex.policy_test.test_r5_under_budget_allows: PASS (1.0939ms)
-data.reeflex.policy_test.test_r5_budget_exceeded_but_approved_allows: PASS (2.0952ms)
-data.reeflex.policy_test.test_r5_absent_cumulative_does_not_crash: PASS (1.0939ms)
-data.reeflex.policy_test.test_lowered_budget_trips_at_six: PASS (1.109ms)
-data.reeflex.policy_test.test_lowered_budget_five_is_still_allowed: PASS (1.5904ms)
+data.reeflex.policy_test.test_lowered_budget_trips_at_six: PASS
+data.reeflex.policy_test.test_lowered_budget_five_is_still_allowed: PASS
+data.reeflex.policy_test.test_one_call_earlier_still_allows: FAIL
 --------------------------------------------------------------------------------
-PASS: 11/11
+PASS: 76/77
+FAIL: 1/77
 ```
 
-Nine original tests plus two new ones, all green, one fixture corrected. That
-is the whole workflow for a threshold change.
+Seventy-five shipped tests plus the two new ones, one fixture corrected, and
+one deliberate failure left standing because it is a statement about the
+threshold you chose rather than about the fixture. That is the whole workflow
+for a threshold change: **change data, run the suite, and read every failure it
+gives you before deciding which ones to make go away.**
+
+!!! warning "The numbers above are a snapshot, not a contract"
+
+    `75` is the shipped test count at the commit named above, and the pack grows.
+    `reeflex-core/tests/test_policy_guide_level1_rfx11.py` pins the *identifiers
+    and file names* this section tells you to edit against the shipped pack, so
+    the instructions cannot go stale silently again — it does not pin the counts
+    in the transcripts, and a count that has drifted is expected rather than a
+    defect.
 
 ---
 
