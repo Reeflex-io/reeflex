@@ -140,7 +140,8 @@ class DocstringDeclaresTheLimitation(unittest.TestCase):
         self.assertTrue(doc.strip(), "deadline.py has no module docstring")
         return doc
 
-    def _limitations_section(self):
+    def _split_on_the_heading(self):
+        """(everything before the limitations heading, everything after it)."""
         doc = self._doc()
         heading = "WHAT THIS MODULE DOES NOT CLOSE"
         self.assertEqual(
@@ -148,7 +149,14 @@ class DocstringDeclaresTheLimitation(unittest.TestCase):
             "expected exactly one %r heading in deadline.py's docstring, found "
             "%d -- this test anchors on it and a duplicate would make the "
             "section it scores ambiguous." % (heading, doc.count(heading)))
-        return doc.split(heading, 1)[1]
+        before, after = doc.split(heading, 1)
+        return before, after
+
+    def _limitations_section(self):
+        return self._split_on_the_heading()[1]
+
+    def _promise_half(self):
+        return self._split_on_the_heading()[0]
 
     def test_the_promise_is_not_unconditional(self):
         doc = self._doc()
@@ -159,6 +167,32 @@ class DocstringDeclaresTheLimitation(unittest.TestCase):
             "re.search is NOT preempted, so that sentence is an absolute the "
             "module cannot deliver -- it is the sentence RFX-338 was filed "
             "against, and it shipped in reeflex-claude 0.2.1.")
+
+    def test_the_promise_half_points_at_its_own_bound(self):
+        """The test above is a NEGATIVE assertion on one sentence, so it only
+        sees that sentence coming back. Measured by qa--337 on the shipped tree:
+        replacing the bounded promise with "kill us -- no matter what the socket
+        or the classifier is doing" -- the same absolute in different words --
+        left all five tests in this file green. A cross-reference is what
+        survives a rewrite: an author who rephrases the promise and keeps the
+        pointer has still told the reader where the bound is.
+
+        LIMIT, stated rather than implied: an absolute that ALSO keeps the
+        pointer passes both tests. What is closed is the shape the defect
+        actually took -- a promise written as if the section did not exist. A
+        marker list of quantifiers was tried and rejected: "whatever" occurs
+        legitimately in this half ("clamped under whatever is left of the
+        deadline"), so scoring the word would fire on correct prose.
+        """
+        head = self._promise_half()
+        self.assertIn(
+            "limitations section", head,
+            "the half of deadline.py's docstring that makes the promise no "
+            "longer points the reader at the section that bounds it. The "
+            "measured limitation is that a threading.Timer cannot preempt a "
+            "GIL-holding regex; a promise that does not carry a pointer to its "
+            "own limitations section reads as unconditional however it is "
+            "phrased, which is the defect RFX-338 was filed against.")
 
     def test_the_limitations_section_names_the_gil_case(self):
         section = self._limitations_section()
