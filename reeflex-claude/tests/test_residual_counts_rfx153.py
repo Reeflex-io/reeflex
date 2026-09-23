@@ -36,6 +36,12 @@ Both were re-measured true at 265 rows by dev-1--223 (`measure-corpus-postures.p
 OPA 1.18 against reeflex-core's real pack, three postures, 0 opa errors). Pinning
 them here would need OPA and the core policy pack inside this suite, which it does
 not have. They remain unguarded and the prose beside them says so.
+
+Nor does it read a total stated in a unit these patterns do not carry -- "265
+conformance entries", "265 cases". Four totals are stated today and all four are
+read; a fifth in a new unit would not be, and the vacuity guard cannot see that
+because the other four still match. See the _TOTAL_PATTERNS comment for the one
+direction in which this test is deliberately over-wide.
 """
 
 import json
@@ -49,9 +55,36 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _CORPUS = _REPO_ROOT / "reeflex-spec" / "conformance" / "claude-adapter-bash.json"
 
 # Every shape in which the docstring states a corpus TOTAL.
+#
+# THESE ARE DISCOVERING, NOT AN ENUMERATION, AND THAT IS THE POINT (dev-3--172).
+# As first pushed these read `(\d+)-case corpus` and `corpus'\s+(\d+)\s+rows` --
+# an allowlist of the two phrasings that happened to exist. The same commit that
+# added them also added a THIRD statement of the total, in a shape neither one
+# reads:
+#
+#     "...measurements dated to this commit (dev-1--225, re-measured at 265 rows)"
+#
+# Measured on the shipped tree: rewriting that 265 to 999 left all 763 tests
+# green. A guard against a stale denominator that is itself keyed to the exact
+# words beside the denominator has the defect it was written to catch, so these
+# patterns now anchor on the UNIT (`rows`, `-case`) and not on the sentence.
+#
+# THE TRADE, DECLARED: this is deliberately over-wide in one direction. Any
+# `<N> rows` anywhere in this docstring is now asserted to be the corpus total,
+# so a future sentence stating some OTHER row count in that exact shape fails
+# this test. That failure is loud and self-describing (see the message below)
+# and is the direction we want to fail in. Censused at this commit: `<N> rows`
+# matches 3 times and `<N>-case` once, all four the corpus total, no false
+# positive -- and `<N> everyday rows` does not collide, because `everyday` sits
+# between the number and `rows`.
+#
+# STILL NOT READ, so it is a limit and not a claim of coverage: a total written
+# in a third unit -- "265 conformance entries", "265 cases" -- is invisible to
+# both patterns. The vacuity guard does not catch that either, because the other
+# statements still match. Add the unit here if the prose grows one.
 _TOTAL_PATTERNS = (
-    r"(\d+)-case corpus",           # "no everyday row in the 265-case corpus"
-    r"corpus'\s+(\d+)\s+rows",      # "6 of the corpus' 265 rows"
+    r"(\d+)-case",      # "no everyday row in the 265-case corpus"
+    r"(\d+)\s+rows",    # "the corpus' 265 rows", "...re-measured at 265 rows"
 )
 # ...and the one shape in which it states the EVERYDAY subtotal.
 _EVERYDAY_PATTERN = r"corpus'\s+(\d+)\s+everyday\s+rows"
@@ -78,8 +111,12 @@ class DocstringCorpusCountsMatchTheCorpus(unittest.TestCase):
     def test_every_stated_corpus_total_is_the_corpus_total(self):
         found = []
         for pattern in _TOTAL_PATTERNS:
-            for stated in re.findall(pattern, self.doc, re.DOTALL):
-                found.append((pattern, int(stated)))
+            for match in re.finditer(pattern, self.doc, re.DOTALL):
+                # Quote the sentence, not just the number: with discovering
+                # patterns the reader's first question is always WHICH sentence.
+                start = max(0, match.start() - 60)
+                snippet = " ".join(self.doc[start:match.end() + 20].split())
+                found.append((int(match.group(1)), snippet))
         # VACUITY GUARD: a reflow that breaks these patterns must fail loudly
         # rather than quietly leave this test asserting over an empty list.
         self.assertTrue(
@@ -88,9 +125,19 @@ class DocstringCorpusCountsMatchTheCorpus(unittest.TestCase):
             "the prose was reworded or this test's patterns rotted. Either way "
             "this test is no longer reading anything; fix it rather than delete it.",
         )
-        wrong = [f"{pattern!r} states {stated}, corpus has {self.total}"
-                 for pattern, stated in found if stated != self.total]
-        self.assertEqual([], wrong, "\n".join(wrong))
+        wrong = [f"states {stated}, corpus has {self.total}:  ...{snippet}..."
+                 for stated, snippet in found if stated != self.total]
+        self.assertEqual(
+            [], wrong,
+            "\n".join(wrong) + (
+                "\n\nEvery `<N> rows` and `<N>-case` in the classify.py module "
+                "docstring is read as a claim about the corpus total. If one of "
+                "these is a stale denominator, correct it. If it was never meant "
+                "to BE the total, phrase it so it does not read as one -- do not "
+                "narrow these patterns back to the sentences that exist today, "
+                "which is the hole dev-3--172 measured."
+            ),
+        )
 
     def test_the_stated_everyday_subtotal_is_the_everyday_subtotal(self):
         stated = re.findall(_EVERYDAY_PATTERN, self.doc, re.DOTALL)

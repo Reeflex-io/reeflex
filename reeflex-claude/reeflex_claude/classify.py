@@ -353,8 +353,10 @@ cover it and neither is total:
     The corpus has gone 82 -> 84 -> 252 -> 265 rows since 2026-08-22, and both
     DENOMINATORS above went stale twice in two days because they were written
     by hand beside a growing artefact.  They are now read back out of the
-    corpus by tests/test_residual_counts_rfx153.py, which fails if this prose
-    and the corpus disagree.  The two NUMERATORS -- the 6 and the 5 -- are NOT
+    corpus by tests/test_residual_counts_rfx153.py, which fails when a total
+    written here as `<N> rows` or `<N>-case` disagrees with the corpus -- every
+    total stated in this docstring at this commit, but a unit check and not a
+    reading of the prose.  The two NUMERATORS -- the 6 and the 5 -- are NOT
     guarded: scoring them needs OPA and the core policy pack, which this
     suite does not carry, so they are measurements dated to this commit
     (dev-1--225, re-measured at 265 rows) and not checked claims.
