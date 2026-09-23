@@ -591,10 +591,10 @@ has to finish in time.
 - **REEFLEX_CLAUDE_STRICT**: unset by default so coding agents are not blocked on
   every `npm install`.  When set, every UNRECOGNISED command is priced
   irreversible + broad, so in production it reaches a human — measured live on
-  the conformance corpus, **it moves 66 of the 252 conformance cases**, every
+  the conformance corpus, **it moves 69 of the 265 conformance cases**, every
   one of them `allow` → `ask` and **none of them to `deny`** — so the knob
-  raises work to a human and does not by itself stop anything.  **58 of those
-  66 are `everyday-` rows** — ordinary developer work such as `pytest`,
+  raises work to a human and does not by itself stop anything.  **61 of those
+  69 are `everyday-` rows** — ordinary developer work such as `pytest`,
   `npm install` and `make build` — and 4 are the RFX-158 gap rows above.  That
   proportion is the price of the knob and is stated here rather than left to be
   discovered: it is the noisy setting, and today it is the broadest lever this
