@@ -333,7 +333,7 @@ dev-3--158): all four reach a human, and the rule that holds them is R2
 `reeflex.policy/irreversible_broad_prod` -- NOT R6, the rule landed for this
 ticket.  The cost this block used to predict did not arrive: `rm
 /tmp/scratch.txt` is still `single`/`moderate` and still allows, and no everyday
-row in the 252-case corpus is blocked.  The raise is a KIND claim, which SPEC
+row in the 265-case corpus is blocked.  The raise is a KIND claim, which SPEC
 §4.2 permits and which is raise-only -- see `_DATA_CONTAINER_PATH_RE`.
 
 WHAT REMAINS.  A destruction that names exactly one production entity whose ref
@@ -343,16 +343,23 @@ cover it and neither is total:
 
   * R6 `irreversible_protected_asset_prod` holds it when the ref is a path
     under `protected_assets` (policy/protected.rego).  Emptying that list turns
-    6 of the corpus' 252 rows from `ask` back to `allow`, so the default floor
+    6 of the corpus' 265 rows from `ask` back to `allow`, so the default floor
     is load-bearing -- and it is a floor, not a claim of coverage.
   * A ref that is not a filesystem path at all -- `git branch -D main`, whose
     target.ref is `main` -- cannot match a path prefix, so under the shipped
     posture (`default_protected := false`) R6 does not reach it.  Setting
     `default_protected := true` does hold all three such rows, measured, at a
-    measured cost of 5 false positives across the corpus' 96 everyday rows.
-    Both counts are of the corpus AT THIS COMMIT and nothing guards them: the
-    corpus has gone 82 -> 84 -> 252 rows since 2026-08-22, so re-count before
-    citing either rather than trusting the denominator written here.
+    measured cost of 5 false positives across the corpus' 100 everyday rows.
+    The corpus has gone 82 -> 84 -> 252 -> 265 rows since 2026-08-22, and both
+    DENOMINATORS above went stale twice in two days because they were written
+    by hand beside a growing artefact.  They are now read back out of the
+    corpus by tests/test_residual_counts_rfx153.py, which fails when a total
+    written here as `<N> rows` or `<N>-case` disagrees with the corpus -- every
+    total stated in this docstring at this commit, but a unit check and not a
+    reading of the prose.  The two NUMERATORS -- the 6 and the 5 -- are NOT
+    guarded: scoring them needs OPA and the core policy pack, which this
+    suite does not carry, so they are measurements dated to this commit
+    (dev-1--225, re-measured at 265 rows) and not checked claims.
 
 Those three rows are the ones still carrying `residual=RESIDUAL_TICKET` in
 conformance.py.  Whether the canon should hold an irreversible destruction of a
