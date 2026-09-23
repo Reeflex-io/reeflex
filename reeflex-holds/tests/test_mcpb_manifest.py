@@ -33,11 +33,32 @@ WHAT THIS PINS, and what it deliberately does not:
      `config.py` treats exactly like "unset".
 
   3. Anything carrying a bearer token is marked `sensitive`, so the Desktop UI
-     does not render a credential in the clear.
+     does not render a credential in the clear. Credential-ness is decided by
+     the variable's own NAME (see `_is_credential`), not by a set of the two
+     that happen to exist today.
+
+  4. Every exposed variable resolves to a `${user_config.*}` field OF ITS OWN.
+     Membership in the env block is not a channel to the human: a variable
+     wired to a literal, or to a key another variable already owns, renders no
+     field the user can type into, so it cannot be set independently. That is
+     the same defect as (1), one step sideways.
+
+RFX-418, on how (3) and (4) got here. The RFX-245-residual version of this file
+derived the variable LIST from the AST, then decided both properties above from
+hand-written or implicit scope. Measured: a new `REEFLEX_SIGNING_TOKEN` wired to
+an un-`sensitive` field passed every assertion, and so did a new variable wired
+to `${user_config.token}`, which no user can set separately. Deriving the list
+and hand-keeping the predicates put back exactly the drift the AST walk removed.
 
 It does NOT claim the bundle works -- no Claude Desktop runs in this suite, and
 this file makes no statement about one. It asserts a parity between two files
 in this repo, which is the thing that silently drifted.
+
+DECLARED LIMIT: the AST walk matches `<something>.environ.get("LITERAL")`. A
+variable read via `os.getenv` or `os.environ[...]` is invisible to it. Measured
+2026-09-23: `os.getenv` appears zero times in this monorepo and `config.py` is
+the package's sole env-reading surface outside tests, so that is a narrowness
+against an idiom this repo does not use -- recorded, not fixed.
 """
 
 from __future__ import annotations
@@ -65,7 +86,19 @@ NOT_EXPOSED = {
 }
 
 # Variables whose value is a bearer token and must never render in the clear.
+# FLOOR, not the scope: names that do not announce themselves by suffix.
 _CREDENTIAL_VARS = {"REEFLEX_TOKEN", "REEFLEX_APPROVER_TOKEN"}
+
+# A variable is a credential if its own name says so. Derived on purpose: the
+# variable LIST is read from config.py's AST precisely so that a variable added
+# tomorrow is in scope tomorrow, and a hand-kept set of which ones are secret
+# would have put that back (qa--338: a new REEFLEX_SIGNING_TOKEN wired to an
+# un-`sensitive` field passed every assertion in this file).
+_CREDENTIAL_SUFFIXES = ("_TOKEN", "_SECRET", "_KEY", "_PASSWORD", "_CREDENTIAL")
+
+
+def _is_credential(var: str) -> bool:
+    return var in _CREDENTIAL_VARS or var.endswith(_CREDENTIAL_SUFFIXES)
 
 
 def _env_vars_config_reads() -> set[str]:
@@ -156,10 +189,54 @@ class TestMcpbManifestTracksThePackage(unittest.TestCase):
                     "and the server sees an empty string." % (name, key),
                 )
 
+    def test_every_exposed_var_has_its_own_user_config_field(self) -> None:
+        """Being in the env block is not the same as reaching the human.
+
+        `test_every_env_var_is_exposed_or_declared_not_exposed` is satisfied by
+        mere membership in the env block. Membership is not a channel: a
+        variable wired to a literal, or to a `${user_config.X}` key some OTHER
+        variable already owns, renders no field of its own and cannot be set
+        independently -- which is exactly the RFX-245 residual this file was
+        written against, one step sideways. So every variable config.py reads
+        and the manifest exposes must resolve to a user_config key of its own.
+        """
+        prefix = "${user_config."
+        owner: dict[str, str] = {}
+        for var in sorted(_env_vars_config_reads()):
+            if var in NOT_EXPOSED or var not in self.env:
+                continue  # the exposure test above owns those two cases
+            with self.subTest(var=var):
+                raw = self.env[var]
+                self.assertTrue(
+                    isinstance(raw, str) and raw.startswith(prefix),
+                    "manifest env %s is wired to %r, not to a ${user_config.*} "
+                    "field. The Desktop UI renders a field only for user_config, "
+                    "so a bundle user cannot set %s at all." % (var, raw, var),
+                )
+                key = raw[len(prefix):].rstrip("}")
+                self.assertNotIn(
+                    key, owner,
+                    "manifest env %s and %s both read ${user_config.%s}. One "
+                    "field cannot carry two variables: whichever the user types "
+                    "goes to both, and %s can never be set on its own."
+                    % (var, owner.get(key), key, var),
+                )
+                owner[key] = var
+
+    def test_the_credential_detector_is_not_vacuous(self) -> None:
+        """Non-vacuity: a detector that classifies nothing pins nothing."""
+        self.assertTrue(_is_credential("REEFLEX_TOKEN"))
+        self.assertTrue(_is_credential("REEFLEX_APPROVER_TOKEN"))
+        self.assertTrue(_is_credential("REEFLEX_SOMETHING_SECRET"))
+        self.assertFalse(_is_credential("REEFLEX_CORE_URL"))
+        self.assertFalse(_is_credential("REEFLEX_HOLDS_TIMEOUT"))
+
     def test_credential_fields_are_marked_sensitive(self) -> None:
         """A bearer token must not render in the clear in the Desktop UI."""
         prefix = "${user_config."
-        for var in sorted(_CREDENTIAL_VARS & set(self.env)):
+        credentials = {v for v in self.env if _is_credential(v)}
+        credentials |= {v for v in _env_vars_config_reads() if _is_credential(v)} & set(self.env)
+        for var in sorted(credentials):
             with self.subTest(var=var):
                 raw = self.env[var]
                 self.assertTrue(
