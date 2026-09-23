@@ -101,17 +101,32 @@ Leo's GO for anything that publishes/attaches release assets.
 
 ## Configuration -- how the token gets to the server
 
-The manifest declares four `user_config` entries (`core_url`, `token`,
-`principal`, `verify_ssl`), which Claude Desktop's install UI prompts the
-user for and substitutes into `server.mcp_config.env` at launch
+The manifest declares five `user_config` entries (`core_url`, `token`,
+`approver_token`, `principal`, `verify_ssl`), which Claude Desktop's install
+UI prompts the user for and substitutes into `server.mcp_config.env` at launch
 (`${user_config.token}` etc. -- see `manifest.json`).
 
-**The bearer token (`REEFLEX_TOKEN`) is ALWAYS supplied by the user at
-install/configure time, via the `sensitive: true` `user_config.token`
-field. It is never embedded in `manifest.json`, never baked into
-`server/main.py` or `server/lib/`, and never written by `build.ps1` /
-`build.sh`.** The same applies to `principal` (an identity, not a secret,
-but still user-supplied, never hardcoded) and to `core_url`/`verify_ssl`.
+**The bearer tokens (`REEFLEX_TOKEN`, `REEFLEX_APPROVER_TOKEN`) are ALWAYS
+supplied by the user at install/configure time, via the `sensitive: true`
+`user_config.token` / `user_config.approver_token` fields. Neither is ever
+embedded in `manifest.json`, baked into `server/main.py` or `server/lib/`, or
+written by `build.ps1` / `build.sh`.** The same applies to `principal` (an
+identity, not a secret, but still user-supplied, never hardcoded) and to
+`core_url`/`verify_ssl`.
+
+`approver_token` exists because `reeflex-core` keeps two allowlists over one
+`Authorization` header: a credential bound in `REEFLEX_RESOLVER_TOKENS` is
+accepted on `POST /v1/holds/{id}/resolve` and refused `401` on the read
+routes. This bundle declares `resolve_hold` among its tools, so without a
+second field a bundle user could either *find* a hold or *decide* it, never
+both (RFX-245). Leave it empty and `REEFLEX_TOKEN` is used for both routes,
+exactly as before.
+
+`REEFLEX_HOLDS_TIMEOUT` is the one variable `config.py` reads that this
+bundle deliberately does NOT expose -- it has a working 10s default and is
+neither a credential nor an endpoint. That omission is declared, with its
+reason, in `reeflex-holds/tests/test_mcpb_manifest.py`, which fails if a
+future variable goes missing from this manifest without such a declaration.
 
 Note the one cross-package naming outlier, surfaced honestly rather than
 silently reconciled: `reeflex-holds` reads `REEFLEX_TOKEN`, while the other

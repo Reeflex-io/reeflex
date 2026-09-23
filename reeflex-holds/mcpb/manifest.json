@@ -21,6 +21,7 @@
         "PYTHONPATH": "${__dirname}/server/lib",
         "REEFLEX_CORE_URL": "${user_config.core_url}",
         "REEFLEX_TOKEN": "${user_config.token}",
+        "REEFLEX_APPROVER_TOKEN": "${user_config.approver_token}",
         "REEFLEX_VERIFY_SSL": "${user_config.verify_ssl}",
         "REEFLEX_PRINCIPAL": "${user_config.principal}"
       },
@@ -47,6 +48,13 @@
       "description": "Bearer token for reeflex-core's holds API, sent as 'Authorization: Bearer <token>'. NOTE: this package's env var is REEFLEX_TOKEN, not REEFLEX_CORE_TOKEN used by the other Reeflex adapters -- a known cross-package naming outlier. Never logged.",
       "sensitive": true,
       "required": true
+    },
+    "approver_token": {
+      "type": "string",
+      "title": "Approver credential (REEFLEX_APPROVER_TOKEN)",
+      "description": "Bearer token sent on approve/reject ONLY. Set this when your reeflex-core binds approvers with REEFLEX_RESOLVER_TOKENS: core accepts that credential on the resolve route and refuses it 401 on the read routes, so one token cannot both find a hold and decide it (RFX-245). Leave empty and the gate token above is used for both, exactly as before. Never logged.",
+      "sensitive": true,
+      "required": false
     },
     "principal": {
       "title": "Approver principal (type:id)",
