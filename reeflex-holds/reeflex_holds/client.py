@@ -85,9 +85,13 @@ def _build_ssl_context(url: str) -> ssl.SSLContext | None:
     return ctx
 
 
-def _headers() -> dict[str, str]:
+def _headers(*, approver: bool = False) -> dict[str, str]:
     headers = {"Accept": "application/json"}
-    token = config.core_token()
+    # RFX-245: the resolve route is the one core will accept a resolver
+    # credential on, and the only one. Every other route wants the gate
+    # token. config.approver_token() falls back to core_token(), so a
+    # single-token setup produces a byte-identical header either way.
+    token = config.approver_token() if approver else config.core_token()
     if token:
         headers["Authorization"] = "Bearer " + token
     # token is not referenced again in this module -- never logged.
@@ -100,6 +104,7 @@ def _request(
     *,
     query: dict[str, Any] | None = None,
     json_body: dict[str, Any] | None = None,
+    approver: bool = False,
 ) -> tuple[int, dict]:
     """Perform one HTTP request against reeflex-core.
 
@@ -121,7 +126,7 @@ def _request(
             url = f"{url}?{qs}"
 
     data = None
-    headers = _headers()
+    headers = _headers(approver=approver)
     if json_body is not None:
         data = json.dumps(json_body).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -163,9 +168,12 @@ def _request_ok(
     *,
     query: dict[str, Any] | None = None,
     json_body: dict[str, Any] | None = None,
+    approver: bool = False,
 ) -> dict:
     """`_request` wrapper that raises HoldsAPIError on any non-2xx status."""
-    status, parsed = _request(method, path, query=query, json_body=json_body)
+    status, parsed = _request(
+        method, path, query=query, json_body=json_body, approver=approver
+    )
     if status < 200 or status >= 300:
         raise HoldsAPIError(status, parsed, f"{config.core_url()}{path}")
     return parsed
@@ -205,6 +213,12 @@ def resolve_hold(hold_id: str, decision: str, reason: str | None = None) -> dict
     anti-impersonation guarantee: an MCP client cannot resolve a hold "as"
     an arbitrary identity by simply asking to.
 
+    The bearer sent here is `config.approver_token()`, not the token the read
+    routes use: core accepts a REEFLEX_RESOLVER_TOKENS credential on THIS
+    route and nowhere else, and accepts the shared gate token everywhere else
+    (RFX-245). With only REEFLEX_TOKEN set the two are the same string, so a
+    single-token setup is unchanged.
+
     Core independently enforces (this client does not duplicate any of it):
     the hold must be pending and not expired; the rule must be resolvable
     (irreversible_systemic_prod never is); REEFLEX_PRINCIPAL's type must be
@@ -224,7 +238,9 @@ def resolve_hold(hold_id: str, decision: str, reason: str | None = None) -> dict
     }
     if reason:
         body["reason"] = reason
-    return _request_ok("POST", f"/v1/holds/{safe_id}/resolve", json_body=body)
+    return _request_ok(
+        "POST", f"/v1/holds/{safe_id}/resolve", json_body=body, approver=True
+    )
 
 
 def get_freeze_status() -> dict:

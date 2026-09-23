@@ -65,6 +65,7 @@ expected -- check the originating adapter for its own resubmission /
 |--------------------------|----------|----------------------------|---------|
 | `REEFLEX_CORE_URL`       | no       | `http://127.0.0.1:8080`   | `reeflex-core` base URL |
 | `REEFLEX_TOKEN`          | no       | unset                      | optional bearer token; adds `Authorization: Bearer <token>` to every request. Never logged. Holds the same `reeflex-core` bearer token the other adapters call `REEFLEX_CORE_TOKEN` — see the naming note below. |
+| `REEFLEX_APPROVER_TOKEN` | no       | falls back to `REEFLEX_TOKEN` | bearer token sent on `approve`/`reject` **only**. Set it when your core binds approvers with `REEFLEX_RESOLVER_TOKENS`: that credential is accepted on the resolve route and refused `401` on the read routes, so one token cannot do both jobs. Leave it unset and nothing changes. Never logged. |
 | `REEFLEX_PRINCIPAL`      | only for `resolve_hold` | unset      | `"type:id"` of the resolving identity, e.g. `human:leo` or `agent:triage-bot`. Split on the *first* colon (an id may itself contain colons). `list_holds`, `get_hold`, and `get_freeze_status` do not need it. |
 | `REEFLEX_VERIFY_SSL`     | no       | `true` (full TLS verification) | set to `0`/`false`/`no`/`off` (case-insensitive) to **disable** TLS certificate verification -- dev/self-signed endpoints only, at the operator's own risk. Same env name and semantics as `reeflex-claude` and the WordPress adapter, per the project's standing TLS-verify-opt-out rule. |
 | `REEFLEX_HOLDS_TIMEOUT`  | no       | `10` (seconds)              | hard socket timeout for every HTTP request to core; this package never issues an unbounded request |
@@ -88,10 +89,21 @@ expected -- check the originating adapter for its own resubmission /
 > verbatim, which names the principal and the two settings that would change
 > the answer. To resolve holds against such a core, ask its operator for the
 > bearer token bound to your principal in core's `REEFLEX_RESOLVER_TOKENS` and
-> put it in `REEFLEX_TOKEN`. `REEFLEX_PRINCIPAL` must then *agree* with that
-> binding: assert someone else's identity and core answers `403
-> principal_mismatch` rather than silently substituting. `list_holds` /
-> `get_hold` / `get_freeze_status` are unaffected.
+> put it in **`REEFLEX_APPROVER_TOKEN`**. `REEFLEX_PRINCIPAL` must then *agree*
+> with that binding: assert someone else's identity and core answers `403
+> principal_mismatch` rather than silently substituting.
+>
+> **Put it in `REEFLEX_APPROVER_TOKEN`, not `REEFLEX_TOKEN`, and this is a
+> correction (RFX-245).** This paragraph used to say to put the bound
+> credential in `REEFLEX_TOKEN` and that `list_holds` / `get_hold` /
+> `get_freeze_status` were *unaffected*. Measured against core v0.2.2, they are
+> not: core accepts a `REEFLEX_RESOLVER_TOKENS` credential on the resolve route
+> **and nowhere else** — by design, so an approver's credential never becomes a
+> key to submitting actions — so a read made with it answers `401 unauthorized`
+> and `reeflex-holds list` exits 1. Keep the shared gate token in
+> `REEFLEX_TOKEN` for the reads and the bound credential in
+> `REEFLEX_APPROVER_TOKEN` for the decision; with only `REEFLEX_TOKEN` set both
+> routes send it, exactly as before.
 
 ## Why the `mcp` SDK
 
@@ -135,6 +147,7 @@ hand-written HTTP call:
 ```bash
 export REEFLEX_CORE_URL=http://127.0.0.1:8080
 export REEFLEX_TOKEN=              # only if your core requires a bearer token
+export REEFLEX_APPROVER_TOKEN=     # only if your core binds approvers; falls back to REEFLEX_TOKEN
 export REEFLEX_PRINCIPAL=human:leo # required for approve/reject, not for list
 
 reeflex-holds list --status pending
@@ -201,6 +214,7 @@ Developer -> Edit Config), using the **absolute path** to your checkout:
       "env": {
         "REEFLEX_CORE_URL": "http://127.0.0.1:8080",
         "REEFLEX_TOKEN": "",
+        "REEFLEX_APPROVER_TOKEN": "",
         "REEFLEX_PRINCIPAL": "human:leo",
         "REEFLEX_VERIFY_SSL": "true"
       }

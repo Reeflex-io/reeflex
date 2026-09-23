@@ -27,6 +27,7 @@ from reeflex_holds import config  # noqa: E402
 _ENV_KEYS = (
     "REEFLEX_CORE_URL",
     "REEFLEX_TOKEN",
+    "REEFLEX_APPROVER_TOKEN",
     "REEFLEX_PRINCIPAL",
     "REEFLEX_VERIFY_SSL",
     "REEFLEX_HOLDS_TIMEOUT",
@@ -371,6 +372,159 @@ class TestGetFreezeStatusReachable(_BaseClientTest):
         result = client.get_freeze_status()
         self.assertFalse(result["core_reachable"])
         self.assertEqual(result["freeze_state"], "unknown")
+
+
+# ---------------------------------------------------------------------------
+# RFX-245 -- ONE environment, BOTH verbs
+#
+# reeflex-core keeps two independent allowlists over one Authorization header
+# (reeflex-core/app/server.py::_authorized): the shared gate token
+# REEFLEX_AUTH_TOKEN is what every route accepts, and a credential bound in
+# REEFLEX_RESOLVER_TOKENS is accepted IN ADDITION on the resolve route and
+# nowhere else -- deliberately, so an approver's credential never becomes a
+# key to submitting action envelopes.
+#
+# Every test above this line exercises ONE verb per environment, which is
+# exactly why a client that could not carry both tokens looked correct: a
+# human could find a hold id or approve it, never both, and the id is not
+# guessable. The stub below is the smallest thing that can see that -- it
+# enforces both allowlists, and the first test drives both verbs without
+# changing the environment between them.
+#
+# Measured against the real core v0.2.2 before this was written; the
+# before/after walk is in dev-1--228's evidence directory.
+# ---------------------------------------------------------------------------
+
+_GATE_TOKEN = "gate-token-for-tests"
+_RESOLVER_TOKEN = "approver-credential-for-tests"
+
+
+class _TwoAllowlistCoreHandler(_StubCoreHandler):
+    """Stands in for core's `_authorized(allow_resolver_tokens=...)`."""
+
+    last_get_auth: str = ""
+    last_post_auth: str = ""
+
+    def _bearer(self) -> str:
+        header = self.headers.get("Authorization", "")
+        prefix = "Bearer "
+        return header[len(prefix):].strip() if header.startswith(prefix) else ""
+
+    def do_GET(self):  # noqa: N802
+        cls = self.__class__
+        cls.last_get_auth = self._bearer()
+        if self._bearer() != _GATE_TOKEN:
+            cls.last_path = self.path
+            self._send(401, b'{"error":"unauthorized"}')
+            return
+        super().do_GET()
+
+    def do_POST(self):  # noqa: N802
+        cls = self.__class__
+        bearer = self._bearer()
+        cls.last_post_auth = bearer
+        if bearer == _RESOLVER_TOKEN:
+            # Bound credential: core takes the principal FROM the credential.
+            cls.resolve_status = 200
+            cls.resolve_body = json.dumps(
+                {"id": "abc123", "status": "approved",
+                 "decided_by": "human:op", "decided_ts": "2026-09-23T00:00:00Z",
+                 "decided_by_verified": True, "principal_source": "credential"}
+            ).encode("utf-8")
+        elif bearer == _GATE_TOKEN:
+            # Authenticated at the door, unbound at the verification.
+            cls.resolve_status = 403
+            cls.resolve_body = json.dumps(
+                {"error": "principal_not_verified"}).encode("utf-8")
+        else:
+            cls.resolve_status = 401
+            cls.resolve_body = b'{"error":"unauthorized"}'
+        super().do_POST()
+
+
+def _start_two_allowlist_server():
+    class _Handler(_TwoAllowlistCoreHandler):
+        pass
+
+    _Handler.last_headers = {}
+    _Handler.last_get_auth = ""
+    _Handler.last_post_auth = ""
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, port, _Handler
+
+
+class TestOneEnvironmentBothVerbs(unittest.TestCase):
+    def setUp(self) -> None:
+        self._saved_env = {k: os.environ.get(k) for k in _ENV_KEYS}
+        for k in _ENV_KEYS:
+            os.environ.pop(k, None)
+        os.environ["REEFLEX_HOLDS_TIMEOUT"] = "3"
+        self.server, self.port, self.handler_cls = _start_two_allowlist_server()
+        os.environ["REEFLEX_CORE_URL"] = f"http://127.0.0.1:{self.port}"
+        os.environ["REEFLEX_PRINCIPAL"] = "human:op"
+        self.handler_cls.holds_list_body = json.dumps(
+            {"items": [SAMPLE_HOLD], "count": 1}).encode("utf-8")
+
+    def tearDown(self) -> None:
+        _stop_stub_server(self.server)
+        for k, v in self._saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_one_environment_can_both_list_and_approve(self) -> None:
+        """The requirement RFX-245 states: both verbs, no env change between."""
+        os.environ["REEFLEX_TOKEN"] = _GATE_TOKEN
+        os.environ["REEFLEX_APPROVER_TOKEN"] = _RESOLVER_TOKEN
+
+        listed = client.list_holds(status="pending")
+        self.assertEqual(listed["count"], 1)
+
+        resolved = client.resolve_hold("abc123", "approve")
+        self.assertEqual(resolved["status"], "approved")
+        self.assertTrue(resolved["decided_by_verified"])
+
+    def test_read_routes_do_not_carry_the_approver_credential(self) -> None:
+        """Containment: the bound credential goes to the resolve route only."""
+        os.environ["REEFLEX_TOKEN"] = _GATE_TOKEN
+        os.environ["REEFLEX_APPROVER_TOKEN"] = _RESOLVER_TOKEN
+
+        client.list_holds()
+        self.assertEqual(self.handler_cls.last_get_auth, _GATE_TOKEN)
+        client.resolve_hold("abc123", "approve")
+        self.assertEqual(self.handler_cls.last_post_auth, _RESOLVER_TOKEN)
+
+    def test_single_token_setup_sends_the_same_header_on_both_routes(self) -> None:
+        """Back-compat: REEFLEX_APPROVER_TOKEN unset changes nothing."""
+        os.environ["REEFLEX_TOKEN"] = _GATE_TOKEN
+        os.environ.pop("REEFLEX_APPROVER_TOKEN", None)
+
+        client.list_holds()
+        with self.assertRaises(client.HoldsAPIError) as ctx:
+            client.resolve_hold("abc123", "approve")
+        self.assertEqual(ctx.exception.status, 403)   # core's answer, unchanged
+        self.assertEqual(self.handler_cls.last_get_auth, _GATE_TOKEN)
+        self.assertEqual(self.handler_cls.last_post_auth, _GATE_TOKEN)
+
+    def test_the_defect_as_filed_is_what_the_stub_reproduces(self) -> None:
+        """Control: with ONE token holding the credential, `list` is refused.
+
+        Non-vacuity of the three tests above -- it shows the stub really
+        enforces two allowlists rather than accepting anything, and it is the
+        exact configuration RFX-245 was filed on (and the one the README tells
+        an approver to create).
+        """
+        os.environ["REEFLEX_TOKEN"] = _RESOLVER_TOKEN
+        os.environ.pop("REEFLEX_APPROVER_TOKEN", None)
+
+        with self.assertRaises(client.HoldsAPIError) as ctx:
+            client.list_holds()
+        self.assertEqual(ctx.exception.status, 401)
+        self.assertEqual(
+            client.resolve_hold("abc123", "approve")["status"], "approved")
 
 
 if __name__ == "__main__":
