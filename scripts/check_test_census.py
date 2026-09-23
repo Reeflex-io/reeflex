@@ -76,6 +76,28 @@ error and needs none of the suites' dependencies installed:
      COUNTED (the runner does collect them and reports them as skipped), but
      they are flagged, exactly as their decorator spelling is.
 
+  6. A FILE THE RUNNER NEVER REACHES (RFX-87 round 2, dev-2--147) — the file
+     is enumerated, `drift` counts it as covered, and the runner that owns its
+     root does not import it at all:
+
+         reeflex-core/tests/plainsub/test_x.py   # no __init__.py on `plainsub`
+         reeflex-core/tests/env_canon_test.py    # discover's default is test*.py
+
+     Both were measured on python3.11 (`Ran 0 tests ... OK`, and "not
+     collected"), and both used to be INVISIBLE here for the same reason: this
+     script enumerated one directory level with `os.listdir` and one filename
+     shape, `test_*.py`, while `drift` walks recursively and matches
+     `*_test.py` too. So the two instruments disagreed about what a test file
+     is and where it may sit, and #89's own defect fitted in the gap between
+     them — at a path the other instrument had just declared enumerated.
+
+     This is reported as its own kind, `runs-nowhere`, rather than as
+     zero-collection: "0 tests" and "never imported" read identically in a
+     transcript and are fixed differently. The file is not counted, because it
+     runs nowhere. Under a pytest root neither case is a finding — pytest
+     recurses into plain directories and does collect `*_test.py` — which is
+     what makes this a statement about the RUNNER and not about the file.
+
 LIMITS OF DETECTORS 4 AND 5, STATED RATHER THAN CLOSED. Both are deliberately
 blind to a silencer nested inside an `if`:
 
@@ -89,6 +111,16 @@ a changed `-p` pattern) is not modelled here at all. The only instrument that
 would catch those is a recorded total floor compared against the runner's own
 `Ran N` (the `tests/suite_census.json` shape in reeflex-app). This script is
 static by design; the floor is a separate, complementary instrument.
+
+WHAT THE PRINTED TOTAL IS, AND IS NOT (dev-2--147). It is a label, not a floor:
+nothing compares it to a previous run or to the runner's own `Ran N`, so it
+catches a staleness only by being read. It is also a LOWER bound on pytest
+roots, because `@pytest.mark.parametrize` expands at collection and an `ast`
+pass cannot: measured 2026-09-23, `reeflex-claude/tests` censuses 758 against
+pytest's own 760, and the whole difference is three parametrised cases of one
+test in `test_connect.py`. On the unittest roots it is exact — `scripts/tests`
+censuses 249 against `Ran 249`. Read the per-root lines for a shape, not the
+total for a guarantee.
 
 WAIVERS, AND WHY THEY ARE NOT A BACK DOOR. A finding can be legitimate — a
 genuinely platform-specific race, say. Such a case goes in `WAIVERS` below with
@@ -117,6 +149,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
 import os
 import sys
 import tempfile
@@ -156,6 +189,39 @@ WAIVERS = {
 }
 
 TEST_FILE_PREFIX = "test_"
+
+# RFX-87 round 2 (dev-2--147). WHAT COUNTS AS A TEST FILE, AND WHERE IT MAY SIT.
+#
+# Until this was measured, the census enumerated one directory level with
+# `os.listdir` and one filename shape, `test_*.py`. gate.py's `drift` component
+# walks the tree RECURSIVELY and matches a WIDER set (TEST_FILE_PATTERNS
+# includes `*_test.py`), and it certifies any file under an enumerated root as
+# covered. The census was therefore silent about files drift had just declared
+# enumerated -- which is #89's defect exactly, one directory down, at a path the
+# other instrument blesses.
+#
+# Every line below is a MEASUREMENT on python3.11 (the gate's own interpreter),
+# not a reading of the docs; the transcripts are in dev-2--147's evidence dir:
+#
+#   unittest discover, gate.py's invocation (no -p, so the default applies):
+#     tests/pkgsub/test_healthy_guard.py   (pkgsub has __init__.py)  -> Ran 1 test
+#     tests/plainsub/test_healthy_guard.py (plainsub does NOT)       -> Ran 0 tests, OK
+#     tests/env_canon_test.py              (default pattern test*.py)-> not collected
+#   pytest:
+#     both subdirectory shapes collect, with or without __init__.py
+#     `*_test.py` collects (it is in pytest's default `python_files`)
+#
+# So a file can be enumerated, walked by drift, and still run NOWHERE -- and
+# that is a finding with a NAME, not an absence.
+PYTEST_FILE_GLOBS = ("test_*.py", "*_test.py")   # pytest's default python_files
+UNITTEST_DISCOVER_GLOB = "test*.py"              # unittest discover's default -p
+# Directories a runner would never import from. Mirrors gate.py's
+# DRIFT_EXCLUDE_DIRS for the reasons that apply inside a suite root.
+CENSUS_EXCLUDE_DIRS = {
+    "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache",
+    ".venv", "venv", "node_modules", ".git", "build", "dist",
+}
+
 SKIP_DECORATORS_UNCONDITIONAL = {"skip"}
 SKIP_DECORATORS_CONDITIONAL = {"skipUnless", "skipIf", "skipif"}
 # Call forms that skip when EXECUTED rather than when decorating: `pytest.skip()`,
@@ -170,7 +236,8 @@ class Finding:
     """One thing that does not run, or runs without asserting anything."""
 
     def __init__(self, kind, path, name, detail):
-        # "zero-collection" | "empty-body" | "unconditional-skip" | "module-silenced"
+        # "zero-collection" | "empty-body" | "unconditional-skip"
+        # | "module-silenced" | "runs-nowhere"
         self.kind = kind
         self.path = path          # repo-relative
         self.name = name          # test name, or "" for a file-level finding
@@ -483,6 +550,67 @@ def census_file(rel_path, source, runner):
 
 
 # --------------------------------------------------------------------------
+# Enumeration -- which files, at which depth, and whether the runner reaches
+# them (RFX-87 round 2)
+# --------------------------------------------------------------------------
+
+def _is_package_path(abs_root, rel_dir):
+    """True if every directory level from `abs_root` down to `rel_dir` carries
+    an `__init__.py`. That is the condition `unittest discover` recurses on."""
+    parts = [p for p in rel_dir.split(os.sep) if p and p != "."]
+    here = abs_root
+    for part in parts:
+        here = os.path.join(here, part)
+        if not os.path.isfile(os.path.join(here, "__init__.py")):
+            return False
+    return True
+
+
+def unreachable_reason(abs_root, rel_in_root, runner):
+    """Why `runner` would never collect this file, or None if it reaches it.
+
+    A file the runner cannot reach yields no tests for a reason that has a
+    name, and naming it is the whole point: "0 tests" and "never imported" look
+    identical in a transcript and are fixed differently."""
+    base = os.path.basename(rel_in_root)
+    rel_dir = os.path.dirname(rel_in_root)
+    if runner == "unittest":
+        if not fnmatch.fnmatch(base, UNITTEST_DISCOVER_GLOB):
+            return ("`unittest discover` collects `%s` and this file does not match it, so "
+                    "discover never imports it -- gate.py runs this root with the DEFAULT "
+                    "pattern (no -p). The file is enumerated, `drift` counts it as covered, "
+                    "and it runs NOWHERE." % UNITTEST_DISCOVER_GLOB)
+        if rel_dir and not _is_package_path(abs_root, rel_dir):
+            return ("it sits in `%s`, which is not an importable package (no `__init__.py`), "
+                    "and `unittest discover` only recurses into packages -- measured on "
+                    "python3.11: `Ran 0 tests ... OK`. Enumerated, walked by `drift`, runs "
+                    "NOWHERE." % rel_dir)
+    return None
+
+
+def enumerate_test_files(abs_root):
+    """Every file a runner would treat as a test file under `abs_root`, at any
+    depth, sorted. Paths are relative to the root.
+
+    Matches pytest's default `python_files` UNION unittest discover's default
+    pattern, which together are the Python half of gate.py's
+    TEST_FILE_PATTERNS. Enumerating a NARROWER set than the instrument that
+    certifies coverage is how a file ends up inside nobody's field of view."""
+    out = []
+    for dirpath, dirnames, filenames in os.walk(abs_root):
+        dirnames[:] = sorted(d for d in dirnames if d not in CENSUS_EXCLUDE_DIRS)
+        rel_dir = os.path.relpath(dirpath, abs_root)
+        for name in sorted(filenames):
+            if not name.endswith(".py"):
+                continue
+            if not (any(fnmatch.fnmatch(name, g) for g in PYTEST_FILE_GLOBS)
+                    or fnmatch.fnmatch(name, UNITTEST_DISCOVER_GLOB)):
+                continue
+            out.append(name if rel_dir == "." else os.path.join(rel_dir, name))
+    return sorted(out)
+
+
+# --------------------------------------------------------------------------
 # Census over the tree
 # --------------------------------------------------------------------------
 
@@ -504,18 +632,29 @@ def census(repo_root, roots=None):
             lines.append("TEST-CENSUS: NOTE %s is not censused (non-Python suite, run directly by gate.py)"
                          % rel_root)
             continue
-        files = sorted(
-            f for f in os.listdir(abs_root)
-            if f.startswith(TEST_FILE_PREFIX) and f.endswith(".py")
-        )
+        files = enumerate_test_files(abs_root)
         if not files:
             findings.append(Finding("zero-collection", rel_root, "",
-                                    "enumerated suite root contains no test_*.py file at all"))
+                                    "enumerated suite root contains no test file at all"))
             continue
         root_tests = 0
         root_silenced = 0
+        root_nested = 0
+        root_unreachable = 0
         for name in files:
             rel_path = os.path.join(rel_root, name)
+            if os.path.dirname(name):
+                root_nested += 1
+            # RFX-87 round 2: does the runner even IMPORT this file? A file it
+            # cannot reach is reported by its cause, not counted, and not also
+            # called zero-collection -- the same cause-over-symptom rule the
+            # module silencers already follow.
+            reason = unreachable_reason(abs_root, name, runner)
+            if reason:
+                root_unreachable += 1
+                findings.append(Finding("runs-nowhere", rel_path, "", reason))
+                total_files += 1
+                continue
             with open(os.path.join(abs_root, name), encoding="utf-8") as fh:
                 source = fh.read()
             file_findings = census_file(rel_path, source, runner)
@@ -529,11 +668,15 @@ def census(repo_root, roots=None):
             total_tests += len(tests)
             if any(f.kind == "module-silenced" for f in file_findings):
                 root_silenced += 1
-        lines.append("TEST-CENSUS: %s (%s) -> %d file(s), %d test(s)%s"
-                     % (rel_root, runner, len(files), root_tests,
+        lines.append("TEST-CENSUS: %s (%s) -> %d file(s)%s, %d test(s)%s%s"
+                     % (rel_root, runner, len(files),
+                        "" if not root_nested else " (%d below the root)" % root_nested,
+                        root_tests,
                         "" if not root_silenced else
                         " (%d file(s) SILENCED at module level -- their tests are not in this count)"
-                        % root_silenced))
+                        % root_silenced,
+                        "" if not root_unreachable else
+                        " (%d file(s) the runner never reaches -- see findings)" % root_unreachable))
 
     for rel_root in missing_roots:
         findings.append(Finding("zero-collection", rel_root, "",
@@ -847,7 +990,7 @@ def _selftest_body(checks, check):
         os.makedirs(os.path.join(tmp, "empty_root"))
         ok, lines = census(tmp, roots=[("empty_root", "unittest")])
         check("an enumerated root with no test files FAILS", not ok)
-        check("...and says so", any("no test_*.py file at all" in l for l in lines))
+        check("...and says so", any("no test file at all" in l for l in lines))
         ok, lines = census(tmp, roots=[("does_not_exist", "unittest")])
         check("an enumerated root that does not exist FAILS", not ok)
 
@@ -898,6 +1041,97 @@ def _selftest_body(checks, check):
               any(l.startswith("TEST-CENSUS: FAIL (") and "module-silenced" in l for l in lines))
         check("...and the finding names the file",
               any("test_hil.py" in l for l in lines))
+
+    # -- 5c. RFX-87 round 2: depth and filename, the two axes the census used
+    # to be narrower on than `drift` and than the runners themselves. Each
+    # fixture is ONE healthy file plus ONE inert file, so a check that goes red
+    # does so for the inert file and not for the shape of the fixture.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = os.path.join(tmp, "suite")
+        pkg = os.path.join(root, "subsuite")
+        os.makedirs(pkg)
+        with open(os.path.join(root, "test_good.py"), "w") as fh:
+            fh.write(_UNITTEST_STYLE)
+        with open(os.path.join(pkg, "__init__.py"), "w") as fh:
+            fh.write("")
+        with open(os.path.join(pkg, "test_good_nested.py"), "w") as fh:
+            fh.write(_UNITTEST_STYLE)
+
+        ok, lines = census(tmp, roots=[("suite", "unittest")])
+        check("a healthy file in a PACKAGE subdirectory is seen at all",
+              ok and any("suite (unittest) -> 2 file(s) (1 below the root), 2 test(s)" in l
+                         for l in lines))
+
+        # the #89 shape, one directory down: discover imports it and collects
+        # nothing, drift calls the path covered, and this must go RED.
+        with open(os.path.join(pkg, "test_env_canon.py"), "w") as fh:
+            fh.write(_PYTEST_STYLE)
+        ok, lines = census(tmp, roots=[("suite", "unittest")])
+        check("the #89 shape in a PACKAGE subdirectory turns the census RED", not ok)
+        check("...and the finding names the nested path, not just the basename",
+              any(os.path.join("suite", "subsuite", "test_env_canon.py") in l for l in lines))
+        os.remove(os.path.join(pkg, "test_env_canon.py"))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # A NON-package subdirectory: `unittest discover` never recurses into
+        # it, so even a perfectly healthy file there runs nowhere.
+        root = os.path.join(tmp, "suite")
+        plain = os.path.join(root, "plainsub")
+        os.makedirs(plain)
+        with open(os.path.join(root, "test_good.py"), "w") as fh:
+            fh.write(_UNITTEST_STYLE)
+        with open(os.path.join(plain, "test_good_nested.py"), "w") as fh:
+            fh.write(_UNITTEST_STYLE)
+        ok, lines = census(tmp, roots=[("suite", "unittest")])
+        check("a healthy file in a NON-package subdirectory is runs-nowhere under unittest",
+              not ok and any("runs-nowhere" in l and "test_good_nested.py" in l for l in lines))
+        check("...and the reason names the missing __init__.py, not '0 tests'",
+              any("not an importable package" in l for l in lines))
+        check("...and it is NOT counted as a collected test",
+              any("suite (unittest) -> 2 file(s) (1 below the root), 1 test(s)" in l
+                  for l in lines))
+        # pytest reaches it, so the SAME tree is clean under a pytest root --
+        # this is what makes the finding about the runner and not the file.
+        ok_pytest, _ = census(tmp, roots=[("suite", "pytest")])
+        check("...and the same tree is CLEAN under pytest, which does recurse", ok_pytest)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # Filename: `*_test.py` is a test file to pytest and to gate.py's drift,
+        # and is NOT matched by unittest discover's default pattern.
+        root = os.path.join(tmp, "suite")
+        os.makedirs(root)
+        with open(os.path.join(root, "test_good.py"), "w") as fh:
+            fh.write(_UNITTEST_STYLE)
+        with open(os.path.join(root, "env_canon_test.py"), "w") as fh:
+            fh.write(_UNITTEST_STYLE)          # healthy, and still unreachable
+        ok, lines = census(tmp, roots=[("suite", "unittest")])
+        check("a `*_test.py` file in a unittest root is runs-nowhere",
+              not ok and any("runs-nowhere" in l and "env_canon_test.py" in l for l in lines))
+        check("...and the reason names discover's default pattern",
+              any("test*.py" in l and "never imports it" in l for l in lines))
+        ok, lines = census(tmp, roots=[("suite", "pytest")])
+        check("...while under pytest the same file is collected and counted",
+              ok and any("suite (pytest) -> 2 file(s), 2 test(s)" in l for l in lines))
+
+        # and the census's own detectors must apply to that filename too.
+        with open(os.path.join(root, "env_canon_test.py"), "w") as fh:
+            fh.write(_MODULE_PYTESTMARK_SKIP)
+        ok, lines = census(tmp, roots=[("suite", "pytest")])
+        check("a silencer inside a `*_test.py` file is caught under pytest",
+              not ok and any("module-silenced" in l and "env_canon_test.py" in l for l in lines))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # The enumeration must not wander into caches or vendored trees.
+        root = os.path.join(tmp, "suite")
+        junk = os.path.join(root, "__pycache__")
+        os.makedirs(junk)
+        with open(os.path.join(root, "test_good.py"), "w") as fh:
+            fh.write(_UNITTEST_STYLE)
+        with open(os.path.join(junk, "test_stale.py"), "w") as fh:
+            fh.write(_PYTEST_STYLE)
+        ok, lines = census(tmp, roots=[("suite", "unittest")])
+        check("__pycache__ is not walked (a cached copy is not a suite)",
+              ok and any("suite (unittest) -> 1 file(s), 1 test(s)" in l for l in lines))
 
     # -- 6. waivers: enforced both ways ------------------------------------
     if True:
