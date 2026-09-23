@@ -246,5 +246,147 @@ class TestClassifyPlaneInvariants(unittest.TestCase):
         self.assertEqual("delete", cls.get("verb"))
 
 
+# ---------------------------------------------------------------------------
+# RFX-405 residual, measured by qa--315 while landing this branch.
+#
+# The first version of `_peel_prefixed_group` stepped over exactly ONE prefix
+# word: it returned the moment the word after a prefix was not `(`.  Every
+# bash-valid PAIR of prefix words therefore still left `(rm` as the command
+# word -- and `_shell_segments` manufactures such pairs out of ordinary code,
+# because it splits on `;` and leaves the keyword attached to the segment, so
+# `if true; then time (rm -rf V); fi` arrives here as `then time (rm -rf V)`.
+#
+# HOW THIS WAS FOUND, and why the rows below are a matrix and not a list: the
+# nine rows above are nine STRINGS, and one string is not a class.  The
+# complement was enumerated instead -- eight shell contexts x twelve wrapper
+# words, filtered to the sixteen combinations `bash -n` accepts.  TWELVE of
+# those sixteen escaped, each one verified to destroy a freshly seeded
+# synthetic directory under real /bin/bash before it was written down.  Only
+# `bare` and `subshell`, the two contexts with no keyword in front of the
+# wrapper, were read correctly.
+#
+# Only `!` and `time` can be the inner word.  An external command takes no
+# subshell as an argument, so `sudo`, `nice`, `env`, `command` and the rest are
+# syntax errors here (checked with `bash -n`, excluded rather than counted) --
+# which is also why the wider walk drops no wrapper meaning that the
+# single-word step did not already drop.
+DOUBLE_PREFIXED_PAIRS = [
+    ("time_bang",   "time ! (rm -rf %s)" % _V,
+                    "time ! rm -rf %s" % _V),
+    ("bang_time",   "! time (rm -rf %s)" % _V,
+                    "! time rm -rf %s" % _V),
+    ("then_time",   "if true; then time (rm -rf %s); fi" % _V,
+                    "if true; then time rm -rf %s; fi" % _V),
+    ("then_bang",   "if true; then ! (rm -rf %s); fi" % _V,
+                    "if true; then ! rm -rf %s; fi" % _V),
+    ("else_time",   "if false; then :; else time (rm -rf %s); fi" % _V,
+                    "if false; then :; else time rm -rf %s; fi" % _V),
+    ("do_time",     "while true; do time (rm -rf %s); break; done" % _V,
+                    "while true; do time rm -rf %s; break; done" % _V),
+    ("do_bang",     "until false; do ! (rm -rf %s); break; done" % _V,
+                    "until false; do ! rm -rf %s; break; done" % _V),
+    ("for_do_time", "for i in 1; do time (rm -rf %s); done" % _V,
+                    "for i in 1; do time rm -rf %s; done" % _V),
+    ("brace_time",  "{ time (rm -rf %s); }" % _V,
+                    "{ time rm -rf %s; }" % _V),
+    ("brace_bang",  "{ ! (rm -rf %s); }" % _V,
+                    "{ ! rm -rf %s; }" % _V),
+]
+
+# The same shapes with a harmless body.  A walk that steps over consecutive
+# words and then peels whatever it lands on would refuse these too.
+BENIGN_DOUBLE_PREFIXED = [
+    ("time_bang",  "time ! (grep -q foo /tmp/x)"),
+    ("then_time",  "if true; then time (ls -la /tmp); fi"),
+    ("do_time",    "while true; do time (echo hi); break; done"),
+    ("brace_time", "{ time (cat /etc/hosts); }"),
+    # Arithmetic still has to survive TWO prefix words, not just one.
+    ("then_time_arith", "if true; then time ((RETRIES + 1)); fi"),
+]
+
+
+class TestTwoPrefixWordsAreAlsoRead(_HookPlaneCase):
+    """The residual: one prefix word was stepped over, two were not."""
+
+    def test_every_double_prefixed_group_destruction_is_refused(self):
+        for label, group, _bare in DOUBLE_PREFIXED_PAIRS:
+            with self.subTest(prefix=label):
+                decision, _ = self.hook(group)
+                self.assertNotEqual(
+                    "allow", decision,
+                    "%s: bash DESTROYS %s here, and the gate allowed it "
+                    "-- RFX-405 residual" % (label, _V))
+
+    def test_a_double_prefixed_group_and_its_bare_twin_agree(self):
+        """The discriminating assertion, for the same reason as above.
+
+        The bare twin was refused both before and after the one-word step, so
+        a pair that DISAGREES is the residual signature and nothing else.
+        """
+        for label, group, bare in DOUBLE_PREFIXED_PAIRS:
+            with self.subTest(prefix=label):
+                group_decision, _ = self.hook(group)
+                bare_decision, _ = self.hook(bare)
+                self.assertEqual(
+                    bare_decision, group_decision,
+                    "%s: the bare command is %r but the same two prefix words "
+                    "with a subshell group is %r -- the group is unread"
+                    % (label, bare_decision, group_decision))
+
+    def test_the_axes_on_the_wire_name_the_delete(self):
+        for label, group, _bare in DOUBLE_PREFIXED_PAIRS:
+            with self.subTest(prefix=label):
+                _, envelope = self.hook(group)
+                axes = (envelope or {}).get("axes") or {}
+                action = (envelope or {}).get("action") or {}
+                self.assertEqual("delete", action.get("verb"), label)
+                self.assertEqual("irreversible", axes.get("reversibility"), label)
+
+    def test_the_benign_double_prefixed_forms_stay_allowed(self):
+        for label, command in BENIGN_DOUBLE_PREFIXED:
+            with self.subTest(form=label):
+                decision, _ = self.hook(command)
+                self.assertEqual("allow", decision,
+                                 "%s: %r must stay allowed" % (label, command))
+
+
+class TestTheWalkCommitsOnlyWhenItReachesAGroup(unittest.TestCase):
+    """The mechanism, so the behavioural rows above have an attribution.
+
+    A walk that consumed prefix words unconditionally would change how every
+    keyword-led segment WITHOUT a group is read, which is most of the corpus.
+    """
+
+    def test_a_segment_with_no_group_is_returned_untouched(self):
+        for segment in ("then time rm -rf %s" % _V,
+                        "time ! rm -rf %s" % _V,
+                        "then echo hi",
+                        "do break",
+                        "time",
+                        ""):
+            with self.subTest(segment=segment):
+                self.assertEqual(
+                    segment, classify_mod._peel_prefixed_group(segment),
+                    "a segment with no group behind its prefix words must be "
+                    "handed to `_peel_wrappers` exactly as it arrived")
+
+    def test_consecutive_prefix_words_are_stepped_over(self):
+        self.assertEqual(
+            "rm -rf %s" % _V,
+            classify_mod._peel_prefixed_group("then time (rm -rf %s)" % _V))
+        self.assertEqual(
+            "rm -rf %s" % _V,
+            classify_mod._peel_prefixed_group("time ! (rm -rf %s)" % _V))
+
+    def test_a_non_prefix_word_still_stops_the_walk(self):
+        """The narrowness the first version bought is not spent by the walk."""
+        self.assertEqual(
+            "deploy () { rm -rf %s; }" % _V,
+            classify_mod._peel_prefixed_group("deploy () { rm -rf %s; }" % _V))
+        self.assertEqual(
+            "time echo '(rm -rf %s)'" % _V,
+            classify_mod._peel_prefixed_group("time echo '(rm -rf %s)'" % _V))
+
+
 if __name__ == "__main__":
     unittest.main()

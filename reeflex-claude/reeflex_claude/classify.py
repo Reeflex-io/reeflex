@@ -3486,18 +3486,45 @@ def _peel_prefixed_group(segment: str) -> str:
     consuming them here would drop it.  They cannot precede a group in bash
     anyway -- an external command takes no subshell as an argument.
 
-    Each turn of the loop consumes at least one whole word, so it terminates.
+    CONSECUTIVE prefix words are stepped over, not just one.  Measured by
+    qa--315 while landing this change: stopping at the first word whose
+    successor is not `(` left every bash-valid PAIR of prefix words unread, and
+    `_shell_segments` manufactures such pairs from ordinary code, because it
+    splits on `;` and leaves the keyword attached to the segment:
+
+        time ! (rm -rf /var/lib/pgsql)            -> segment `time ! (rm ...)`
+        if true; then time (rm -rf V); fi         -> segment `then time (rm ...)`
+        while true; do ! (rm -rf V); break; done  -> segment `do ! (rm ...)`
+
+    Twelve of the sixteen context-x-wrapper combinations `bash -n` accepts were
+    measured escaping that way, each destroying a freshly seeded synthetic
+    directory under real `/bin/bash`.  Only `!` and `time` are reachable as the
+    inner word -- an external command takes no subshell as an argument, so
+    `sudo`/`nice`/`env` cannot get there and no wrapper meaning is dropped that
+    the single-word step did not already drop.
+
+    The walk COMMITS ONLY IF IT REACHES A GROUP.  If the words run out, or the
+    word after them does not begin with `(`, the segment is returned untouched
+    and `_peel_wrappers` still does the prefix work downstream -- so a line with
+    no group in it is read exactly as before.
+
+    Each turn of the outer loop consumes at least one whole word, so it
+    terminates.
     """
     text = _peel_group(segment)
 
     while True:
-        head, sep, rest = text.partition(" ")
-        if not sep:
-            return text
-        if os.path.basename(head).lower() not in _PREFIX_WORDS:
-            return text
-        rest = rest.lstrip()
-        if not rest.startswith("("):
+        rest = text
+        stepped = False
+        while True:
+            head, sep, tail = rest.partition(" ")
+            if not sep or os.path.basename(head).lower() not in _PREFIX_WORDS:
+                break
+            rest = tail.lstrip()
+            stepped = True
+            if rest.startswith("("):
+                break
+        if not stepped or not rest.startswith("("):
             return text
         peeled = _peel_group(rest)
         if peeled == rest:
