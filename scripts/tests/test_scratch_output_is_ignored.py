@@ -62,11 +62,24 @@ MUST_NOT_BE_IGNORED = [
 ]
 
 
-def _is_ignored(path: str) -> bool:
+def _is_ignored(path: str, no_index: bool = False) -> bool:
     """True iff git would ignore `path`. Gated on exit STATUS, never on output:
-    0 = ignored, 1 = not ignored, anything else is the instrument failing."""
+    0 = ignored, 1 = not ignored, anything else is the instrument failing.
+
+    `no_index=True` is required for any path that is TRACKED. `git check-ignore`
+    consults the index and never reports a tracked file as ignored, whatever the
+    rules say -- so an over-wideness arm written without it passes on every input
+    and tests nothing. Measured while building this guard: with `.g*/` appended
+    to `.gitignore`, `check-ignore .github/workflows/ci.yml` says "not ignored"
+    by default and "ignored" under `--no-index`. The default answers "would git
+    ignore this file today"; `--no-index` answers "do the RULES hide this path",
+    which is the question the over-wideness arm is asking.
+    """
+    cmd = ["git", "check-ignore", "-q"]
+    if no_index:
+        cmd.append("--no-index")
     r = subprocess.run(
-        ["git", "check-ignore", "-q", "--", path],
+        cmd + ["--", path],
         cwd=REPO, capture_output=True, text=True,
     )
     if r.returncode not in (0, 1):
@@ -87,8 +100,11 @@ class TestScratchOutputIsIgnored(unittest.TestCase):
         )
 
     def test_the_rule_does_not_swallow_real_files(self):
-        """Over-wideness arm: the fix must not buy its green by ignoring source."""
-        swallowed = [p for p in MUST_NOT_BE_IGNORED if _is_ignored(p)]
+        """Over-wideness arm: the fix must not buy its green by ignoring source.
+
+        `no_index=True` is load-bearing here -- every path below is tracked, and
+        without it this assertion passes unconditionally. See `_is_ignored`."""
+        swallowed = [p for p in MUST_NOT_BE_IGNORED if _is_ignored(p, no_index=True)]
         self.assertEqual(
             [], swallowed,
             "The scratch rule has grown wide enough to hide real files, so a "
@@ -101,6 +117,10 @@ class TestScratchOutputIsIgnored(unittest.TestCase):
         actually discriminates on this tree."""
         self.assertTrue(_is_ignored(".scratch/x"), "instrument reports nothing ignored")
         self.assertFalse(_is_ignored("README.md"), "instrument reports everything ignored")
+        # and the same discrimination on the --no-index plane the arm above uses,
+        # so a change that breaks only that plane cannot go unnoticed.
+        self.assertTrue(_is_ignored(".scratch/x", no_index=True), "no-index: nothing ignored")
+        self.assertFalse(_is_ignored("README.md", no_index=True), "no-index: all ignored")
 
 
 if __name__ == "__main__":
