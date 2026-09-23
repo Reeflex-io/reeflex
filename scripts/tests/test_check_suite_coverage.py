@@ -18,6 +18,7 @@ Written as unittest TestCases because bare pytest-style functions here would
 collect zero tests and pass forever (RFX-87).
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -40,6 +41,11 @@ class Gate:
 
 INVOKES = '\nRUN = ["python", "scripts/wired-check.py"]\n'
 
+# The CLEAN npm runner: it executes the one file the default fixture puts in
+# the npm suite root. Every pre-existing test below therefore keeps measuring
+# what it was written to measure, and not this plane.
+N8N_CLEAN_RUNNER = "tsc -p tsconfig.test.json && node dist-test/test/a.test.js"
+
 
 class FixtureTree:
     """A synthetic repo. Declarations are passed in, never inherited from the
@@ -47,11 +53,20 @@ class FixtureTree:
     """
 
     def __init__(self, tmp, wp_files=(), scripts=(), gate_body=GATE_STUB,
-                 workflow="", nested_workflow=None):
+                 workflow="", nested_workflow=None,
+                 n8n_files=("a.test.ts",), n8n_runner=N8N_CLEAN_RUNNER,
+                 n8n_package=True):
         self.root = tempfile.mkdtemp(dir=tmp)
         os.makedirs(os.path.join(self.root, csc.WP_TESTS_DIR))
         os.makedirs(os.path.join(self.root, "scripts"))
         os.makedirs(os.path.join(self.root, ".github", "workflows"))
+        os.makedirs(os.path.join(self.root, csc.N8N_TESTS_DIR))
+        if n8n_package:
+            self._write(os.path.join(csc.N8N_DIR, "package.json"),
+                        json.dumps({"name": "fixture",
+                                    "scripts": {"test": n8n_runner}}))
+        for name in n8n_files:
+            self._write(os.path.join(csc.N8N_TESTS_DIR, name), "// fixture\n")
         self._write("gate.py", gate_body)
         self._write(os.path.join(".github", "workflows", "ci.yml"), workflow)
         if nested_workflow is not None:
@@ -79,8 +94,10 @@ class SuiteCoverageTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="suite-coverage-tests-")
         self._saved = (dict(csc.WIRED), dict(csc.UNWIRED),
-                       dict(csc.WP_SUPPORT), dict(csc.NOT_A_CHECK))
-        for table in (csc.WIRED, csc.UNWIRED, csc.WP_SUPPORT, csc.NOT_A_CHECK):
+                       dict(csc.WP_SUPPORT), dict(csc.NOT_A_CHECK),
+                       dict(csc.N8N_SUPPORT))
+        for table in (csc.WIRED, csc.UNWIRED, csc.WP_SUPPORT, csc.NOT_A_CHECK,
+                      csc.N8N_SUPPORT):
             table.clear()
         csc.WIRED["wired-check.py"] = "gate.py"
         csc.UNWIRED["hand-run-probe.py"] = "run by hand"
@@ -88,7 +105,8 @@ class SuiteCoverageTestCase(unittest.TestCase):
 
     def tearDown(self):
         for table, original in zip((csc.WIRED, csc.UNWIRED, csc.WP_SUPPORT,
-                                    csc.NOT_A_CHECK), self._saved):
+                                    csc.NOT_A_CHECK, csc.N8N_SUPPORT),
+                                   self._saved):
             table.clear()
             table.update(original)
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -145,6 +163,89 @@ class TestTheWordPressPlane(SuiteCoverageTestCase):
         tree = self.tree(wp_files=self.WP_FILES + ("conformance-new.php",),
                          gate_body=gate + INVOKES)
         self.assertEqual(self.failures(tree), [])
+
+
+class TestTheNpmPlane(SuiteCoverageTestCase):
+    """The SECOND root whose runner names its files one at a time. Found on
+    2026-09-23, two days after check_suite_coverage.py merged, by running this
+    ticket's own arms against the planes it did not cover.
+
+    The npm suite compiles `test/**/*` and then executes ONE literal path, so a
+    file this directory acquires is built and run by nothing — while `drift`
+    counts it and certifies it as inside an enumerated suite root."""
+
+    def test_a_suite_file_the_runner_never_executes_fails(self):
+        tree = self.tree(n8n_files=("a.test.ts", "b.test.ts"))
+        found = self.failures(tree)
+        self.assertTrue(any("does not execute it" in f for f in found), found)
+
+    def test_the_same_file_named_by_the_runner_passes(self):
+        """The caught half's control. Without it a detector that had stopped
+        reading scripts.test altogether would satisfy the test above."""
+        tree = self.tree(n8n_files=("a.test.ts", "b.test.ts"),
+                         n8n_runner="tsc && node dist-test/test/a.test.js "
+                                    "&& node dist-test/test/b.test.js")
+        self.assertEqual(self.failures(tree), [])
+
+    def test_the_runner_naming_the_typescript_source_is_not_an_execution(self):
+        """`node test/a.test.ts` does not run the suite; tsc's OUTPUT is what
+        executes. A detector comparing basenames directly would call this
+        wired and the file would still run nowhere."""
+        tree = self.tree(n8n_runner="tsc && node test/a.test.ts")
+        found = self.failures(tree)
+        self.assertTrue(any("does not execute it" in f for f in found), found)
+
+    def test_a_runner_token_that_merely_contains_the_name_is_not_it(self):
+        """`a.test.js` is a substring of `xa.test.js`. Matching on substrings
+        would accept a runner that executes a different file entirely."""
+        tree = self.tree(n8n_runner="tsc && node dist-test/test/xa.test.js")
+        found = self.failures(tree)
+        self.assertTrue(any("does not execute it" in f for f in found), found)
+
+    def test_a_runner_naming_a_file_that_is_gone_fails(self):
+        """The other direction, and the shape that matters most: the runner
+        still names it, so the suite reads as wired, and there is nothing
+        there to run."""
+        tree = self.tree(n8n_files=())
+        found = self.failures(tree)
+        self.assertTrue(any("a stale entry" in f for f in found), found)
+
+    def test_a_declared_support_file_is_exempt(self):
+        csc.N8N_SUPPORT["helper.ts"] = "shared fixture, no verdict of its own"
+        tree = self.tree(n8n_files=("a.test.ts", "helper.ts"))
+        self.assertEqual(self.failures(tree), [])
+
+    def test_a_support_declaration_for_a_missing_file_is_stale(self):
+        """A residual list that keeps entries for files that no longer exist
+        can silence a real one (RFX-339/RFX-348)."""
+        csc.N8N_SUPPORT["helper.ts"] = "shared fixture, no verdict of its own"
+        found = self.failures(self.tree())
+        self.assertTrue(any("is STALE" in f for f in found), found)
+
+    def test_the_runner_is_read_from_package_json_not_transcribed(self):
+        """RFX-303's lesson, applied to the npm authority. A package.json this
+        check cannot read is a FAIL, never a quiet pass over a plane it never
+        enumerated."""
+        tree = self.tree(n8n_package=False)
+        found = self.failures(tree)
+        self.assertTrue(any("refuses to certify" in f for f in found), found)
+
+    def test_no_scripts_test_at_all_is_a_fail(self):
+        tree = self.tree(n8n_runner="")
+        found = self.failures(tree)
+        self.assertTrue(any("refuses to certify" in f for f in found), found)
+
+    def test_a_tree_with_no_npm_package_is_not_reddened(self):
+        """A repo that does not ship this package must not go red for not
+        shipping it — that is how a gate gets --allow-skips passed to it."""
+        tree = self.tree()
+        shutil.rmtree(os.path.join(tree.root, csc.N8N_DIR))
+        self.assertEqual(self.failures(tree), [])
+
+    def test_compiled_name_mapping(self):
+        self.assertEqual(csc.n8n_compiled_name("a.test.ts"), "a.test.js")
+        self.assertEqual(csc.n8n_compiled_name("a.test.js"), "a.test.js")
+        self.assertEqual(csc.n8n_compiled_name("helper.mjs"), "helper.mjs")
 
 
 class TestTheScriptsPlane(SuiteCoverageTestCase):
@@ -243,7 +344,8 @@ class TestTheRealTree(SuiteCoverageTestCase):
     def setUp(self):
         super().setUp()
         for table, original in zip((csc.WIRED, csc.UNWIRED, csc.WP_SUPPORT,
-                                    csc.NOT_A_CHECK), self._saved):
+                                    csc.NOT_A_CHECK, csc.N8N_SUPPORT),
+                                   self._saved):
             table.clear()
             table.update(original)
 
