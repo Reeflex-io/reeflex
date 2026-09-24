@@ -363,6 +363,63 @@ def test_two_orgs_sending_one_session_id_do_not_share_a_budget(stub,
                    "litellm:acme-marketing:nightly"]
 
 
+def test_ONE_org_renaming_its_session_gets_a_fresh_budget_namespace(
+        stub, tenancy_map):
+    """The complement of the test above, on THIS transport's own sources.
+
+    `test_ONE_department_renaming_its_session_gets_a_fresh_budget_namespace`
+    (RFX-243) pins this for the in-process seat, whose caller-reachable sources
+    are the session header and the OpenAI `user` field. The connector has a
+    different precedence, so the limit has to be pinned against the sources the
+    connector actually reads or it is pinned on one transport only -- which is
+    how the declaration ended up one file short in the first place.
+
+    Two arms, because two different steps of the precedence are caller-
+    reachable and a guard over one of them says nothing about the other:
+    step 1, `reeflex_session` (which a caller can send through `extra_body`, as
+    the docstring says in its own words), and step 3, `user_api_key_end_user_id`
+    (litellm's home for the OpenAI `user` field).
+
+    Both halves are pinned in each arm so neither can drift silently: the
+    session segment follows the caller (the limit) and the org segment does not
+    move (the guarantee that still holds).
+    """
+    stub.answer_allow()
+    names = ("nightly", "nightly-2", "nightly-3")
+
+    # Arm 1 -- step 1, the caller's `extra_body`.
+    for name in names:
+        connector.decide_payload(
+            payload([wire_tool_call()], team_id="team_pay", key_alias=None,
+                    additional_provider_specific_params={
+                        "reeflex_session": name}),
+            hold_wait=0.0)
+
+    # Arm 2 -- step 3, the caller's OpenAI `user` field. `request_data` is
+    # rebuilt rather than passed through `**extra`, which would REPLACE the
+    # whole block and take `user_api_key_team_id` -- and therefore the tenant
+    # this test is asserting about -- with it.
+    for name in names:
+        body = payload([wire_tool_call()], team_id="team_pay", key_alias=None)
+        body["request_data"] = dict(body["request_data"],
+                                    user_api_key_end_user_id=name)
+        connector.decide_payload(body, hold_wait=0.0)
+
+    ids = [r["agent"]["session_id"] for r in stub.requests]
+    assert ids == ["litellm:acme-payments:nightly",
+                   "litellm:acme-payments:nightly-2",
+                   "litellm:acme-payments:nightly-3",
+                   "litellm:acme-payments:nightly",
+                   "litellm:acme-payments:nightly-2",
+                   "litellm:acme-payments:nightly-3"]
+    # The limit, per arm: three distinct budget namespaces from one key.
+    assert len(set(ids[:3])) == 3
+    assert len(set(ids[3:])) == 3
+    # The guarantee that still holds: the org segment never moved, in either
+    # arm, so the rotation cannot reach another department's budget.
+    assert {s.split(":")[1] for s in ids} == {"acme-payments"}
+
+
 # ---------------------------------------------------------------------------
 # What the routing block can and cannot say on this transport
 # ---------------------------------------------------------------------------
