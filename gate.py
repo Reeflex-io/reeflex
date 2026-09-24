@@ -1446,7 +1446,16 @@ class Gate:
             # each step to declare the keys it owns, i.e. the hand-written list
             # this deliberately avoids; that trade is recorded, not hidden.
             label = silent_step_label(header, self.lines[before:])
-            if label:
+            # `is not None`, NOT truthiness. silent_step_label returns ""
+            # — falsy — for a header whose first column is empty, and under
+            # a truthiness test that step is DROPPED: the gate stays green
+            # about a step that emitted no verdict. That is this ticket's own
+            # fail-open surviving inside its own fix, one link along.
+            # Measured dev-3--186 against the pre-extraction code: 3 divergent
+            # rows, 0 of them reachable from today's 23-step roster, and the
+            # roster checks below PASS on the divergent input — so nothing
+            # here could have caught it. Latent, not live; closed anyway.
+            if label is not None:
                 silent_steps.append(label)
             self.emit("")
 
@@ -1851,6 +1860,20 @@ def selftest():
     # pin the call site too — main() must still reach this function by name.
     check("main() still calls the detector (the call site, not just the helper)",
           "silent_step_label" in Gate.main.__code__.co_names)
+    # ...and it must test `is not None`, not truthiness. The label for a header
+    # with an empty first column is "" — falsy — so `if label:` silently drops
+    # exactly the step this mechanism exists to report. Pinned through main()'s
+    # ast because `co_names` cannot see the shape of the test.
+    check("the detector's label for an empty first column is \"\", not None",
+          silent_step_label("  prose only", []) == "")
+    _guards = [n for n in ast.walk(_main_body)
+               if isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
+               and isinstance(n.test.left, ast.Name) and n.test.left.id == "label"]
+    check("the call site tests `label is not None`, not its truthiness",
+          len(_guards) == 1
+          and isinstance(_guards[0].test.ops[0], ast.IsNot)
+          and isinstance(_guards[0].test.comparators[0], ast.Constant)
+          and _guards[0].test.comparators[0].value is None)
 
     # transcript re-parse: only exact COMPONENT lines count
     v, _ = derive_verdict(["COMPONENT a: PASS (x)", "COMPONENT b: PASS"], set())
