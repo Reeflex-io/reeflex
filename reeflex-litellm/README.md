@@ -631,6 +631,21 @@ overlaps that.
 * **A cumulative session budget without a session header.** Unchanged by
   tenancy — see "One session per request" above. Tenancy changed the
   *namespace*, not the value.
+* **A cumulative session budget the CALLER cannot reset.** The complement of
+  the bullet above, and it was missing from this list. The session half of
+  `agent.session_id` comes from the caller's own request — the
+  `x-reeflex-session` header it sets, else OpenAI's `user` field it sends —
+  and nothing reconciles it against the virtual key that *was* authenticated.
+  Measured on the published 0.2.0 wheel against core 0.2.2's real pack: one
+  key exhausted `objects_touched` at call 201 under `cumulative_budget`, then
+  changed one header value and its next call was `allow` with a cumulative of
+  0. The org half is unaffected — the rotated session stays in the same org,
+  so no other department's budget becomes reachable — so this is the
+  fragmentation-resistance class (RFX-181 for n8n), not the tenancy defect
+  RFX-243 closed. An operator who needs a budget the caller cannot reset sets
+  the header at an ingress it controls and strips an inbound one; a budget
+  dimension keyed on something the caller never chooses is a core policy
+  decision, not an adapter's to make.
 * **Counting unmapped callers.** An unmapped caller is refused and logged, but
   writes no ledger row: a governance row naming no org would be worse than an
   absent one, because a report could total it. Read the proxy log.
