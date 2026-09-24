@@ -15,11 +15,25 @@ a test-looking file exists OUTSIDE these roots (a suite nobody wired in)", and
      this repo uses for its own verdict-producing probes.
 
   2. Its premise — "inside a suite root means some component runs it" — holds
-     only for roots run by DIRECTORY DISCOVERY. It is false for
-     reeflex-wordpress/tests, whose two components run hardcoded literal lists
-     (Gate.WP_HARNESSES, Gate.WP_SPEC_HARNESSES). A new .php there is inside a
-     root, so drift is satisfied by construction, and is in neither literal, so
-     nothing invokes it.
+     only for roots run by DIRECTORY DISCOVERY. It is false for TWO of the ten
+     roots, and the second one was found on 2026-09-23, two days after this
+     file merged:
+
+     * reeflex-wordpress/tests, whose two components run hardcoded literal
+       lists (Gate.WP_HARNESSES, Gate.WP_SPEC_HARNESSES). A new .php there is
+       inside a root, so drift is satisfied by construction, and is in neither
+       literal, so nothing invokes it.
+     * n8n-nodes-reeflex/test, whose runner is
+       `tsc -p tsconfig.test.json && node dist-test/test/reeflexGate.test.js`.
+       The COMPILE step is directory-wide (tsconfig.test.json includes
+       `test/**/*`), so a new file there is built. The EXECUTION step is a
+       single literal path, so it is never run. Measured on ecb7753: a second
+       *.test.ts whose body is `process.exit(1)` was compiled to
+       dist-test/test/ and `npm test` printed "20 passed, 0 failed, 20 total"
+       and exited 0, byte-identical to the clean baseline — while `drift`
+       COUNTED it (141 -> 142 walked) and certified it as inside an enumerated
+       root. The control, the same two lines appended to the file the runner
+       DOES name, exited 1, so that green is blindness and not a dead runner.
 
 Three arms against the shipped tree, each asserted to have landed by sha256:
 a stray attack-probe-*.py in scripts/, a stray .php in scripts/, and a stray
@@ -56,6 +70,14 @@ at all — that file is INSIDE a root. This enumerates from the AUTHORITY SIDE
   unwired     — a CHECK that nothing invokes. Allowed, with a reason in
                 writing. If the basename LATER turns up in an invoker, that
                 FAILS too, as a stale declaration.
+The npm suite root gets the same treatment, with its authority read out of
+`n8n-nodes-reeflex/package.json`'s `scripts.test` rather than transcribed: a
+file in that directory is executed by the runner, or declared in N8N_SUPPORT
+with a reason; a name the runner executes with no source on disk FAILS too.
+Comparison is on the COMPILED basename (`a.test.ts` -> `a.test.js`) and by
+token, not by substring — `a.test.js` occurs inside `xa.test.js`, and a plane
+that accepts that accepts a file nothing runs.
+
   not-a-check — product source, a fixture or data. Exempt from the invoker
                 cross-check, because "is it invoked" is not a meaningful
                 question about it: wporg-deploy.yml names reeflex-gate.php
@@ -109,8 +131,25 @@ WHAT THIS DOES NOT MEASURE, said plainly:
   * Registrability is structural (path shape). It does not ask the Actions API
     whether a registered workflow is disabled, and it cannot: the gate must run
     with no network and no token.
-  * The npm and rego planes are enumerated as files, but whether THEIR runners
-    are discovery-based was not measured here.
+  * THE SCRIPTS PLANE IS TOP LEVEL ONLY. `scripts/probes/attack-probe-x.py` is
+    dispositioned by nothing here and matches none of drift's five spellings,
+    so both components are green over it. Measured on ecb7753; there is no
+    such subdirectory in the tree today (scripts/tests is the only one, and it
+    is a drift suite root), so this is a gap with no live instance rather than
+    a live one. Its control is `scripts/probes/test_x.py`, which drift DOES
+    redden — the only thing standing between the two is how somebody spelled
+    the filename, which is the mechanism this file exists to stop relying on.
+  * A previous version of this paragraph said "the npm and rego planes are
+    enumerated as files, but whether THEIR runners are discovery-based was not
+    measured here". Both halves were measured on 2026-09-23 and the sentence
+    was wrong in the direction that reads as more coverage than there was:
+    the npm plane was enumerated by NOTHING (plane 2 is scripts/ top level,
+    plane 3 is *.php) and its runner is not discovery-based — that is the
+    plane added above. The rego plane's premise HOLDS: gate.py runs
+    `opa test reeflex-core/policy -v` and `opa test reeflex-claude/policy -v`,
+    a directory, so a *_test.rego dropped in a policy root IS executed. A
+    .rego whose name does not end `_test.rego` is still enumerated by nothing,
+    and that one is not measured here.
 
 USAGE
     python scripts/check_suite_coverage.py [REPO_ROOT]   # verdict on the tree
@@ -123,7 +162,9 @@ Anchored verdict line, case-sensitive, like the other checkers:
 
 import argparse
 import ast
+import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -243,6 +284,20 @@ WP_SUPPORT = {
                     "itself and has no verdict of its own.",
 }
 
+# The SECOND suite root whose runner names its files one at a time. See the
+# header: `npm test` here is `tsc -p tsconfig.test.json && node
+# dist-test/test/reeflexGate.test.js` — the compile step is directory-wide, the
+# EXECUTION step is a single literal path.
+N8N_DIR = "n8n-nodes-reeflex"
+N8N_TESTS_DIR = os.path.join(N8N_DIR, "test")
+N8N_SOURCE_SUFFIXES = (".ts", ".js", ".mjs", ".cjs")
+N8N_RUNNER_SUFFIXES = (".js", ".mjs", ".cjs")
+
+# Non-suite files that legitimately live in the npm suite directory — the
+# n8n equivalent of WP_SUPPORT. Empty today, and a file added here without a
+# reason is the thing this plane exists to refuse.
+N8N_SUPPORT = {}
+
 # Where an invoker may live. A basename found in any of these counts as named.
 # `.github/workflows` is read NON-recursively on purpose — see REGISTRABLE
 # below; a file one directory deeper is not a workflow, it is a file.
@@ -288,6 +343,50 @@ def load_wp_literals(repo_root):
     harnesses = set(getattr(g, "WP_HARNESSES", []))
     spec_h = set(name for name, _what in getattr(g, "WP_SPEC_HARNESSES", []))
     return harnesses, spec_h, "imported from gate.py"
+
+
+def n8n_runner_names(repo_root):
+    """Read the npm suite's runner OUT OF package.json, never transcribe it.
+
+    Same discipline as load_wp_literals and for the same reason (RFX-303): a
+    transcribed literal drifts from the thing it claims to describe, and this
+    check would then certify a plane against its own stale copy.
+
+    Returns (command, executed_basenames, source). `command` is None when the
+    runner could not be read at all, which is a FAIL and not a quiet pass.
+    """
+    pkg = os.path.join(repo_root, N8N_DIR, "package.json")
+    if not os.path.isdir(os.path.join(repo_root, N8N_DIR)):
+        return "", set(), "no %s/ in this tree" % N8N_DIR
+    if not os.path.exists(pkg):
+        return None, set(), "no package.json in %s/" % N8N_DIR
+    try:
+        with open(pkg) as fh:
+            data = json.load(fh)
+    except ValueError as exc:
+        return None, set(), "%s/package.json did not parse: %s" % (N8N_DIR, exc)
+    cmd = (data.get("scripts") or {}).get("test")
+    if not cmd:
+        return None, set(), "%s/package.json declares no scripts.test" % N8N_DIR
+    # Tokens, not a substring search: `a.test.js` is a substring of
+    # `xa.test.js`, and a plane that accepts that accepts a file nothing runs.
+    names = set()
+    for token in re.split(r"[\s;&|()<>]+", cmd):
+        token = token.strip("'\"")
+        if token.endswith(N8N_RUNNER_SUFFIXES):
+            names.add(os.path.basename(token))
+    return cmd, names, "read from %s/package.json scripts.test" % N8N_DIR
+
+
+def n8n_compiled_name(source_basename):
+    """What `tsc` emits for a source file, i.e. the name the runner must use.
+
+    The runner executes the COMPILED output, so the source basename never
+    appears in it; comparing the two directly would report every file in the
+    directory as unrun.
+    """
+    stem, ext = os.path.splitext(source_basename)
+    return stem + ".js" if ext == ".ts" else source_basename
 
 
 def walk_files(repo_root, rel_dir=None, suffixes=None, top_level_only=False):
@@ -438,6 +537,48 @@ def check(repo_root):
             "one that stopped running it" % (name, WP_TESTS_DIR))
     wp_count = len(wp_on_disk)
 
+    # ---- plane 1b: the npm suite root, whose runner names ONE file ----------
+    # `drift` counts a *.test.ts here and forgives it for being inside an
+    # enumerated suite root. That premise is false for this root for exactly
+    # the reason it is false for reeflex-wordpress/tests: the component runs a
+    # literal, not the directory. Measured 2026-09-23 on ecb7753 — a second
+    # *.test.ts dropped here compiled and never executed, and the runner's own
+    # summary stayed at "20 passed, 0 failed, 20 total".
+    runner_cmd, runner_names, how_n8n = n8n_runner_names(repo_root)
+    notes.append("npm suite runner: %s" % how_n8n)
+    n8n_count = 0
+    if runner_cmd is None:
+        failures.append(
+            "cannot read the npm suite runner (%s) — this check refuses to "
+            "certify a plane it did not read" % how_n8n)
+    elif runner_cmd:
+        n8n_on_disk = {os.path.basename(p)
+                       for p in walk_files(repo_root, N8N_TESTS_DIR,
+                                           N8N_SOURCE_SUFFIXES,
+                                           top_level_only=True)
+                       if not os.path.basename(p).endswith(".d.ts")}
+        n8n_count = len(n8n_on_disk)
+        compiled = {n8n_compiled_name(n): n for n in n8n_on_disk}
+        for name in sorted(n8n_on_disk):
+            if name in N8N_SUPPORT:
+                continue
+            if n8n_compiled_name(name) not in runner_names:
+                failures.append(
+                    "%s/%s is in a suite root that `drift` counts, and the npm "
+                    "runner does not execute it — `scripts.test` names its "
+                    "files one at a time, so a file this directory acquires is "
+                    "compiled and then run by nothing. Add it to scripts.test "
+                    "or to N8N_SUPPORT with a reason"
+                    % (N8N_TESTS_DIR, name))
+        for name in sorted(runner_names - set(compiled)):
+            failures.append(
+                "the npm runner executes %s, and no source for it exists in "
+                "%s — a stale entry, and a runner that names a missing file is "
+                "one that stopped running it" % (name, N8N_TESTS_DIR))
+        for name in sorted(set(N8N_SUPPORT) - n8n_on_disk):
+            failures.append("N8N_SUPPORT declaration for %s is STALE: no such "
+                            "file in %s" % (name, N8N_TESTS_DIR))
+
     # ---- plane 2: scripts/, top level, enumerated from the directory --------
     scripts_on_disk = {os.path.basename(p)
                        for p in walk_files(repo_root, "scripts", None,
@@ -508,7 +649,8 @@ def check(repo_root):
                         "in %s" % (name, WP_TESTS_DIR))
 
     counts = {"wp_php": wp_count, "scripts": len(scripts_on_disk),
-              "php_elsewhere": len(php_other), "declared": len(declared)}
+              "php_elsewhere": len(php_other), "declared": len(declared),
+              "n8n": n8n_count}
     return failures, notes, counts
 
 
@@ -519,9 +661,10 @@ def report(repo_root, verbose=True):
             print("  | %s" % n)
         for f in failures:
             print("  | UNCOVERED: %s" % f)
-    detail = ("%d wp harness file(s), %d script(s), %d .php elsewhere, "
-              "%d declared" % (counts["wp_php"], counts["scripts"],
-                               counts["php_elsewhere"], counts["declared"]))
+    detail = ("%d wp harness file(s), %d npm suite file(s), %d script(s), "
+              "%d .php elsewhere, %d declared"
+              % (counts["wp_php"], counts["n8n"], counts["scripts"],
+                 counts["php_elsewhere"], counts["declared"]))
     if failures:
         print("SUITE-COVERAGE: FAIL (%d artefact(s) unaccounted or stale; %s)"
               % (len(failures), detail))
@@ -550,19 +693,33 @@ class Gate:
 _INVOKES = '\nRUN = ["python", "scripts/wired-check.py"]\n'
 
 
+_N8N_CLEAN_RUNNER = "tsc -p tsconfig.test.json && node dist-test/test/a.test.js"
+
+
 def _fixture(tmp, wp_files, script_files, gate_body=_GATE_STUB, workflow="",
-             nested_workflow=None, dot_dir_files=()):
+             nested_workflow=None, dot_dir_files=(),
+             n8n_files=("a.test.ts",), n8n_runner=_N8N_CLEAN_RUNNER,
+             n8n_package=True):
     """Build a synthetic tree.
 
     `nested_workflow` writes the SAME text to pkg/.github/workflows/ci.yml —
     a path GitHub never registers — so a detector can be shown to distinguish
     the two locations rather than matching on the word "workflows".
     `dot_dir_files` land in a dot-directory, which must be invisible.
+    `n8n_files`/`n8n_runner` build the npm suite plane; the defaults are the
+    CLEAN shape, so every pre-existing case below still measures what it was
+    written to measure and not this plane.
     """
     root = tempfile.mkdtemp(dir=tmp)
     os.makedirs(os.path.join(root, WP_TESTS_DIR))
     os.makedirs(os.path.join(root, "scripts"))
     os.makedirs(os.path.join(root, ".github", "workflows"))
+    os.makedirs(os.path.join(root, N8N_TESTS_DIR))
+    if n8n_package:
+        with open(os.path.join(root, N8N_DIR, "package.json"), "w") as f:
+            json.dump({"name": "fixture", "scripts": {"test": n8n_runner}}, f)
+    for n in n8n_files:
+        open(os.path.join(root, N8N_TESTS_DIR, n), "w").write("// fixture\n")
     with open(os.path.join(root, "gate.py"), "w") as f:
         f.write(gate_body)
     with open(os.path.join(root, ".github", "workflows", "ci.yml"), "w") as f:
@@ -602,8 +759,10 @@ def selftest():
     try:
         # The clean fixture. If this is not green, every red below is noise.
         wired = {"h-one.php", "h-spec.php", "wp-stubs.php"}
-        saved = (dict(WIRED), dict(UNWIRED), dict(WP_SUPPORT), dict(NOT_A_CHECK))
+        saved = (dict(WIRED), dict(UNWIRED), dict(WP_SUPPORT), dict(NOT_A_CHECK),
+                 dict(N8N_SUPPORT))
         WIRED.clear(); UNWIRED.clear(); WP_SUPPORT.clear(); NOT_A_CHECK.clear()
+        N8N_SUPPORT.clear()
         WP_SUPPORT["wp-stubs.php"] = "stubs"
         WIRED["wired-check.py"] = "gate.py"
         UNWIRED["hand-run-probe.py"] = "run by hand"
@@ -731,8 +890,85 @@ def selftest():
                             gate_body=_GATE_STUB + _INVOKES,
                             dot_dir_files=["undeclared-scratch.php"])
             case("a .php in a dot-directory is not an artefact", root, False)
+
+            # 12. THE NPM ARM, and the reason this plane exists: a second
+            #     suite file inside a root `drift` counts, which the runner
+            #     never names. This is case 1 in the other suite root.
+            root = _fixture(tmp, wired, clean_scripts,
+                            gate_body=_GATE_STUB + _INVOKES,
+                            n8n_files=("a.test.ts", "b.test.ts"))
+            case("npm suite file the runner never executes", root, True,
+                 "does not execute it")
+
+            # 12b. the control for 12: the SAME second file, named by the
+            #      runner, is green. Without this pair a detector that had
+            #      stopped reading scripts.test at all would pass 12 and look
+            #      correct.
+            root = _fixture(tmp, wired, clean_scripts,
+                            gate_body=_GATE_STUB + _INVOKES,
+                            n8n_files=("a.test.ts", "b.test.ts"),
+                            n8n_runner="tsc && node dist-test/test/a.test.js "
+                                       "&& node dist-test/test/b.test.js")
+            case("...and the same file named by the runner is green", root,
+                 False)
+
+            # 12c. the SOURCE name in scripts.test is not the executed name.
+            #      A detector comparing basenames directly would pass this,
+            #      and the file would still run nowhere.
+            root = _fixture(tmp, wired, clean_scripts,
+                            gate_body=_GATE_STUB + _INVOKES,
+                            n8n_runner="tsc && node test/a.test.ts")
+            case("runner naming the .ts SOURCE is not an execution", root,
+                 True, "does not execute it")
+
+            # 12d. a substring is not a token: `a.test.js` occurs inside
+            #      `xa.test.js`, and a plane that accepts that accepts a file
+            #      nothing runs.
+            root = _fixture(tmp, wired, clean_scripts,
+                            gate_body=_GATE_STUB + _INVOKES,
+                            n8n_runner="tsc && node dist-test/test/xa.test.js")
+            case("a runner token that merely CONTAINS the name is not it",
+                 root, True, "does not execute it")
+
+            # 13. the other direction: the runner names a file that is gone.
+            root = _fixture(tmp, wired, clean_scripts,
+                            gate_body=_GATE_STUB + _INVOKES,
+                            n8n_files=())
+            case("npm runner executes a file that no longer exists", root,
+                 True, "a stale entry")
+
+            # 14. a declared support file is exempt...
+            N8N_SUPPORT["helper.ts"] = "shared fixture, no verdict of its own"
+            root = _fixture(tmp, wired, clean_scripts,
+                            gate_body=_GATE_STUB + _INVOKES,
+                            n8n_files=("a.test.ts", "helper.ts"))
+            case("declared npm support file is exempt", root, False)
+
+            # 14b. ...and is still subject to the stale rule.
+            root = _fixture(tmp, wired, clean_scripts,
+                            gate_body=_GATE_STUB + _INVOKES)
+            case("N8N_SUPPORT declaration for a missing file", root, True,
+                 "is STALE")
+            del N8N_SUPPORT["helper.ts"]
+
+            # 15. the instrument's own floor, the npm twin of case 7: a
+            #     package.json this check cannot read is a FAIL, never a
+            #     quiet pass over a plane it never enumerated.
+            root = _fixture(tmp, wired, clean_scripts,
+                            gate_body=_GATE_STUB + _INVOKES,
+                            n8n_package=False)
+            case("npm package.json unreadable is a FAIL, never a quiet pass",
+                 root, True, "refuses to certify")
+
+            # 15b. ...and the same floor when scripts.test is simply absent.
+            root = _fixture(tmp, wired, clean_scripts,
+                            gate_body=_GATE_STUB + _INVOKES,
+                            n8n_runner="")
+            case("npm package.json with no scripts.test is a FAIL", root,
+                 True, "refuses to certify")
         finally:
-            for table, original in zip((WIRED, UNWIRED, WP_SUPPORT, NOT_A_CHECK), saved):
+            for table, original in zip(
+                    (WIRED, UNWIRED, WP_SUPPORT, NOT_A_CHECK, N8N_SUPPORT), saved):
                 table.clear(); table.update(original)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
