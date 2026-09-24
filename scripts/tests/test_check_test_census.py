@@ -253,6 +253,145 @@ class TestTheCountItself(unittest.TestCase):
         self.assertIn("%d test(s) in this file are silenced" % biggest_n, findings[0].detail)
 
 
+class TestReachAndEnumeration(unittest.TestCase):
+    """RFX-87 round 2 (dev-2--147): the two axes on which this census used to
+    be NARROWER than gate.py's `drift`, which walks recursively and matches
+    `*_test.py` as well.
+
+    Measured on python3.11 before any of this was written, because the whole
+    finding is about what the runners really do rather than what they document:
+
+        tests/pkgsub/test_healthy_guard.py   (__init__.py present) -> Ran 1 test
+        tests/plainsub/test_healthy_guard.py (no __init__.py)      -> Ran 0 tests, OK
+        tests/env_canon_test.py  under discover's default test*.py -> not collected
+        all three, under pytest                                    -> collected
+
+    So a file could be enumerated, walked by `drift`, certified as covered, and
+    still run nowhere — and #89's defect fits in that gap exactly."""
+
+    def _suite(self, tmp, files, runner):
+        root = os.path.join(tmp, "suite")
+        os.makedirs(root, exist_ok=True)
+        for rel, body in files.items():
+            path = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as fh:
+                fh.write(body)
+        return ctc.census(tmp, roots=[("suite", runner)])
+
+    def test_the_89_defect_one_directory_down_is_caught(self):
+        with no_waivers(), tempfile.TemporaryDirectory() as tmp:
+            ok, lines = self._suite(tmp, {
+                "test_good.py": HEALTHY_UNITTEST,
+                os.path.join("subsuite", "__init__.py"): "",
+                os.path.join("subsuite", "test_env_canon.py"): HEALTHY_PYTEST,
+            }, "unittest")
+            self.assertFalse(ok, "an inert guard in a package subdirectory must be RED:\n"
+                                 + "\n".join(lines))
+            self.assertTrue(
+                any("zero-collection" in l and os.path.join("subsuite", "test_env_canon.py") in l
+                    for l in lines),
+                "the finding must name the NESTED path:\n" + "\n".join(lines))
+
+    def test_a_healthy_nested_file_is_counted_not_flagged(self):
+        # The other half of the same detector: depth alone is not a defect.
+        with no_waivers(), tempfile.TemporaryDirectory() as tmp:
+            ok, lines = self._suite(tmp, {
+                "test_good.py": HEALTHY_UNITTEST,
+                os.path.join("subsuite", "__init__.py"): "",
+                os.path.join("subsuite", "test_good_nested.py"): HEALTHY_UNITTEST,
+            }, "unittest")
+            self.assertTrue(ok, "\n".join(lines))
+            self.assertTrue(
+                any("suite (unittest) -> 2 file(s) (1 below the root), 2 test(s)" in l
+                    for l in lines),
+                "both files must be counted:\n" + "\n".join(lines))
+
+    def test_a_non_package_subdirectory_is_runs_nowhere_under_unittest_only(self):
+        files = {
+            "test_good.py": HEALTHY_UNITTEST,
+            os.path.join("plainsub", "test_good_nested.py"): HEALTHY_UNITTEST,
+        }
+        with no_waivers(), tempfile.TemporaryDirectory() as tmp:
+            ok, lines = self._suite(tmp, files, "unittest")
+            self.assertFalse(ok, "\n".join(lines))
+            self.assertTrue(any("runs-nowhere" in l and "test_good_nested.py" in l for l in lines),
+                            "\n".join(lines))
+            self.assertTrue(any("not an importable package" in l for l in lines),
+                            "the reason must name the cause, not print '0 tests':\n"
+                            + "\n".join(lines))
+            self.assertTrue(any("suite (unittest) -> 2 file(s) (1 below the root), 1 test(s)" in l
+                                for l in lines),
+                            "a file that runs nowhere must not be counted:\n" + "\n".join(lines))
+        with no_waivers(), tempfile.TemporaryDirectory() as tmp:
+            ok, lines = self._suite(tmp, files, "pytest")
+            self.assertTrue(ok, "pytest DOES recurse into a plain directory, so the same "
+                                "tree must be clean under it:\n" + "\n".join(lines))
+
+    def test_a_star_test_py_file_is_runs_nowhere_under_unittest_only(self):
+        files = {
+            "test_good.py": HEALTHY_UNITTEST,
+            "env_canon_test.py": HEALTHY_UNITTEST,
+        }
+        with no_waivers(), tempfile.TemporaryDirectory() as tmp:
+            ok, lines = self._suite(tmp, files, "unittest")
+            self.assertFalse(ok, "\n".join(lines))
+            self.assertTrue(any("runs-nowhere" in l and "env_canon_test.py" in l for l in lines),
+                            "\n".join(lines))
+            self.assertTrue(any("test*.py" in l and "never imports it" in l for l in lines),
+                            "the reason must name discover's default pattern:\n" + "\n".join(lines))
+        with no_waivers(), tempfile.TemporaryDirectory() as tmp:
+            ok, lines = self._suite(tmp, files, "pytest")
+            self.assertTrue(ok, "\n".join(lines))
+            self.assertTrue(any("suite (pytest) -> 2 file(s), 2 test(s)" in l for l in lines),
+                            "under pytest the file is a real test file and must be counted:\n"
+                            + "\n".join(lines))
+
+    def test_the_detectors_apply_inside_a_star_test_py_file_too(self):
+        # Enumerating the file is only half of it: it has to be READ.
+        with no_waivers(), tempfile.TemporaryDirectory() as tmp:
+            ok, lines = self._suite(tmp, {
+                "test_good.py": HEALTHY_UNITTEST,
+                "env_canon_test.py": 'import pytest\n\npytestmark = pytest.mark.skip("x")\n\n'
+                                     'def test_a():\n    assert True\n',
+            }, "pytest")
+            self.assertFalse(ok, "\n".join(lines))
+            self.assertTrue(any("module-silenced" in l and "env_canon_test.py" in l
+                                for l in lines), "\n".join(lines))
+
+    def test_caches_and_vendored_trees_are_not_walked(self):
+        with no_waivers(), tempfile.TemporaryDirectory() as tmp:
+            ok, lines = self._suite(tmp, {
+                "test_good.py": HEALTHY_UNITTEST,
+                os.path.join("__pycache__", "test_stale.py"): HEALTHY_PYTEST,
+                os.path.join("node_modules", "test_vendored.py"): HEALTHY_PYTEST,
+            }, "unittest")
+            self.assertTrue(ok, "a cached or vendored copy is not a suite:\n" + "\n".join(lines))
+            self.assertTrue(any("suite (unittest) -> 1 file(s), 1 test(s)" in l for l in lines),
+                            "\n".join(lines))
+
+    def test_the_real_tree_has_no_file_outside_the_enumeration(self):
+        # The census and `drift` must agree about WHICH files exist, or the
+        # gap between them is where the next inert guard sits. This compares
+        # the two enumerations on the tree as it actually is.
+        import fnmatch
+        for rel_root, runner in ctc.CENSUS_ROOTS:
+            if runner is None:
+                continue
+            abs_root = os.path.join(REPO_ROOT, rel_root)
+            if not os.path.isdir(abs_root):
+                continue
+            censused = set(ctc.enumerate_test_files(abs_root))
+            walked = set()
+            for dirpath, dirnames, filenames in os.walk(abs_root):
+                dirnames[:] = [d for d in dirnames if d not in ctc.CENSUS_EXCLUDE_DIRS]
+                for f in filenames:
+                    if any(fnmatch.fnmatch(f, p) for p in ("test_*.py", "*_test.py")):
+                        walked.add(os.path.relpath(os.path.join(dirpath, f), abs_root))
+            self.assertEqual(walked - censused, set(),
+                             "%s: drift walks these and the census does not open them" % rel_root)
+
+
 class TestTheSelftestStillProvesItself(unittest.TestCase):
     def test_script_selftest_passes(self):
         self.assertEqual(ctc.selftest(), 0)
