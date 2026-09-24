@@ -105,13 +105,16 @@ answered `--help` with exit 0 on every one of those days.
 from __future__ import annotations
 
 import argparse
+import ast
 import fnmatch
+import inspect
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -551,6 +554,31 @@ def audit_skips(statuses, allow_skips, registry=None, silent_steps=()):
         lines.append("  REFUSED    --allow-skips %s is not in SKIP_REGISTRY — a skip with no "
                      "written justification cannot be silenced here." % k)
     return (not unregistered and not silent_steps), lines
+
+
+def silent_step_label(header, emitted):
+    """RFX-108 residual: did the step under `header` emit a verdict?
+
+    Returns the step's label when `emitted` — the transcript lines the step
+    produced — carries NO `COMPONENT` line, and None when it carries one.
+
+    This is `main()`'s silent-step detector, and it lives out here for one
+    reason: while it was four lines inline in `main()` **nothing scored it**.
+    Measured dev-3--179 and again dev-1--237: with the detector replaced by
+    `if False:`, `gate.py --selftest` stayed `PASS (117 checks)` — byte
+    identical — because a detector that never fires on a tree where no step is
+    silent produces the same transcript as one that works. That is RFX-108's
+    own shape, one level up: a mechanism whose verdict reaches nothing until
+    the day it is needed, which is the day it is too late to find out.
+
+    Only `COMPONENT` lines at column 0 count. `Gate.show()` prefixes every line
+    of a step's captured output with "  | ", so a suite that prints the word
+    COMPONENT — or a gate transcript replayed through a step — cannot buy that
+    step a verdict it did not emit.
+    """
+    if any(COMPONENT_RE.match(line) for line in emitted):
+        return None
+    return re.split(r"\s{2,}", header, maxsplit=1)[0]
 
 
 def derive_verdict(lines, allow_skips):
@@ -1417,8 +1445,9 @@ class Gate:
             # deleted — is fully covered. Widening it to key-level would need
             # each step to declare the keys it owns, i.e. the hand-written list
             # this deliberately avoids; that trade is recorded, not hidden.
-            if not any(COMPONENT_RE.match(l) for l in self.lines[before:]):
-                silent_steps.append(re.split(r"\s{2,}", header, 1)[0])
+            label = silent_step_label(header, self.lines[before:])
+            if label:
+                silent_steps.append(label)
             self.emit("")
 
         # skip-ledger runs LAST: it is the only component that reads the other
@@ -1762,11 +1791,66 @@ def selftest():
     # ...and the roster the check runs against is main()'s own step list, so it
     # cannot go stale against it. This asserts the label derivation used there.
     check("step label is the header's first column",
-          re.split(r"\s{2,}", "pypi-content-selftest  the content comparator", 1)[0]
+          silent_step_label("pypi-content-selftest  the content comparator", [])
           == "pypi-content-selftest")
     check("...including a step label that contains a space",
-          re.split(r"\s{2,}", "pytest suites   reeflex-mcp + reeflex-holds", 1)[0]
+          silent_step_label("pytest suites   reeflex-mcp + reeflex-holds", [])
           == "pytest suites")
+
+    # THE DETECTOR ITSELF (RFX-108 residual, dev-3--179's finding, closed here).
+    # Everything above scores the CONSUMER — audit_skips, given a silent_steps
+    # list somebody handed it. The PRODUCER that decides what goes in that list
+    # was four lines inline in main() and was scored by nothing: replacing them
+    # with `if False:` left `--selftest` at PASS (117 checks), unchanged, on a
+    # tree where no step is silent. It is now `silent_step_label`, out here,
+    # reachable from this function. Note the asymmetry these two checks need —
+    # a detector that always fires and one that never fires each pass one of
+    # them, so both directions are asserted.
+    check("detector NAMES a step that emitted no COMPONENT line",
+          silent_step_label("drift  test files outside every suite",
+                            ["  | ran 3 files", ""]) == "drift")
+    check("detector stays silent about a step that DID emit one",
+          silent_step_label("drift  test files outside every suite",
+                            ["COMPONENT drift: PASS (3 files)"]) is None)
+    # Emission is judged at column 0 only. Gate.show() prefixes captured output
+    # with "  | ", so a suite that prints a COMPONENT line — or replays a gate
+    # transcript — must not be able to buy its step a verdict it never emitted.
+    check("...and an indented COMPONENT line does NOT count as emission",
+          silent_step_label("drift  test files",
+                            ["  | COMPONENT drift: PASS (echoed by a suite)"])
+          == "drift")
+    # And the detector is scored against the REAL roster, not against two
+    # hand-written strings: a fixture standing in for the artefact is an
+    # unverified claim about the artefact. main()'s own source is the roster.
+    # Read via ast, not via a regex over the source. A regex missed exactly one
+    # row here — `claude-corpus-live`, whose header is written as an implicit
+    # multi-line string concatenation, so the line has no `",` on it — and a
+    # roster that is quietly one short is the failure this whole check exists to
+    # prevent, committed by the check itself. ast folds concatenation for free.
+    _main_body = ast.parse(textwrap.dedent(inspect.getsource(Gate.main))).body[0]
+    _steps = [n for n in ast.walk(_main_body)
+              if isinstance(n, ast.For) and isinstance(n.iter, ast.List)
+              and isinstance(n.target, ast.Tuple)
+              and [e.id for e in n.target.elts] == ["header", "fn"]]
+    check("main()'s step list is found exactly once", len(_steps) == 1)
+    _rows = _steps[0].iter.elts if _steps else []
+    _roster = [r.elts[0].value for r in _rows
+               if isinstance(r, ast.Tuple) and isinstance(r.elts[0], ast.Constant)]
+    check("the roster read out of main() is the whole step list",
+          len(_roster) >= 20)
+    # ...and EVERY row yielded a header. Without this floor the derivation can
+    # silently return a subset and every check over it narrows with it.
+    check("...with no row dropped by the derivation",
+          len(_roster) == len(_rows) and len(_rows) > 0)
+    check("every real roster header yields a label with no prose glued on",
+          all(silent_step_label(h, []) == h.split("  ")[0].strip()
+              and "  " not in silent_step_label(h, []) for h in _roster))
+    # THE CALL SITE. Extracting the detector makes it testable and creates a
+    # new way to lose it: a guard that scores a helper cannot see its caller
+    # drop the call, which is this ticket's defect wearing the next mask. So
+    # pin the call site too — main() must still reach this function by name.
+    check("main() still calls the detector (the call site, not just the helper)",
+          "silent_step_label" in Gate.main.__code__.co_names)
 
     # transcript re-parse: only exact COMPONENT lines count
     v, _ = derive_verdict(["COMPONENT a: PASS (x)", "COMPONENT b: PASS"], set())
