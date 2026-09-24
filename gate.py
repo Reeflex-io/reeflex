@@ -1636,6 +1636,28 @@ def selftest():
     check("neither leg keeps a private exit-code-only verdict",
           not any("USAGE_RE_TMPL" in fn.__code__.co_names
                   for fn in (Gate.run_entrypoints, Gate.run_pypi_smoke)))
+    # AND THE THREE ROWS ABOVE CANNOT SEE A CALLER CHANGE THE SIGNATURE. They are
+    # `co_names` checks: they prove a call HAPPENS and say nothing about the
+    # arguments it is made with. Restore `has_usage` as a parameter and pass
+    # `has_usage=False` from `run_pypi_smoke` — the state the docstring above says
+    # an earlier draft was in — and the leg is neutered with every row so far
+    # still green. Measured on main dde3ebd (RFX-403): `SELFTEST: PASS (125
+    # checks)`, exit 0, byte-identical to the clean run, while the neutered leg
+    # scores a wheel that answers `--help` with exit 0 and ZERO bytes as OK for
+    # all three published packages — i.e. reeflex-holds==0.1.2, the artefact
+    # RFX-42 and RFX-149 were filed about.
+    #
+    # PIN THE WHOLE PARAMETER LIST, NOT `co_argcount`. RFX-403 proposes
+    # `co_argcount == 4`; measured, that row is satisfied by two of the three
+    # sabotage shapes that neuter the leg just as completely — `*, has_usage=None`
+    # and `**kw` both leave `co_argcount` at 4, because it counts only
+    # positional-or-keyword parameters. The parameter list sees all three.
+    # This does redden on an honest rename of any of the four, which is the
+    # intended cost: the expectation is looked up from PUBLISHED, and a change to
+    # how this function is called is the thing a reviewer should have to look at.
+    check("the scorer takes its banner expectation from PUBLISHED, not from its caller",
+          list(inspect.signature(score_entrypoint_help).parameters)
+          == ["pkg", "entry", "code", "out"])
 
     # RFX-107 closed on TWO things: "gate.py --selftest covers the parse, AND
     # deleting the smoke-pypi job from gate.yml makes the gate RED in a trial
