@@ -501,7 +501,7 @@ def parse_published_classifier(exit_code, text):
     return "FAIL", "exit %d" % exit_code
 
 
-def audit_skips(statuses, allow_skips, registry=None):
+def audit_skips(statuses, allow_skips, registry=None, silent_steps=()):
     """RFX-108: account for every skip in this run.
 
     Returns (ok, lines). NOT green when an --allow-skips key carries no
@@ -509,7 +509,21 @@ def audit_skips(statuses, allow_skips, registry=None):
     reason. A STALE allowance (the key is allowed but the component actually
     ran) is reported as a WARN rather than a failure: it is a cleanup, not a
     lying green, and failing on it would break every local invocation the
-    moment a suite starts working again."""
+    moment a suite starts working again.
+
+    `silent_steps` are steps from main()'s own step list that ran and emitted
+    NO `COMPONENT` line at all — see main(). They are the second way a
+    component leaves coverage, and the ledger could not see the first version
+    of it: `derive_verdict` builds `statuses` by parsing the COMPONENT lines,
+    so a step that emits none is absent from `statuses` entirely. It is not
+    SKIPPED and not FAIL, so neither the loop above nor `derive_verdict` has
+    anything to report, and the gate goes GREEN having silently dropped that
+    component's verdict on the floor. That is the ticket's own sentence — a
+    component disappears from coverage and the transcript stays GREEN without
+    saying anything about the loss — reached without touching --allow-skips at
+    all. Measured, not hypothetical: `pypi-content-selftest` lost its
+    `self.component(...)` line to an unrelated edit on 2026-09-16 (31f1899)
+    and ran unreported for seven days (RFX-108, qa--327)."""
     registry = SKIP_REGISTRY if registry is None else registry
     lines = []
     skipped = sorted(k for k, s in statuses.items() if s == "SKIPPED")
@@ -523,6 +537,10 @@ def audit_skips(statuses, allow_skips, registry=None):
         lines.append("  DELEGATED  %s  (ran elsewhere — verified, see the component)" % k)
     if not skipped and not delegated:
         lines.append("  nothing was skipped or delegated in this run")
+    for step in silent_steps:
+        lines.append("  SILENT     %s ran and emitted no COMPONENT line — its verdict "
+                     "reached nothing. A step that reports nothing has not passed; it "
+                     "has left coverage without saying so." % step)
 
     unregistered = sorted(k for k in allow_skips if k not in registry)
     stale = sorted(k for k in allow_skips if k in statuses and statuses[k] != "SKIPPED")
@@ -532,7 +550,7 @@ def audit_skips(statuses, allow_skips, registry=None):
     for k in unregistered:
         lines.append("  REFUSED    --allow-skips %s is not in SKIP_REGISTRY — a skip with no "
                      "written justification cannot be silenced here." % k)
-    return not unregistered, lines
+    return (not unregistered and not silent_steps), lines
 
 
 def derive_verdict(lines, allow_skips):
@@ -1023,6 +1041,8 @@ class Gate:
             ok = False
         detail = m.group(2) if m else "no anchored 'SELFTEST:' line — cannot confirm"
         self.show(out, full=not ok, tail=15)
+        self.component(key, "PASS" if ok else "FAIL", detail)
+
     CORPUS_PROBE = "attack-probe-rfx144-agent-prices-own-action.py"
 
     def run_corpus_live(self):
@@ -1349,6 +1369,7 @@ class Gate:
             self.emit("GATE: ENV-STOP")
             return 2
         self.emit("")
+        silent_steps = []
         for header, fn in [
             ("rego-core       opa test reeflex-core/policy/", lambda: self.run_rego("rego-core", "reeflex-core/policy")),
             ("rego-claude     opa test reeflex-claude/policy/", lambda: self.run_rego("rego-claude", "reeflex-claude/policy")),
@@ -1377,7 +1398,27 @@ class Gate:
             ("drift           test files outside every enumerated suite", self.run_drift),
         ]:
             self.emit("--- %s" % header)
+            before = len(self.lines)
             fn()
+            # RFX-108: the step list above IS the roster — every step in it owes
+            # this run at least one COMPONENT verdict. Deriving the roster from
+            # the loop rather than from a hand-written set of keys is the point:
+            # a fourth list would go stale the same way the transcript did, and
+            # a step added tomorrow is covered the moment it is added here.
+            #
+            # WHAT THIS DOES NOT SEE, stated so nobody reads it as wider than it
+            # is. It scores "did this step emit a COMPONENT line", not "did it
+            # emit the RIGHT one". Two cases survive it: a step that emits a
+            # verdict under a misspelled key (still one line, so still counted),
+            # and one of the FOUR components `pytest suites` emits going missing
+            # while its siblings report (the step as a whole still emitted). The
+            # single-component steps are 22 of the 23, and the defect this was
+            # written for — a step whose only `self.component(...)` call was
+            # deleted — is fully covered. Widening it to key-level would need
+            # each step to declare the keys it owns, i.e. the hand-written list
+            # this deliberately avoids; that trade is recorded, not hidden.
+            if not any(COMPONENT_RE.match(l) for l in self.lines[before:]):
+                silent_steps.append(re.split(r"\s{2,}", header, 1)[0])
             self.emit("")
 
         # skip-ledger runs LAST: it is the only component that reads the other
@@ -1385,12 +1426,14 @@ class Gate:
         allow = set(filter(None, (self.args.allow_skips or "").split(",")))
         _, statuses_so_far = derive_verdict(self.lines, allow)
         self.emit("--- skip-ledger     what was skipped in THIS run, and why (RFX-108)")
-        ledger_ok, ledger_lines = audit_skips(statuses_so_far, allow)
+        ledger_ok, ledger_lines = audit_skips(statuses_so_far, allow,
+                                              silent_steps=silent_steps)
         for line in ledger_lines:
             self.emit(line)
         self.component("skip-ledger", "PASS" if ledger_ok else "FAIL",
                        "every skip in this run is accounted for" if ledger_ok
-                       else "an --allow-skips key has no registered justification")
+                       else ("a step emitted no COMPONENT verdict" if silent_steps
+                             else "an --allow-skips key has no registered justification"))
         self.emit("")
 
         verdict, statuses = derive_verdict(self.lines, allow)
@@ -1697,6 +1740,33 @@ def selftest():
           any("no registered justification" in l for l in lines))
     check("every key in the real SKIP_REGISTRY carries a non-empty reason",
           all(isinstance(v, str) and len(v) > 20 for v in SKIP_REGISTRY.values()))
+
+    # skip-ledger, second half (RFX-108): a step that emitted NO verdict at all.
+    # The cases below are the ones a SKIPPED-only ledger cannot express: the
+    # statuses dict is exactly what a green run looks like, because the missing
+    # component contributed nothing to it. Without silent_steps the ledger is
+    # asked a question about a component whose name it has never seen.
+    ok, lines = audit_skips({"a": "PASS"}, set(), reg, silent_steps=["pypi-content-selftest"])
+    check("skip-ledger FAILS a step that emitted no COMPONENT verdict", not ok)
+    check("...and names the step, not just the count",
+          any("pypi-content-selftest" in l and "SILENT" in l for l in lines))
+    check("...and a silent step is NOT reported as a skip",
+          any("nothing was skipped or delegated" in l for l in lines))
+    ok, _ = audit_skips({"a": "PASS"}, set(), reg, silent_steps=[])
+    check("skip-ledger stays green when every step reported", ok)
+    # --allow-skips cannot buy silence: the flag addresses component KEYS, and a
+    # silent step never produced one, so there is nothing for the caller to name.
+    ok, _ = audit_skips({"a": "PASS"}, {"known"}, reg, silent_steps=["pypi-content-selftest"])
+    check("a silent step cannot be silenced by --allow-skips", not ok)
+
+    # ...and the roster the check runs against is main()'s own step list, so it
+    # cannot go stale against it. This asserts the label derivation used there.
+    check("step label is the header's first column",
+          re.split(r"\s{2,}", "pypi-content-selftest  the content comparator", 1)[0]
+          == "pypi-content-selftest")
+    check("...including a step label that contains a space",
+          re.split(r"\s{2,}", "pytest suites   reeflex-mcp + reeflex-holds", 1)[0]
+          == "pytest suites")
 
     # transcript re-parse: only exact COMPONENT lines count
     v, _ = derive_verdict(["COMPONENT a: PASS (x)", "COMPONENT b: PASS"], set())
