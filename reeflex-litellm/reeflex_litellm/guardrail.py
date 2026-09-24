@@ -596,16 +596,35 @@ class ReeflexActionGuardrail(_Base):
 
         Precedence:
           1. the request header named by `reeflex_session_header`
-             (default `x-reeflex-session`) -- the explicit, operator-controlled
-             answer, and the one to use today;
+             (default `x-reeflex-session`) -- the explicit answer, and the one
+             to use today;
           2. OpenAI's `user` field on the request body;
           3. the per-request `litellm_call_id`.
 
-        KNOWN LIMIT, unchanged by RFX-243: when neither a session header nor
+        KNOWN LIMIT 1, unchanged by RFX-243: when neither a session header nor
         `user` is supplied, the fallback is PER REQUEST, so R5's cumulative
         session budget cannot accumulate across a conversation.  The budget is
         not wrong -- it is scoped to one request.  Anything that needs a real
         cumulative budget must supply 1 or 2.
+
+        KNOWN LIMIT 2, AND IT IS THE COMPLEMENT OF LIMIT 1.  Sources 1 and 2 are
+        both read off the CALLER'S request -- a header it sets and the OpenAI
+        `user` field it sends.  Neither is authenticated, and nothing here
+        reconciles the value against the key that was.  So the caller chooses
+        the budget namespace within its own org: measured on the published
+        0.2.0 wheel against core 0.2.2's real pack, one virtual key exhausted
+        `objects_touched` at call 201 under `cumulative_budget`, then changed
+        one header value and its next call was `allow` with `cumulative` 0.
+        This is NOT the tenancy defect -- the org half of `agent.session_id`
+        comes from the authenticated key, so the rotated session lands in the
+        SAME org and no other department's budget is reachable (that is what
+        `test_the_marketing_agent_cannot_present_itself_as_the_payments_agent`
+        pins).  It is the same fragmentation-resistance class as RFX-181 for
+        n8n: a per-session budget cannot bind a caller who names the session.
+        An operator who needs a budget the caller cannot reset must set the
+        header at an ingress it controls and strip an inbound one, or ask for a
+        budget dimension keyed on something the caller does not choose -- which
+        is a core policy decision, not an adapter's to make.
 
         WHAT TENANCY DID CHANGE is the NAMESPACE, not this value: whatever this
         returns is prefixed with the tenant's org in `envelope.py`

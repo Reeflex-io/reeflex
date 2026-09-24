@@ -194,6 +194,44 @@ def test_two_departments_using_the_SAME_session_name_do_not_share_a_budget(
     assert sessions[0] != sessions[1]
 
 
+def test_ONE_department_renaming_its_session_gets_a_fresh_budget_namespace(
+        stub, tenancy_map):
+    """The complement of the test above, and the limit it does NOT close.
+
+    The test above fixes the ORG half of `agent.session_id` from the
+    authenticated key. The SESSION half is still whatever the caller sent --
+    here OpenAI's `user` field, which is a request-body value the client
+    chooses. R5's cumulative budget keys on the whole string, so one key that
+    renames its session is charged against a namespace with no history.
+
+    This is asserted rather than merely written down because the README's
+    "Not in this version" list said only that a budget cannot ACCUMULATE
+    without a session value; it did not say that a supplied one is the
+    caller's to pick. Both halves are pinned here so neither can drift
+    silently: the org segment is constant across the rotation (the tenancy
+    guarantee) and the session segment follows the caller (the limit).
+    """
+    stub.answer_allow()
+    g = guardrail.ReeflexActionGuardrail(reeflex_hold_wait=0.0)
+    for session_name in ("nightly", "nightly-2", "nightly-3"):
+        asyncio.run(g.async_post_call_success_hook(
+            {"model": "mock-tools", "user": session_name},
+            conftest.caller(**conftest.PAYMENTS_CALLER),
+            stubcore.chat_response([a_tool_call()])))
+
+    sessions = [r["agent"]["session_id"] for r in stub.requests]
+    assert sessions == ["litellm:acme-payments:nightly",
+                        "litellm:acme-payments:nightly-2",
+                        "litellm:acme-payments:nightly-3"]
+    # The limit: three distinct budget namespaces from one authenticated key.
+    assert len(set(sessions)) == 3
+    # The guarantee that still holds: the org segment never moved, so the
+    # rotation cannot reach another department's budget.
+    assert {s.split(":")[1] for s in sessions} == {"acme-payments"}
+    assert {r["agent"]["id"] for r in stub.requests} == {
+        "agent:litellm-gateway/acme-payments/mock-tools"}
+
+
 def test_the_tenants_declared_environment_reaches_the_decision(stub,
                                                                tenancy_map):
     """`environment` is an R2/R3 decision input. Payments declares production,
