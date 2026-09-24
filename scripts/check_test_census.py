@@ -94,9 +94,19 @@ error and needs none of the suites' dependencies installed:
      This is reported as its own kind, `runs-nowhere`, rather than as
      zero-collection: "0 tests" and "never imported" read identically in a
      transcript and are fixed differently. The file is not counted, because it
-     runs nowhere. Under a pytest root neither case is a finding — pytest
-     recurses into plain directories and does collect `*_test.py` — which is
-     what makes this a statement about the RUNNER and not about the file.
+     runs nowhere. Under a pytest root neither of THOSE TWO cases is a finding —
+     pytest recurses into plain directories and does collect `*_test.py` — which
+     is what makes this a statement about the RUNNER and not about the file.
+
+     A pytest root has a THIRD shape of its own (RFX-87 round 3, dev-3--190).
+     The enumeration below is the UNION of both runners' patterns, so it is
+     never narrower than the instrument that certifies coverage — but the union
+     is wider than either runner alone. A name matching discover's `test*.py`
+     and neither of pytest's globs (`testhelper.py`, `tests.py`) is collected by
+     pytest NEVER, and used to be enumerated, censused and COUNTED under a
+     pytest root regardless. Measured on pytest 9.1.1: `--collect-only` said
+     `1 test collected` where this census said `2 file(s), 2 test(s)`. It is now
+     `runs-nowhere` for its own cause. Nothing in the tree matches it today.
 
 LIMITS OF DETECTORS 4 AND 5, STATED RATHER THAN CLOSED. Both are deliberately
 blind to a silencer nested inside an `if`:
@@ -574,6 +584,31 @@ def unreachable_reason(abs_root, rel_in_root, runner):
     identical in a transcript and are fixed differently."""
     base = os.path.basename(rel_in_root)
     rel_dir = os.path.dirname(rel_in_root)
+    if runner == "pytest":
+        # RFX-87 round 3 (dev-3--190). `enumerate_test_files` deliberately
+        # enumerates the UNION of both runners' patterns, so that this census is
+        # never NARROWER than the instrument that certifies coverage. The union
+        # is wider than either runner alone, and the gap had a live edge: a name
+        # matching discover's `test*.py` but neither of pytest's globs --
+        # `testhelper.py`, `tests.py`, `testing_utils.py` -- was enumerated under
+        # a PYTEST root, censused as an ordinary test file, and its tests counted
+        # in the printed total, while pytest never collected it.
+        #
+        # Measured on pytest 9.1.1, two files in one root, before this was
+        # written: `pytest --collect-only` reported `1 test collected`
+        # (test_good.py only) while the census printed `2 file(s), 2 test(s)`.
+        #
+        # This is the same statement the unittest half makes -- a file the
+        # root's runner cannot collect runs nowhere and is reported by cause --
+        # applied to the other runner. Nothing in the tree matches it today
+        # (six roots, zero hits), so this closes an edge rather than a defect.
+        if not any(fnmatch.fnmatch(base, g) for g in PYTEST_FILE_GLOBS):
+            return ("pytest collects %s and this file matches none of them, so it is never "
+                    "collected -- `%s` is `unittest discover`'s shape, not pytest's, and this "
+                    "census enumerates the union of both. The file is counted by nothing and "
+                    "runs NOWHERE."
+                    % (", ".join("`%s`" % g for g in PYTEST_FILE_GLOBS),
+                       UNITTEST_DISCOVER_GLOB))
     if runner == "unittest":
         if not fnmatch.fnmatch(base, UNITTEST_DISCOVER_GLOB):
             return ("`unittest discover` collects `%s` and this file does not match it, so "
@@ -1113,6 +1148,38 @@ def _selftest_body(checks, check):
         check("...while under pytest the same file is collected and counted",
               ok and any("suite (pytest) -> 2 file(s), 2 test(s)" in l for l in lines))
 
+    # -- 5d. RFX-87 round 3 (dev-3--190): the pytest half of the same statement.
+    # A name discover collects and pytest does not. The enumeration is the UNION
+    # of both runners' patterns, so this shape is enumerated under either root --
+    # but only one of the two runners actually collects it.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = os.path.join(tmp, "suite")
+        os.makedirs(root)
+        with open(os.path.join(root, "test_good.py"), "w") as fh:
+            fh.write(_UNITTEST_STYLE)
+        with open(os.path.join(root, "testhelper.py"), "w") as fh:
+            fh.write(_UNITTEST_STYLE)          # healthy, and pytest never collects it
+        ok, lines = census(tmp, roots=[("suite", "pytest")])
+        check("a `test*.py` name pytest does not collect is runs-nowhere under pytest",
+              not ok and any("runs-nowhere" in l and "testhelper.py" in l for l in lines))
+        check("...and the reason names pytest's own globs, not discover's",
+              any("pytest collects" in l and "matches none of them" in l for l in lines))
+        check("...and it is NOT counted, so the total is the runner's own",
+              any("suite (pytest) -> 2 file(s), 1 test(s)" in l for l in lines))
+        # the SAME bytes under a unittest root are reachable -- discover's
+        # default pattern is `test*.py` -- which is what makes this about the
+        # runner and not about the filename.
+        ok_u, lines_u = census(tmp, roots=[("suite", "unittest")])
+        check("...while the same file under a UNITTEST root is collected and counted",
+              ok_u and any("suite (unittest) -> 2 file(s), 2 test(s)" in l for l in lines_u))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = os.path.join(tmp, "suite")
+        os.makedirs(root)
+        with open(os.path.join(root, "test_good.py"), "w") as fh:
+            fh.write(_UNITTEST_STYLE)
+        with open(os.path.join(root, "env_canon_test.py"), "w") as fh:
+            fh.write(_UNITTEST_STYLE)
         # and the census's own detectors must apply to that filename too.
         with open(os.path.join(root, "env_canon_test.py"), "w") as fh:
             fh.write(_MODULE_PYTESTMARK_SKIP)

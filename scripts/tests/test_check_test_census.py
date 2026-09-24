@@ -347,6 +347,43 @@ class TestReachAndEnumeration(unittest.TestCase):
                             "under pytest the file is a real test file and must be counted:\n"
                             + "\n".join(lines))
 
+    def test_a_test_star_py_name_pytest_never_collects_is_runs_nowhere(self):
+        """RFX-87 round 3 (dev-3--190). The enumeration is the UNION of both
+        runners' patterns, which is what keeps this census from being narrower
+        than `drift` -- but the union is wider than either runner alone.
+
+        `testhelper.py` matches `unittest discover`'s default `test*.py` and
+        NEITHER of pytest's default `python_files` globs. Measured on pytest
+        9.1.1 over exactly these two files: `--collect-only` reported
+        `1 test collected`, while this census reported `2 file(s), 2 test(s)` --
+        it counted a test the runner that owns the root never runs.
+
+        The pair of roots below is the whole point: identical bytes, opposite
+        verdicts, because the question is what the RUNNER reaches."""
+        files = {
+            "test_good.py": HEALTHY_UNITTEST,
+            "testhelper.py": HEALTHY_UNITTEST,
+        }
+        with no_waivers(), tempfile.TemporaryDirectory() as tmp:
+            ok, lines = self._suite(tmp, files, "pytest")
+            self.assertFalse(ok, "a name pytest never collects must be RED under a "
+                                 "pytest root:\n" + "\n".join(lines))
+            self.assertTrue(any("runs-nowhere" in l and "testhelper.py" in l for l in lines),
+                            "\n".join(lines))
+            self.assertTrue(
+                any("pytest collects" in l and "matches none of them" in l for l in lines),
+                "the reason must name PYTEST's globs, not discover's:\n" + "\n".join(lines))
+            self.assertTrue(
+                any("suite (pytest) -> 2 file(s), 1 test(s)" in l for l in lines),
+                "the uncollectable file must NOT be counted -- the total is the "
+                "runner's own:\n" + "\n".join(lines))
+        with no_waivers(), tempfile.TemporaryDirectory() as tmp:
+            ok, lines = self._suite(tmp, files, "unittest")
+            self.assertTrue(ok, "the SAME bytes under a unittest root are reachable -- "
+                                "discover's default pattern is `test*.py`:\n" + "\n".join(lines))
+            self.assertTrue(any("suite (unittest) -> 2 file(s), 2 test(s)" in l for l in lines),
+                            "\n".join(lines))
+
     def test_the_detectors_apply_inside_a_star_test_py_file_too(self):
         # Enumerating the file is only half of it: it has to be READ.
         with no_waivers(), tempfile.TemporaryDirectory() as tmp:
