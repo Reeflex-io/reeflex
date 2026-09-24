@@ -149,22 +149,28 @@ RESTRAINT = {"allow": 0, "ask": 1, "deny": 2}
 # CASES — every one of those produces a clean zero. So the count of cases
 # actually SCORED is asserted against a floor, and the floor is printed in the
 # PASS line so the next person can see what it was measured against.
-# RE-DERIVED 2026-09-17 (RFX-341), because the sentence here had gone stale
-# twice over: it said "96 (102 cases, 6 residual)" while the corpus was at 108,
-# and a number written into a comment rots on its own. Measured today, by
-# running this component: 120 cases, 7 residual -> 113 SCORED. Derive it with
+# THE CENSUS IS DELIBERATELY NOT TRANSCRIBED HERE ANY MORE. This comment has
+# carried a measured case count three times and been wrong all three: "96 (102
+# cases, 6 residual)" while the corpus was at 108; re-typed to "113" on
+# 2026-09-17 (RFX-341) and already 145 the next day (dev-2--081, which flagged
+# it rather than re-typing it); still "113" on 2026-09-23 when the component
+# scored 254 of 265 -- the corpus moved 202 -> 265 in the two days after
+# RFX-327's last exercise. A count in a comment rots faster than anyone reads
+# it, so it is derived, never written down:
 #   python3 -c "import sys; sys.path.insert(0,'reeflex-claude');
 #   from reeflex_claude import conformance as c;
 #   print(len([x for x in c.CASES if not x['residual']]))"
-# and note that the number moves every time anyone adds a row.
+# and every run of this script prints the live SCORED count in the same line as
+# the floor, so a reader is never asked to trust this paragraph for it.
 #
 # THE FLOOR STAYS 40, AND THAT IS NOT LAZINESS ABOUT THE GAP BETWEEN 40 AND
-# 113. What this floor exists to catch is a walk that stopped walking -- an
-# empty driver result, a corpus that failed to import, a renamed CASES. It is
-# deliberately well below the census so that retiring a case stays an ordinary
-# change. A whole FAMILY going missing is caught by a different branch and
-# caught better: `audit` reports every corpus case with no row back as
-# "the published wheel was never asked" and fails, per case, by name.
+# whatever the census is today. What this floor exists to catch is a walk that
+# stopped walking -- an empty driver result, a corpus that failed to import, a
+# renamed CASES. It is deliberately well below the census so that retiring a
+# case stays an ordinary change. A whole FAMILY going missing is caught by a
+# different branch and caught better: `audit` reports every corpus case with
+# no row back as "the published wheel was never asked" and fails, per case,
+# by name.
 MIN_SCORED_CASES = 40
 
 # Divergences that are KNOWN and ACCEPTED until a republish carries the fix.
