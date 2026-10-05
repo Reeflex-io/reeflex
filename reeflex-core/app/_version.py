@@ -75,4 +75,20 @@
 # a GHCR image tag, it has no pyproject.toml and no dependent pins it — so the
 # cost of the number being low is documentary, not functional. See
 # CHANGELOG [0.2.2].
-CORE_VERSION: str = "0.2.2"
+#
+# 0.2.3: the allow/refuse line MOVES AGAIN, in one place, and in the tightening
+# direction. RFX-350 (#204, `envelope.py`): when the compound-verb election
+# reaches no canon word on an envelope whose reversibility axis is
+# `irreversible`, core no longer elects `read` — the value that unlocks R1 —
+# and falls through to the irreversible default instead. A caller that
+# declares a read as irreversible will see holds it did not see on 0.2.2. By
+# the 0.2.0 rule above that is not a patch; it is numbered 0.2.3 because the
+# console ordered this cut (brief 151, 2026-10-05). The before/after on the
+# deployed artefact, with controls, is in dev-1--151's report.
+#
+# `policy/` moved by 33 lines and ALL 33 are comments (RFX-165's measured
+# table in budgets.rego): zero non-comment lines changed under policy/ since
+# v0.2.2, so no budget verdict moves from that file. `/healthz` now carries
+# `revision` (RFX-89) — the commit, not this string; the version itself is
+# still read as the paragraph at the top of this file says.
+CORE_VERSION: str = "0.2.3"
