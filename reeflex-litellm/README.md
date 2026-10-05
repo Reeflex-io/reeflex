@@ -646,6 +646,19 @@ overlaps that.
   the header at an ingress it controls and strips an inbound one; a budget
   dimension keyed on something the caller never chooses is a core policy
   decision, not an adapter's to make.
+
+  **This holds on BOTH transports, and the sources differ between them.** The
+  bullet above names the in-process seat's caller-reachable sources. The
+  connector reads its own list, and two entries on it are the caller's:
+  `additional_provider_specific_params.reeflex_session`, which a caller can
+  send per request through `guardrails: [{"<name>": {"extra_body": …}}]`, and
+  `user_api_key_end_user_id`, litellm's home for the OpenAI `user` field.
+  Measured on this tree, one caller rotating either one across three values got
+  three distinct `litellm:<org>:<session>` namespaces, with the org segment
+  unmoved in both arms. On the connector the operator's remedy is to set
+  `reeflex_session` in `litellm_params` for the whole deployment — where it is
+  the operator's value rather than the caller's — and not to expose it through
+  `extra_body`.
 * **Counting unmapped callers.** An unmapped caller is refused and logged, but
   writes no ledger row: a governance row naming no org would be worse than an
   absent one, because a report could total it. Read the proxy log.

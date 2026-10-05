@@ -380,9 +380,39 @@ def session_id(payload: dict, session_header: Optional[str] = None) -> str:
          field, which is what step 2 of the in-process seat's precedence uses.
       4. `litellm_trace_id`, then `litellm_call_id`.
 
-    KNOWN LIMIT, the same one the in-process seat documents: with none of 1-3
-    supplied the fallback is PER REQUEST, so R5's cumulative session budget is
-    scoped to one request.  The budget is not wrong; it is scoped narrowly.
+    KNOWN LIMIT 1, the same one the in-process seat documents as its limit 1:
+    with none of 1-3 supplied the fallback is PER REQUEST, so R5's cumulative
+    session budget is scoped to one request.  The budget is not wrong; it is
+    scoped narrowly.
+
+    KNOWN LIMIT 2, AND IT IS THE COMPLEMENT OF LIMIT 1 -- the in-process seat's
+    limit 2, on this transport's own sources.  Step 1 is reachable by a caller
+    (`extra_body`, as step 1 says in its own words) and step 3 is the OpenAI
+    `user` field the caller sends.  Neither is authenticated, and nothing here
+    reconciles the value against the key that was.  So the caller chooses the
+    budget namespace within its own org: measured on this tree, one caller
+    rotating `reeflex_session` across three values -- and, separately, one
+    rotating `user_api_key_end_user_id` -- produced three distinct
+    `litellm:<org>:<session>` namespaces, each with no history for a cumulative
+    budget to charge against.  The org segment did not move in either arm.
+
+    So this is NOT the tenancy defect RFX-243 closed: the rotated session stays
+    in the SAME org and no other department's budget is reachable by it -- that
+    is what `test_two_orgs_sending_one_session_id_do_not_share_a_budget` pins,
+    and the rotation itself is pinned by
+    `test_ONE_org_renaming_its_session_gets_a_fresh_budget_namespace`.  It is
+    the same fragmentation-resistance class as RFX-181 for n8n.  An operator who
+    needs a budget the caller cannot reset sets step 1 in `litellm_params` for
+    the whole deployment (where it is the operator's value, not the caller's)
+    and does not expose it through `extra_body`, or asks for a budget dimension
+    keyed on something the caller does not choose -- which is a core policy
+    decision, not an adapter's to make.
+
+    NOT MEASURED, and stated rather than implied: whether step 4's
+    `litellm_trace_id` / `litellm_call_id` can be set by a caller on this wire.
+    litellm is not installed in the environment these limits were measured in,
+    so that question was not put to the real proxy in either direction.
+
     Whatever this returns is namespaced by the tenant's org in `envelope.py`
     (`litellm:<org>:<session>`), so two departments sending the same session id
     do not share a budget.
