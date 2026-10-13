@@ -15,14 +15,26 @@ The canonical, versioned history lives in the repository, kept in
 
 ## Current release
 
-**reeflex-core v0.1.12.** Recent line:
+**reeflex-core v0.2.3** (2026-10-05). Recent line:
 
 | Version | Summary |
 |---|---|
-| **0.1.12** | Kill-switch SIEM emit on a freeze flip; `reeflex-mcp` 0.1.1. No `/v1/decide` contract change. |
-| 0.1.11 | Decision traceability (`decision_id`) + concurrency-safe hold consumption (CAS guard); `reeflex-mcp` 0.1.0 (MCP gateway adapter). Additive; no decision-verdict change. |
+| **0.2.3** | RFX-350: a compound verb whose only known words are reads, declared `irreversible`, is no longer elected `read` — **breaking** for a caller that declares a read irreversible. `/healthz` reports the running commit (`revision`). `reeflex-claude` 0.2.2, `reeflex-holds` 0.2.1, `reeflex-litellm` 0.2.1, `reeflex-mcp` 0.1.5 published. |
+| 0.2.2 | See the [CHANGELOG](https://github.com/Reeflex-io/reeflex/blob/main/CHANGELOG.md). |
+| 0.2.0 | `REEFLEX_REQUIRE_VERIFIED_APPROVER` defaults to true (**breaking**); an unclassifiable action resolves to a hold under its own rule id (`unclassified_action`), not a deny. |
 
-The engine follows semantic versioning; the `/v1/decide` request/response
-contract in this Reference is stable across the current line (v0.1.11–v0.1.12).
-Adapter and channel releases may consume version numbers where `reeflex-core`
-itself is unchanged — the CHANGELOG notes each case.
+The [CHANGELOG](https://github.com/Reeflex-io/reeflex/blob/main/CHANGELOG.md)
+is the authority for every version; this table is a pointer to it.
+
+## Not in a release yet
+
+- **Physical-impact rules (RFX-427).** Five verbs (`set`, `mode`,
+  `override`, `actuate`, `flash`), `target.safety_function`,
+  `magnitude.physical`, rules R8–R11 and the `physical_writes` /
+  `physical_envelope` budgets — additive; no existing rule id or verdict
+  changes. Documented in the [Action Envelope](action-envelope.md#physical-impact-fields)
+  and the [policy guide](../policy-guide.md#physical-impact-rules-r8r11-and-two-budgets).
+  **reeflex-core v0.2.3 does not have them.**
+- **Use cases** (RFX-429): a [section](../use-cases/index.md) with one page
+  per scenario, IT and OT. Every printed verdict is checked against the
+  engine by `scripts/docs_envelopes_check.py`.
