@@ -76,22 +76,41 @@ flowchart TD
     CAN -- "yes" --> OK
     COE --> LED
     OK --> LED
-    LED --> R0
+    LED --> R3
 
-    R0{"R0
-    does this refusal rest
-    on a value core
-    GUESSED?
-    reads R2 / R3 / R6"}
     R3{"R3
     irreversible
-    + systemic
+    + systemic, all
+    three DECLARED
     PRODUCTION ONLY"}
+    R8{"R8
+    physical: override, or
+    a write to a declared
+    safety function
+    PRODUCTION + STAGING"}
+    R10a{"R10a
+    physical: request
+    outside the declared
+    safe range
+    PRODUCTION + STAGING"}
+    R0{"R0
+    does this verdict rest
+    on a value core
+    GUESSED?
+    reads R2 / R3 / R6 /
+    R8 / R9 / R10a / R11"}
     R2{"R2
     irreversible
     + broad
     PRODUCTION ONLY"}
-    R5{"R5
+    R9{"R9
+    physical irreversible
+    actuate / flash
+    PRODUCTION ONLY"}
+    R11{"R11
+    physical mode change
+    PRODUCTION ONLY"}
+    R5{"R5 (incl. R10b)
     any cumulative
     budget exceeded?
     any environment"}
@@ -112,9 +131,13 @@ flowchart TD
     LED -. "the one rule
     that reads it" .-> R5
 
-    R0 -- no --> R3
-    R3 -- no --> R2
-    R2 -- no --> R5
+    R3 -- no --> R8
+    R8 -- no --> R10a
+    R10a -- no --> R0
+    R0 -- no --> R2
+    R2 -- no --> R9
+    R9 -- no --> R11
+    R11 -- no --> R5
     R5 -- no --> R6
     R6 -- no --> R7
     R7 -- no --> R1
@@ -125,8 +148,18 @@ flowchart TD
     D3["DENY · TERMINAL
     no approval clears it
     reeflex.policy/irreversible_systemic_prod"]
+    D8["DENY · TERMINAL
+    no approval clears it
+    reeflex.policy/safety_function_override_prod"]
+    D10["DENY · TERMINAL
+    no approval clears it
+    reeflex.policy/outside_operating_envelope_prod"]
     H2["HOLD
     reeflex.policy/irreversible_broad_prod"]
+    H9["HOLD
+    reeflex.policy/physical_irreversible"]
+    H11["HOLD
+    reeflex.policy/mode_change_live"]
     H5["HOLD
     reeflex.policy/session_delete_budget
     or reeflex.policy/cumulative_budget"]
@@ -139,9 +172,13 @@ flowchart TD
     A4["ALLOW · the default
     reeflex.policy/default_allow"]
 
-    R0 -- yes --> H0
     R3 -- yes --> D3
+    R8 -- yes --> D8
+    R10a -- yes --> D10
+    R0 -- yes --> H0
     R2 -- yes --> H2
+    R9 -- yes --> H9
+    R11 -- yes --> H11
     R5 -- yes --> H5
     R6 -- yes --> H6
     R7 -- yes --> H7
@@ -154,14 +191,14 @@ flowchart TD
     %% Chaining the verdicts pins them into their own column: two columns, no
     %% drift. The ranks are already consecutive, so this constrains nothing
     %% the layout did not already imply.
-    H0 ~~~ D3 ~~~ H2 ~~~ H5 ~~~ H6 ~~~ H7 ~~~ A1
+    D3 ~~~ D8 ~~~ D10 ~~~ H0 ~~~ H2 ~~~ H9 ~~~ H11 ~~~ H5 ~~~ H6 ~~~ H7 ~~~ A1
 
     classDef deny fill:#7f1d1d,stroke:#ef4444,color:#fff;
     classDef hold fill:#78350f,stroke:#f59e0b,color:#fff;
     classDef allow fill:#14532d,stroke:#22c55e,color:#fff;
     classDef coerce fill:#1e3a8a,stroke:#60a5fa,color:#fff;
-    class D3 deny;
-    class H0,H2,H5,H6,H7 hold;
+    class D3,D8,D10 deny;
+    class H0,H2,H9,H11,H5,H6,H7 hold;
     class A1,A4 allow;
     class COE coerce;
 ```
@@ -177,7 +214,7 @@ saying less. Core also writes down **which** fields it had to fill in.*
 
 *<b>R0 exists because of what that clean-up used to cause.</b> Fill in three
 blanks conservatively and they compose into "irreversible + systemic +
-production", which is R3 — the one refusal a human is not allowed to overturn.
+production", which is R3 — a refusal a human is not allowed to overturn.
 So a product whose promise is "when unsure, ask" was answering "when unsure,
 refuse". R0 catches exactly that case and turns it into a **hold, not a deny**:
 `unclassified_action` says "I could not tell what this was — a human decides",
@@ -187,32 +224,42 @@ the adapter declared the values, answer `deny / irreversible_systemic_prod` and
 `require_approval / unclassified_action` respectively.*
 
 *<b>Environment decides which rules are even in play.</b> R2, R3, R6 and R7 all
-require `target.environment == "production"`. In `dev` or `staging` only R1, R5
-and R4 can fire — measured over all 864 combinations of the three axes, three
-verbs, two refs and two abilities: outside production the only rule ids that
-appear are `read_only_internal` and `default_allow`. R5 is deliberately not
+require `target.environment == "production"`. For an envelope that is not
+declared `physical`, in `dev` or `staging` only R1, R5 and R4 can fire —
+measured over all 864 combinations of the three axes, three verbs, two refs and
+two abilities: outside production the only rule ids that appear are
+`read_only_internal` and `default_allow`. That measurement predates the
+physical rules. R9 and R11 are production-only as well; R8 and R10a also arm in
+`staging`, because for a plant `staging` means a HIL rig or shadow controller
+with real actuators. None of R8–R11 arms in `dev` (the digital twin) — and that includes the two
+physical budgets (R10b). Every other R5 budget is deliberately not
 environment-gated; a budget is about accumulation, not about where.*
 
-*<b>R3 is the only terminal deny.</b> Every other refusal on this page is a
-hold, and a hold is resolvable by an approver you designate. Core enforces that
-asymmetry in code, not just in policy: `NON_RESOLVABLE_RULES` contains
-`irreversible_systemic_prod` and nothing else, so an attempt to approve an R3
-is refused with `rule_not_resolvable`.*
+*<b>Three rules are terminal denies: R3, R8 and R10a.</b> Every other refusal
+on this page is a hold, and a hold is resolvable by an approver you designate.
+Core enforces that asymmetry in code, not just in policy:
+`NON_RESOLVABLE_RULES` contains `irreversible_systemic_prod`,
+`safety_function_override_prod` and `outside_operating_envelope_prod`, so an
+attempt to approve one of them is refused with `rule_not_resolvable`.*
 
 *<b>Total precedence is `deny > require_approval > allow`</b> — with one
-deliberate exception, R0, which outranks even the deny. The reasoning is worth
-stating plainly: a deny that rests on a value core invented is not a control
-doing its job, it is a coverage gap that happens to look strict, and the two
-should not be reported under the same rule id. Among the holds the order is
-R2 → R5 → R6 → R7, and it is a reporting decision rather than a safety one:
-each of those returns `require_approval` either way, so the ordering only picks
-which reason the operator reads. The ladder above is the order the shipped file
-evaluates in, verified by building envelopes where two rules genuinely co-fire
-and recording which id won.*
+deliberate exception, R0, which outranks R3's deny whenever R3 matched on a
+value core guessed. (That is why the ladder asks "R3, all three declared"
+first.) The reasoning is worth stating plainly: a deny that rests on a value
+core invented is not a control doing its job, it is a coverage gap that happens
+to look strict, and the two should not be reported under the same rule id. R0
+does **not** outrank R8 or R10a when the environment they read was declared:
+neither reads reversibility or blast radius, so leaving one of those out must
+not turn a safety-function deny into a hold. Among the holds the order is
+R2 → R9 → R11 → R5 → R6 → R7, and it is a reporting decision rather than a
+safety one: each of those returns `require_approval` either way, so the
+ordering only picks which reason the operator reads. The ladder above is the
+order the shipped file evaluates in; `reeflex-core/tests/test_decision_totality.py`
+checks over 91,800 envelopes that exactly one of these ids answers each.*
 
 *The rule bodies are in
 [`reeflex-core/policy/reeflex.rego`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-core/policy/reeflex.rego),
-with R5's budgets, R6's asset list and R7's signal lists in the sibling
+with R5's budgets (including the two physical ones), R6's asset list and R7's signal lists in the sibling
 `budgets.rego`, `protected.rego` and `authority.rego` — all four are files you
 are meant to edit. See the [policy guide](../policy-guide.md) to change a
 threshold or add a rule of your own.*

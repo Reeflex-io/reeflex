@@ -164,18 +164,28 @@ class TestEveryAxisDefaultIsReadByThePolicyPack(unittest.TestCase):
                 )
 
     def test_the_invariant_can_fail(self):
-        """A test that cannot fail proves nothing. `physical` is a real member
-        of the real enum and is genuinely absent from the pack: assert that,
-        so this file fails if someone satisfies the check above by adding a
-        mention rather than by choosing a read default."""
-        self.assertIn("physical", _AXIS_ALLOWED["externality"])
-        self.assertNotIn(
-            '"physical"', _policy_text(),
-            "`physical` is now read by the policy pack. That is RFX-129's "
-            "option (a) and it is welcome -- but update this test and the "
-            "field_treatments note deliberately rather than by accident.",
-        )
+        """A test that cannot fail proves nothing.
 
+        Until RFX-427 this asserted that `physical` -- a real member of the
+        real enum -- was absent from the pack, which made the check above
+        demonstrably capable of failing on real data. RFX-427 gave `physical`
+        rules (R8-R11, SPEC §4.5), i.e. RFX-129's option (a), so every
+        externality member is now read and no real member is left to play
+        that role. The sensitivity is shown on the REAL pack text instead:
+        strip the externality default's mentions and the same predicate must
+        report it unread."""
+        policy = _policy_text()
+        default = '"%s"' % _AXIS_DEFAULTS["externality"]
+        self.assertIn(default, policy)
+        self.assertNotIn(default, policy.replace(default, '"REDACTED"'))
+
+    def test_physical_is_read_by_the_pack_since_rfx427(self):
+        """RFX-129's remaining half, delivered deliberately: `physical` is read
+        by R8-R11 and the physical budgets. It is still NOT a default, and
+        must not become one -- an envelope is physical only because its
+        adapter said so (SPEC §4)."""
+        self.assertIn('"physical"', _policy_text())
+        self.assertNotEqual(_AXIS_DEFAULTS["externality"], "physical")
 
 if __name__ == "__main__":
     unittest.main()

@@ -127,6 +127,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import math
 import os
 import pathlib
 import sys
@@ -135,7 +136,7 @@ import time
 import uuid
 from typing import Any, Iterator
 
-from .envelope import canonicalize_currency, is_money_amount
+from .envelope import canonicalize_currency, is_envelope_fraction, is_money_amount
 
 # THE ENVELOPE FIELDS THIS MODULE READS.
 #
@@ -155,8 +156,18 @@ LEDGER_ENVELOPE_PATHS: tuple[str, ...] = (
     "action.ability",
     "axes.externality",
     "magnitude.count",
+    "magnitude.physical",
     "params.amount",
     "params.currency",
+)
+
+# RFX-427: the one envelope key this module reads BELOW the two-segment depth
+# field_treatments declares at. `magnitude.physical` is the declared field;
+# this names the key inside it, so the AST scan in
+# tests/test_field_treatments.py can tell it from an undeclared read instead
+# of having to accept every key under the object.
+LEDGER_ENVELOPE_SUBPATHS: tuple[str, ...] = (
+    "magnitude.physical.envelope_fraction",
 )
 
 # Number of lock stripes. Sessions are hashed onto stripes so unrelated
@@ -487,6 +498,9 @@ def _fold_record(rec: dict) -> None:
             "externality": rec.get("externality", ""),
             "count": int(rec.get("count") or 0),
             "amount_by_currency": dict(rec.get("amount_by_currency") or {}),
+            # RFX-427. Absent on every entry written before it existed, and on
+            # every entry whose envelope declared no fraction: both read 0.0.
+            "physical_envelope": float(rec.get("physical_envelope") or 0.0),
         })
     elif event_type == "clear":
         # A recorded reset, not a rewrite: the file stays append-only, and the
@@ -758,6 +772,7 @@ def compute_cumulative(session_id: str, window_seconds: int) -> dict:
     count_by_ability: dict[str, int] = {}
     count_by_externality: dict[str, int] = {}
     amount_by_currency: dict[str, float] = {}
+    physical_envelope_terms: list[float] = []
     total_count = 0
 
     with _lock:
@@ -788,6 +803,7 @@ def compute_cumulative(session_id: str, window_seconds: int) -> dict:
             amount_by_currency[currency] = (
                 amount_by_currency.get(currency, 0.0) + amount
             )
+        physical_envelope_terms.append(entry.get("physical_envelope", 0.0))
 
     return {
         "window_seconds": window_seconds,
@@ -796,6 +812,15 @@ def compute_cumulative(session_id: str, window_seconds: int) -> dict:
         "count_by_externality": count_by_externality,
         "amount_by_currency": amount_by_currency,
         "total_count": total_count,
+        # RFX-427, the `physical_envelope` budget (budgets.rego): the summed
+        # `magnitude.physical.envelope_fraction` of every prior entry in the
+        # window -- same window, same session, same prior-only semantics as
+        # every aggregate above. math.fsum, not `+=`: the limit is 1.0 and
+        # the comparison is strict, so a left-to-right float sum that lands a
+        # few ulps above or below the exact total of the declared fractions
+        # would move the trip point by one call (ten 0.1 steps sum to
+        # 0.9999999999999999 with `+=` and to 1.0 with fsum).
+        "sum_physical_envelope": math.fsum(physical_envelope_terms),
     }
 
 
@@ -880,6 +905,16 @@ def append_entry(
     if is_money_amount(amount):
         currency = canonicalize_currency(params.get("currency"))
         entry["amount_by_currency"] = {currency: abs(float(amount))}
+
+    # RFX-427: what this action moved the plant, as a fraction of its declared
+    # safe range. Recorded only when declared and acceptable (F10 has already
+    # refused anything else with HTTP 400; the predicate is shared so the
+    # refusal and the record cannot disagree). The key is omitted otherwise,
+    # so an IT-only ledger is byte-identical to what it was before.
+    _raw_magnitude = envelope.get("magnitude")
+    _physical = (_raw_magnitude or {}).get("physical") if isinstance(_raw_magnitude, dict) else None
+    if isinstance(_physical, dict) and is_envelope_fraction(_physical.get("envelope_fraction")):
+        entry["physical_envelope"] = float(_physical["envelope_fraction"])
 
     if not _persist_enabled():
         with _lock:

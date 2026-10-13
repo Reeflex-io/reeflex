@@ -1,4 +1,5 @@
 # Reeflex base policy pack (v0.1) - deterministic decision rules R1-R5.
+# R8-R11 (RFX-427) govern physical / human-safety impact; see the table below.
 # Evaluated by reeflex-core /v1/decide; see reeflex-spec/SPEC.md and docs/adr/0002-no-llm-in-decision-path.md.
 # R5's configurable budgets (money/deletions/external_sends/objects_touched)
 # live in the sibling file budgets.rego (same package).
@@ -9,15 +10,48 @@
 # envelope in, same decision out (SPEC §5).
 package reeflex.policy
 
-# Precedence is explicit and total: deny > require_approval > allow, so exactly
-# one decision is produced for any input.
-#   require_approval  when R0 fires (R2/R3/R6 matched on inputs core GUESSED)
-#   deny              when R3 fires and R0 does not
-#   require_approval  when R2 fires and neither R3 nor R0 does
-#   require_approval  when R5 fires and none of R3/R2/R0 do
-#   require_approval  when R6 fires and none of R3/R2/R5/R0 do
-#   require_approval  when R7 fires and none of R3/R2/R5/R6/R0 do
-#   allow             otherwise (R1 read-only internal, or R4 default)
+# Precedence is explicit and total, so exactly one decision is produced for
+# any input. Read top to bottom; each line fires only if no line above it did.
+#   deny              R3   irreversible + systemic + production, declared
+#   deny              R8   physical write to a safety function / override,
+#                          production or staging, environment declared
+#   deny              R10a physical request outside its declared safe range,
+#                          production or staging, environment declared
+#   require_approval  R0   R2/R3/R6/R8/R9/R10a/R11 matched on an input core
+#                          GUESSED (see the R0 block)
+#   require_approval  R2   irreversible + broad + production
+#   require_approval  R9   physical irreversible actuate/flash in production
+#   require_approval  R11  physical mode change in production
+#   require_approval  R5   a cumulative budget (incl. R10b: physical_writes,
+#                          physical_envelope)
+#   require_approval  R6   irreversible change to a declared production asset
+#   require_approval  R7   authority / credential / executable change in prod
+#   allow             R1   read-only internal
+#   allow             R4   default
+#
+# That is SPEC's R3 >= R8 >= R10a > R2 > R9 > R11 > R5 > R1 > R4 (RFX-427)
+# with R0, R6 and R7 in the places they already held. "R3 >= R8": both deny
+# and R3 is reported when both match, because R3 is the older, wider rule and
+# moving its id would rename an existing verdict. R0 sits BELOW the physical
+# denies, and that is the one ordering here that is not inherited: see "R0
+# AND THE PHYSICAL DENIES" in the R0 block.
+#
+# THE PHYSICAL RULES (R8-R11, RFX-427) ARM ONLY ON `axes.externality ==
+# "physical"`, which core never guesses: envelope.py's conservative default
+# for an absent or unrecognised externality is `outbound`, so an envelope is
+# physical only because its adapter said so. Environment table (SPEC §4.5):
+#
+#                     production   staging   dev
+#   R8  deny             arms        arms      -
+#   R10a deny            arms        arms      -
+#   R9  hold             arms         -        -
+#   R11 hold             arms         -        -
+#   R10b budgets         arms        arms      -     (R5's mechanism; see
+#                                                     physical_budget_disarmed
+#                                                     in budgets.rego)
+#
+# staging arms the two denies because for OT it means a HIL rig or shadow
+# controller with REAL actuators; dev is the digital twin.
 #
 # R6 IS DELIBERATELY LAST AMONG THE HOLDS.  It could equally have been placed
 # above R5 — both produce require_approval, so the DECISION is the same either
@@ -151,6 +185,63 @@ r0_unclassified if {
 	r6_require_approval
 }
 
+# R0 AND THE PHYSICAL RULES (RFX-427). Same discipline, per rule: each physical
+# rule names the classification inputs it reads that core can guess, and a
+# match on a guessed one is reported as R0. `axes.externality` is in none of
+# these sets because it cannot be guessed INTO `physical` (its default is
+# `outbound`), and `action.verb` is in none for the reason given at
+# r0_classification_inputs -- a guessed verb is `update`/`delete`, which only
+# matter to R8 together with a DECLARED `target.safety_function: true`.
+#
+#   R8, R10a, R11 read target.environment.
+#   R9 reads target.environment and axes.reversibility.
+#
+# R0 AND THE PHYSICAL DENIES. R0 outranks R3 because R3's terminal refusal
+# must not rest on a guess. The same argument does NOT let R0 outrank a
+# physical deny reached on DECLARED inputs, and the reason is an evasion, not
+# taste: R0 fires on "any of R2/R3/R6 matched on a guess", so if R0 sat above
+# R8, a caller could OMIT `axes.reversibility` on a systemic production
+# override of an interlock, let core guess it, trip R0 through R3, and turn
+# R8's deny into a resolvable hold. R8 does not read reversibility; its
+# verdict does not rest on that guess. So a physical deny whose OWN inputs
+# were declared is final (`physical_deny` below), and R0 yields to it. When
+# the environment itself was guessed, R0 wins: an unrecognised environment is
+# coerced to `production`, and the real one may be the digital twin where R8
+# does not arm -- "we do not know where this lands, a human decides".
+r8_classification_inputs := {"target.environment"}
+
+r9_classification_inputs := {"axes.reversibility", "target.environment"}
+
+r8_guessed if {
+	some f in object.get(input, ["provenance", "undeclared"], [])
+	f in r8_classification_inputs
+}
+
+r9_guessed if {
+	some f in object.get(input, ["provenance", "undeclared"], [])
+	f in r9_classification_inputs
+}
+
+r0_unclassified if {
+	r8_guessed
+	r8_safety_function_override
+}
+
+r0_unclassified if {
+	r8_guessed
+	r10a_outside_operating_envelope
+}
+
+r0_unclassified if {
+	r9_guessed
+	r9_physical_irreversible
+}
+
+r0_unclassified if {
+	r8_guessed # R11 reads the same one field R8 does
+	r11_mode_change_live
+}
+
 # R1: read-only internal action.
 r1_allow if {
 	input.action.verb == "read"
@@ -204,6 +295,89 @@ r6_require_approval if {
 	protected_target
 }
 
+# ===========================================================================
+# R8-R11: PHYSICAL / HUMAN-SAFETY IMPACT (RFX-427, SPEC §4.5)
+# ===========================================================================
+# Reeflex is not a safety system. These rules decide whether an AGENT may
+# ISSUE a supervisory command (setpoint, mode, recipe, firmware); the SIL-rated
+# safety PLC stays the last line. Every input below except the environment is
+# the ADAPTER's declaration -- a wrong safe range in a mapping is a wrong
+# verdict. See IMPACT-MODEL.md "What the base policy does not catch".
+
+physical_armed_environments := {"production", "staging"}
+
+#: The verbs that WRITE to a safety function when `target.safety_function` is
+#: true. `override` is absent because R8 denies it unconditionally; `actuate`
+#: is absent because the spec gives a physical actuation of a safety-tagged
+#: target to R9 (irreversible, production), not to R8.
+r8_safety_write_verbs := {"set", "update", "delete", "flash", "mode"}
+
+# R8: an override of a safety function, or any write to one.
+r8_safety_function_override if {
+	input.axes.externality == "physical"
+	input.target.environment in physical_armed_environments
+	input.action.verb == "override"
+}
+
+r8_safety_function_override if {
+	input.axes.externality == "physical"
+	input.target.environment in physical_armed_environments
+	input.target.safety_function == true
+	input.action.verb in r8_safety_write_verbs
+}
+
+# R10a: the REQUEST lies outside the declared safe operating range. A
+# fraction above 1.0 is not "a big step": by SPEC §4.5 it means the requested
+# value is past the range itself. Exactly 1.0 is a full-range step and is not
+# this rule (the physical_envelope budget prices it).
+r10a_outside_operating_envelope if {
+	input.axes.externality == "physical"
+	input.target.environment in physical_armed_environments
+	f := input.magnitude.physical.envelope_fraction
+	is_number(f)
+	f > 1.0
+}
+
+# R9: an irreversible physical effect, or new control logic, on a live plant.
+r9_physical_irreversible if {
+	input.axes.externality == "physical"
+	input.target.environment == "production"
+	input.axes.reversibility == "irreversible"
+	input.action.verb in {"actuate", "flash"}
+}
+
+# R11: a change of operating mode on a live plant.
+r11_mode_change_live if {
+	input.axes.externality == "physical"
+	input.target.environment == "production"
+	input.action.verb == "mode"
+}
+
+# The final verdicts of the two physical denies, with their own precedence
+# folded in, so every rule below can exclude "a physical deny happened" with
+# one line. R3 is the effective R3 (R0 did not soften it); R8 outranks R10a.
+r3_final if {
+	r3_deny
+	not r0_unclassified
+}
+
+r8_final if {
+	r8_safety_function_override
+	not r8_guessed
+	not r3_final
+}
+
+r10a_final if {
+	r10a_outside_operating_envelope
+	not r8_guessed
+	not r3_final
+	not r8_final
+}
+
+physical_deny if r8_final
+
+physical_deny if r10a_final
+
 # ---- decision object (single value via explicit precedence) ----------------
 
 # require_approval (R0) — highest precedence. See the R0 block above for why
@@ -222,6 +396,7 @@ decision := {
 	"rule": "reeflex.policy/unclassified_action",
 } if {
 	r0_unclassified
+	not physical_deny
 }
 
 r0_was_were := "was" if count(r0_guessed_inputs) == 1
@@ -238,6 +413,31 @@ decision := {
 	not r0_unclassified
 }
 
+# deny (R8) — a physical override of, or write to, a safety function in
+# production or staging. NOT RESOLVABLE: no approval releases it (it is in
+# core's NON_RESOLVABLE_RULES too, defensively -- a deny raises no hold).
+# R3 is reported instead when both match; see r8_final.
+decision := {
+	"decision": "deny",
+	"reason": "a physical action on a safety function (interlock, E-stop, alarm limit, SIL logic) is not allowed even with approval -- change it through the plant's own safety procedure",
+	"rule": "reeflex.policy/safety_function_override_prod",
+} if {
+	r8_final
+}
+
+# deny (R10a) — the requested value lies outside the declared safe operating
+# range, in production or staging. NOT RESOLVABLE, same as R8.
+decision := {
+	"decision": "deny",
+	"reason": sprintf(
+		"the requested value lies outside the declared safe operating range (envelope_fraction %v > 1.0) -- not allowed even with approval",
+		[input.magnitude.physical.envelope_fraction],
+	),
+	"rule": "reeflex.policy/outside_operating_envelope_prod",
+} if {
+	r10a_final
+}
+
 # require_approval (R2) — fires only when R3 and R0 do not.
 decision := {
 	"decision": "require_approval",
@@ -247,6 +447,38 @@ decision := {
 	r2_require_approval
 	not r3_deny
 	not r0_unclassified
+	not physical_deny
+}
+
+# require_approval (R9) — an irreversible physical actuation or a firmware /
+# control-logic load on a live plant. Below R2 because R2's reason (a broad
+# irreversible production change) is the wider statement when both match;
+# both are holds, so only the rule id differs. RESOLVABLE.
+decision := {
+	"decision": "require_approval",
+	"reason": "irreversible physical action (actuate / firmware or logic load) on a live plant requires human approval",
+	"rule": "reeflex.policy/physical_irreversible",
+} if {
+	r9_physical_irreversible
+	not r3_deny
+	not r2_require_approval
+	not r0_unclassified
+	not physical_deny
+}
+
+# require_approval (R11) — a change of operating mode on a live plant
+# (auto/manual, maintenance, bypass, arm/disarm, start/stop a unit). RESOLVABLE.
+decision := {
+	"decision": "require_approval",
+	"reason": "changing a live plant's operating mode requires human approval",
+	"rule": "reeflex.policy/mode_change_live",
+} if {
+	r11_mode_change_live
+	not r3_deny
+	not r2_require_approval
+	not r9_physical_irreversible
+	not r0_unclassified
+	not physical_deny
 }
 
 # require_approval (R5) — the "deletions" dimension specifically tripped its
@@ -272,6 +504,9 @@ decision := {
 	# 500 on a decision it used to get right. Pinned by
 	# test_precedence_is_total_across_the_grid.
 	not r0_unclassified
+	not physical_deny
+	not r9_physical_irreversible
+	not r11_mode_change_live
 }
 
 # require_approval (R5, other dimensions) — any dimension OTHER than
@@ -291,6 +526,9 @@ decision := {
 	not r3_deny
 	not r2_require_approval
 	not r0_unclassified
+	not physical_deny
+	not r9_physical_irreversible
+	not r11_mode_change_live
 }
 
 # require_approval (R6) — an irreversible production action on an asset the
@@ -309,6 +547,9 @@ decision := {
 	not r2_require_approval
 	not budget_require_approval
 	not r0_unclassified
+	not physical_deny
+	not r9_physical_irreversible
+	not r11_mode_change_live
 }
 
 # require_approval (R7) — the action changes WHO MAY ACT, how an identity is
@@ -359,6 +600,9 @@ decision := {
 	not budget_require_approval
 	not r6_require_approval
 	not r0_unclassified
+	not physical_deny
+	not r9_physical_irreversible
+	not r11_mode_change_live
 }
 
 # allow (R1) — read-only internal, when no higher-risk rule applies.
@@ -381,6 +625,13 @@ decision := {
 	not budget_require_approval
 	not r6_require_approval
 	not r7_authority_change
+	# RFX-427. `not r0_unclassified` is new here and changes no existing
+	# verdict: before RFX-427 R0 required R2/R3/R6, all excluded above. Its
+	# physical clauses do not, so it has to be named.
+	not r0_unclassified
+	not physical_deny
+	not r9_physical_irreversible
+	not r11_mode_change_live
 }
 
 # allow (R4) — default: nothing high-risk matched and R1 did not apply.
@@ -395,4 +646,11 @@ decision := {
 	not budget_require_approval
 	not r6_require_approval
 	not r7_authority_change
+	# RFX-427. `not r0_unclassified` is new here and changes no existing
+	# verdict: before RFX-427 R0 required R2/R3/R6, all excluded above. Its
+	# physical clauses do not, so it has to be named.
+	not r0_unclassified
+	not physical_deny
+	not r9_physical_irreversible
+	not r11_mode_change_live
 }

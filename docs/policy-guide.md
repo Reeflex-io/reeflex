@@ -27,8 +27,9 @@ Nothing in this guide requires touching `reeflex-core`'s Python. The engine
 ## 1. How it works (short version)
 
 Every request to `POST /v1/decide` carries an Action Envelope (3 risk axes +
-verb + target + magnitude + cumulative state). The base policy evaluates eight
-rules — **R0–R7, nine rule ids** (R5 reports under two) — against those fields
+verb + target + magnitude + cumulative state). The base policy evaluates twelve
+rules — **R0–R11, thirteen rule ids** (R5 reports under two; R10 is split into
+R10a, a deny, and R10b, two budgets reported under R5's id) — against those fields
 and returns exactly one `decision` object: `allow`, `deny`, or
 `require_approval`. Precedence is explicit and total —
 **deny > require_approval > allow** — so for any input exactly one Rego block
@@ -742,7 +743,7 @@ needs):
 | `input.target.environment` | `production`/`staging`/`dev` | R2, R3, R6 |
 | `input.target.ref` | string or `null`; canonicalized by core (SPEC §4.3) | R6 |
 | `input.magnitude.count` | integer | R5, R7 |
-| `input.axes.externality` | `internal`/`outbound`/`physical` | R1 (`internal`), R5's `external_sends` budget (`outbound`). `physical`: **no rule** — RFX-129 |
+| `input.axes.externality` | `internal`/`outbound`/`physical` | R1 (`internal`), R5's `external_sends` budget (`outbound`), R8–R11 and the `physical_writes` / `physical_envelope` budgets (`physical`, SPEC §4.5) |
 | `input.target.environment` | `production`/`staging`/`dev` | R2, R3 |
 | `input.magnitude.count` | integer >= 1; absent -> 1, and the fill is recorded in `input.provenance.undeclared` (RFX-143) | R5, R6 |
 | `input.cumulative.count_by_verb.*` | object, injected by core before eval (SPEC §4.1) | R5 (`.delete`) |
