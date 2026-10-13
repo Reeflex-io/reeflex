@@ -1,0 +1,154 @@
+# mappings/opcua.yaml -- IndustriAgents/OPCUA-MCP, an OPC UA MCP server
+# (github.com/IndustriAgents/OPCUA-MCP, read at commit
+# 7e6cc3702123aed472da6785d5e42505e3d00aa9, 2026-10-13).
+#
+# Tool names, argument shapes and the server's own annotations are taken from
+# `contract/tools.json` at that commit -- the file both of its runtimes
+# (packages/server-node, packages/server-python) load their tool list from.
+# It declares 15 tools; every one is mapped below, none invented. Its
+# `accessClass` is quoted per tool, because it is the server author's own
+# statement of what the tool does to the plant.
+#
+# WHY THIS SERVER: it is the one of the OPC UA MCP servers checked (kukapay,
+# IndustriAgents, shriramkv, vogler75, mwieczorkiewicz) that exposes all three
+# things a physical mapping has to tell apart -- a setpoint write, a method
+# call, and an alarm shelve -- and publishes its tool list as one file. The
+# smaller kukapay/opcua-mcp has a single-tag write but no method call.
+#
+# THE NODE IDS BELOW ARE A CONVENTION, NOT A DISCOVERY. OPC UA node ids are
+# whatever the plant's integrator named them. This pack assumes string ids
+# (`ns=<n>;s=<path>`) that put the words below into the path. A deployment
+# with numeric ids (`ns=2;i=1234`) gets NO safety classification from these
+# patterns at all -- list its safety nodes explicitly, by id. A mapping file
+# is a controlled document: a wrong pattern or a wrong range here is a wrong
+# verdict (PHYSICAL-IMPACT-SPEC section 4).
+#
+# WHAT WAS NOT VERIFIED:
+#   * No call was made to a running instance of this server. The mapping is
+#     against its declared contract, not against observed traffic.
+#   * The safe ranges are NOT read from the plant. OPC UA can publish an
+#     `EURange` per analog tag, and this server reports it under
+#     `read_opcua_nodes(include_write_access: true)`, but the gateway sees
+#     only the call's arguments. The ranges below are an EXAMPLE for one
+#     example tag; replace them with your plant's documented operating limits
+#     before this file governs anything.
+#   * The write tool carries no current value, so every write here is priced
+#     by the worst-case rule (README, "Physical impact"), not by the true step.
+#   * A tag no `select` entry names is still a `set` with externality
+#     `physical` -- it charges `physical_writes` -- but carries no
+#     `magnitude.physical`, so the out-of-range rule (R10a) cannot see it.
+
+# The node-id patterns, defined once. `safety` names safety functions,
+# interlocks, emergency stops, trips and alarm limits (PHYSICAL-IMPACT-SPEC
+# section 1, `target.safety_function`).
+x-patterns:
+  safety: &safety_node '(?i)^ns=\d+;s=(.*[./_])?(safety|interlock|ilk|estop|e_stop|esd|sis|trip|sil|alarm_?limit|hihi|lolo)([./_]|$)'
+
+tools:
+  # -- accessClass "read" (readOnlyHint: true on all seven) -------------------
+  read_opcua_nodes:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: scoped, externality: internal }
+  browse_opcua_nodes:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: scoped, externality: internal }
+  read_opcua_history:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  read_event_history:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  get_server_status:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  list_subscriptions:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+  list_active_alarms:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: single, externality: internal }
+
+  # -- accessClass "monitor": state in the MCP server, nothing on the plant ---
+  subscribe_opcua_nodes:
+    verb: create
+    axes: { reversibility: recoverable, blast_radius: scoped, externality: internal }
+  subscribe_events:
+    # "Calling it again for the same node replaces the subscription and
+    # discards what it had buffered" -- the discard is why this is not
+    # `reversible`.
+    verb: create
+    axes: { reversibility: recoverable, blast_radius: single, externality: internal }
+  unsubscribe_opcua_nodes:
+    # "Cancel ... and discard what they had buffered."
+    verb: delete
+    axes: { reversibility: recoverable, blast_radius: scoped, externality: internal }
+  read_events:
+    # Not a read: "The events returned are removed from the buffer"
+    # (readOnlyHint: false).
+    verb: update
+    axes: { reversibility: recoverable, blast_radius: single, externality: internal }
+
+  # -- accessClass "control" -- "THIS CHANGES PHYSICAL EQUIPMENT" -------------
+  write_opcua_nodes:
+    # nodes: [{node_id, value, data_type?}], 1..100. "A batch is not a
+    # transaction ... nothing is rolled back." A setpoint can be written back,
+    # so `recoverable`; what the process did meanwhile is the residual the
+    # physical rules exist for.
+    verb: set
+    axes: { reversibility: recoverable, blast_radius: scoped, externality: physical }
+    safety_function_when:
+      arg: "nodes[].node_id"
+      matches: *safety_node
+    magnitude:
+      physical:
+        each: nodes
+        select:
+          # EXAMPLE TAG -- replace with your plant's. One entry per setpoint
+          # family, each with its documented operating range.
+          - when: { arg: node_id, matches: '^ns=2;s=Line1\.Oven\.TempSP$' }
+            value_arg: value
+            range: [20, 250]
+            unit: degC
+  call_opcua_method:
+    # "a method here starts, stops or reconfigures a real process, and unlike
+    # a write it cannot be assumed safe to repeat" -> `irreversible`.
+    verb: actuate
+    axes: { reversibility: irreversible, blast_radius: scoped, externality: physical }
+    cases:
+      # A method on a safety object or a safety method (ResetInterlock,
+      # BypassTrip ...) alters a safety function: `override`, which R8 denies
+      # outside `dev`. As `actuate` + safety_function it would only reach
+      # R9's approval -- R8 does not list `actuate` (see the report).
+      - when: { arg: method_node_id, matches: *safety_node }
+        verb: override
+        safety_function: true
+      - when: { arg: object_node_id, matches: *safety_node }
+        verb: override
+        safety_function: true
+    safety_function: false
+
+  # -- accessClass "alarm-action" (both disabled by the server unless the
+  # deployment policy enables them) -------------------------------------------
+  acknowledge_alarm:
+    # "it does not clear the underlying condition" -- operator workflow, not
+    # plant state.
+    verb: update
+    axes: { reversibility: recoverable, blast_radius: single, externality: internal }
+  act_on_alarm:
+    # action: acknowledge | confirm | comment | shelve | shelveFor | unshelve.
+    # The top level is the most restrictive reading -- a SHELVE silences an
+    # alarm, which is the spec's own example of `override` -- and applies to
+    # shelve, shelveFor and anything this pack does not name.
+    verb: override
+    axes: { reversibility: recoverable, blast_radius: single, externality: physical }
+    safety_function: true
+    cases:
+      - when: { arg: action, matches: '^(acknowledge|confirm|comment|unshelve)$' }
+        verb: update
+        axes: { externality: internal }
+        safety_function: false
+
+# write_opcua_nodes' `nodes` is the list whose length is the number of tags
+# touched -- what `physical_writes` counts (PHYSICAL-IMPACT-SPEC section 3).
+magnitude:
+  from_arg: nodes
