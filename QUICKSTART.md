@@ -392,9 +392,10 @@ The three axes are the load-bearing output of normalization:
 | `blast_radius` | `single` → `scoped` → `broad` → `systemic` |
 | `externality` | `internal` → `outbound` → `physical` |
 
-Severity order is not restriction order. In the base pack `externality`'s
-`physical` is read by no rule (RFX-129) — `outbound` is the member that
-restricts, and it is what an unrecognised value coerces to.
+Severity order is not restriction order. An unrecognised `externality` coerces
+to `outbound` (RFX-129), the member R5's `external_sends` budget reads — never
+to `physical`, which arms the physical rules R8–R11 (SPEC §4.5) only when an
+adapter declares it.
 
 The normalized verb (`read`, `create`, `update`, `delete`, `execute`,
 `transact`, `emit`) is also required. The backend-specific operation id is

@@ -22,8 +22,12 @@ from reeflex_mcp import mappings, normalize
 # RFX-214: read the value R5's external_sends budget actually charges out of
 # the policy pack instead of mirroring it here. Parse, never invoke -- a regex
 # over source text, no `opa` on PATH required and no import of core.
+# `[^}]*?`, not `.*?`: the match must stay inside ONE rule body. With `.*?`
+# the `external_sends` clause that tests `!=` ran on past its own `}` into the
+# next dimension's body and read RFX-427's `physical_writes` comparison as an
+# external_sends value.
 _EXTERNAL_SENDS_BLOCK_RE = re.compile(
-    r'dimension\s*==\s*"external_sends".*?input\.axes\.externality\s*==\s*"([a-z_]+)"',
+    r'dimension\s*==\s*"external_sends"[^}]*?input\.axes\.externality\s*==\s*"([a-z_]+)"',
     re.DOTALL)
 
 

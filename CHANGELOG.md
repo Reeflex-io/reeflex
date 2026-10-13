@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+### Added
+
+- **Physical / human-safety impact: rules R8–R11, two physical budgets, five physical verbs (RFX-427, epic RFX-426; SPEC v0.2 §3.1, §4.5).** `axes.externality: physical` has been a SPEC enum value that no rule read (RFX-129). It now arms four rules and two budgets, all additive: an envelope that does not declare `physical` is decided as before, and no existing test changed outcome (`opa test` 75 → 124, the 75 unchanged; core suite green).
+
+  | rule | rule id | fires (externality `physical`) | verdict |
+  |---|---|---|---|
+  | R8 | `safety_function_override_prod` | production or staging; verb `override`, or `target.safety_function: true` with `set`/`update`/`delete`/`flash`/`mode` | deny, not resolvable |
+  | R10a | `outside_operating_envelope_prod` | production or staging; `magnitude.physical.envelope_fraction > 1.0` | deny, not resolvable |
+  | R9 | `physical_irreversible` | production; irreversible `actuate` or `flash` | hold |
+  | R11 | `mode_change_live` | production; verb `mode` | hold |
+  | R10b | `cumulative_budget` | `physical_writes` (default 10/session) or `physical_envelope` (default 1.0/session, strict `>`) exceeded; not in `dev` | hold |
+
+  Precedence `R3 ≥ R8 ≥ R10a > R2 > R9 > R11 > R5 > R1 > R4` is written in `reeflex.rego`'s header. Totality is checked by `tests/test_decision_totality.py` over 91,800 envelopes (was 14,400), with every pair among R8/R9/R10a/R11 on the grid. R0 (`unclassified_action`) takes a physical match whose environment (or, for R9, reversibility) core guessed. It does **not** take R8/R10a when their own environment was declared: otherwise omitting `reversibility` on a systemic override would turn R8's deny into a resolvable hold through R3.
+
+  **Core changes this needed beyond the policy, found by measuring through `app.decide.process` and not in the spec draft.** (1) `envelope.py` rewrote `set` to `update` and sent `mode`/`override`/`actuate`/`flash` to the unknown-verb default, so R8/R9/R11 could not fire through `/v1/decide` (measured on 2f4fa25: an irreversible production `override` declared physical → `allow / default_allow`). The five are now canonical **only on a physical envelope, spelled whole**. On any other envelope they resolve exactly as before, so an irreversible IT `override` is still `delete` and still charged by the deletions budget. A compound (`set_temperature`) is not elected into a physical verb. (2) New field validation F10: `target.safety_function` must be a JSON boolean and `envelope_fraction` a finite number ≥ 0, otherwise HTTP 400. (3) `ledger.compute_cumulative` gains `sum_physical_envelope` (`math.fsum`, same window). (4) `NON_RESOLVABLE_RULES` gains the two physical deny ids, defensively.
+
+  **Approval binding.** `magnitude.physical` and `target.safety_function` are inside the hold hash. Measured through `process()`, with unchanged-resubmission controls released: an approved hold for a 0.4 step does not release 0.9, and one for `safety_function: false` does not release `true` (`reeflex_hold_envelope_mismatch`). No code change was needed for this.
+
+  **reeflex-mcp and unmapped tools.** reeflex-mcp's gateway fills an unmapped tool's missing axes with core's own defaults, `irreversible / systemic / outbound` — **`outbound`, not `physical`**, since RFX-129. So an unmapped MCP tool does not reach R8–R11 at all and its verdicts are unchanged. An adapter that does declare an unclassifiable plant action as `update` + `physical` + the most restrictive axes also gets today's verdicts: `update` is none of R8–R11's verbs without a declared safety function, and `physical_writes` does not charge it (measured: such a session in staging is held at call 11 by `objects_touched` on main and on this change).
+
+  **What this does NOT claim.** Reeflex is **not a safety system** and must never be described as one. Safety functions are SIL-rated hardware / safety-PLC logic (IEC 61508, ISO 13849); Reeflex is a defence-in-depth layer above the safety PLC, at the agent boundary, deciding whether the agent may *issue* the command, and the SIS stays the last line. It works at the supervisory level only (setpoints, modes, recipes, firmware, missions), not the millisecond control loop. A verdict is not an outcome: Reeflex records the decision and the *declared* magnitude and reads no sensor. `envelope_fraction` and `safety_function` are the adapter's declarations, so a wrong safe range in a mapping is a wrong verdict, and mapping files are controlled documents.
+
+  **Not in this change, and a blocker for shipping it end to end.** reeflex-app's evidence ingest (`evidence_validation.py`, `VERBS`) accepts only the seven IT verbs and answers 422 for any other, and reeflex-litellm's evidence module notes a 422 rejects the whole batch. No shipped adapter emits a physical verb today. One that does (reeflex-mcp OPC-UA mappings, RFX-426) would have its physical decisions refused by Attest ingest until the app accepts the five verbs.
+
 ## [0.2.3] - 2026-10-05 — reeflex-core 0.2.3 + reeflex-claude 0.2.2 + reeflex-holds 0.2.1 + reeflex-litellm 0.2.1 + reeflex-mcp 0.1.5
 
 **Versions in this tag.** `reeflex-core` **0.2.2 → 0.2.3** (bumped by this cut; its artefact is the GHCR image). The four Python packages were bumped by the changes below and have sat unpublished since, so this is the tag that puts them on the index: `reeflex-claude` **0.2.1 → 0.2.2**, `reeflex-holds` **0.2.0 → 0.2.1**, `reeflex-litellm` **0.2.0 → 0.2.1**, `reeflex-mcp` **0.1.4 → 0.1.5**. Each "from" number is what `pypi.org/pypi/<name>/json` served at 08:53Z on 2026-10-05, not a number inferred from the tree, and the gate's own `pypi-content` component on `83c8d8b` read all four as `UNPUBLISHED — the tree is ahead of the index` with 0 matched — so no package needed a bump from this cut, and none was given one. `reeflex-mcp` was checked by name because `normalize.py` changed after the 0.1.5 bump landed: 0.1.5 is not on the index, so the tag publishes the tree as it is now.

@@ -139,13 +139,12 @@ _AXIS_ALLOWED: dict[str, frozenset[str]] = {
 # n8n node's parameter defaults to outbound. Only reeflex-mcp filled this axis
 # from a mirror of THIS dict, and that mirror moves with it.
 #
-# NOT FIXED HERE, AND DELIBERATELY: `physical` remains read by no rule, so an
-# adapter that AFFIRMATIVELY declares it still charges nothing. Whether the
-# base pack should gain a rule that reads it (RFX-129's option (a):
-# irreversible + physical + production -> require_approval) is a canon
-# question, it is not this fail-open, and closing it would not have closed
-# this one -- a reversible outbound send with an undeclared axis escaped the
-# budget no matter what `physical` means. Flagged on RFX-129, not smuggled in.
+# NOT FIXED HERE, AND DELIBERATELY: whether the base pack should read
+# `physical` (RFX-129's option (a)) was a canon question, not this fail-open.
+# RFX-427 has since answered it -- R8-R11 and two budgets read `physical`
+# (SPEC §4.5) -- and that does not change this default: an envelope must be
+# physical only because its adapter declared it, so core never guesses its
+# way into those rules.
 _AXIS_DEFAULTS: dict[str, str] = {
     "reversibility": "irreversible",
     "blast_radius": "systemic",
@@ -384,6 +383,50 @@ _VERB_CANON: dict[str, str] = {
 # axis — see "WHICH DEFAULT AN UNRECOGNIZED VERB GETS" above.
 _VERB_DEFAULT_IRREVERSIBLE: str = "delete"
 _VERB_DEFAULT: str = "update"
+
+# ---------------------------------------------------------------------------
+# RFX-427: THE FIVE PHYSICAL VERBS (SPEC §3.1) — CANONICAL ONLY WHEN THE
+# ADAPTER DECLARED `axes.externality: physical`.
+#
+# THE GAP THIS CLOSES.  The physical rules R8/R9/R11 and the `physical_writes`
+# budget read `set`, `mode`, `override`, `actuate` and `flash`.  Measured on
+# main 2f4fa25 before this change, none of the five could reach the policy:
+# `set` is aliased to `update` in `_VERB_CANON` above, and the other four are
+# in no table, so they fell to the reversibility default (`delete` or
+# `update`).  A rule reading `verb == "override"` would have been dead code
+# behind /v1/decide while every opa test of it passed.
+#
+# WHY CONDITIONAL ON EXTERNALITY, AND NOT FIVE NEW `_VERB_CANON` ENTRIES.
+# Adding them to the canon unconditionally would MOVE existing verdicts, which
+# this change is chartered not to do:
+#   * `set` would stop being `update` for every IT adapter that sends it, and
+#     the audit line those adapters' customers read would change word.
+#   * an IRREVERSIBLE `override` / `flash` / `actuate` / `mode` on a
+#     non-physical envelope resolves to `delete` today and is charged by the
+#     deletions budget.  Mapping it to itself would take it OUT of that budget
+#     -- the de-escalation the RFX-308 note above forbids ("the widening is
+#     `delete` or nothing").
+# So for a non-physical envelope every one of the five resolves exactly as it
+# did on 2f4fa25, and on a physical one the caller's word survives.
+#
+# WHOLE-VERB RECOGNITION ONLY.  The five are matched against the caller's verb
+# spelled whole (`_verb_key_variants`: folding and separators, no per-word
+# election).  `set_temperature` is NOT elected `set`; it resolves through the
+# IT canon as before (-> `update`).  An adapter that wants a physical rule to
+# read its action MUST emit the canonical verb.  Stated as a limit, not
+# closed: electing a physical word out of a compound would need a guard rank
+# for five verbs no IT rule reads, and the RFX-304/RFX-324 history of that
+# election is a reason to do it on a measured corpus, not by assertion.
+#
+# BECAUSE THE FIVE ARE ONLY EVER CANONICAL ON A PHYSICAL ENVELOPE,
+# `cumulative.count_by_verb.<one of the five>` counts physical writes and
+# nothing else -- which is what lets budgets.rego source `physical_writes`
+# from count_by_verb without a new ledger aggregate.  Pinned by
+# tests/test_physical_impact_rfx427.py.
+# ---------------------------------------------------------------------------
+_PHYSICAL_VERBS: frozenset[str] = frozenset(
+    {"set", "mode", "override", "actuate", "flash"}
+)
 
 # ---------------------------------------------------------------------------
 # RFX-308: WIDENING THIS VOCABULARY — AND THE ONE DIRECTION IT MUST NOT MOVE.
@@ -788,8 +831,30 @@ def _verb_last_resort_key(raw_verb: str, canonical_reversibility: str) -> str | 
     return best_word
 
 
-def _canonicalize_verb(raw_verb: str, canonical_reversibility: str) -> str:
+def _physical_verb(raw_verb: Any) -> str | None:
+    """The SPEC §3.1 physical verb the caller spelled WHOLE, or None.
+
+    Callers apply it only when the canonical externality is `physical`; see the
+    RFX-427 block above `_PHYSICAL_VERBS`.
+    """
+    if not isinstance(raw_verb, str):
+        return None
+    for key in _verb_key_variants(raw_verb):
+        if key in _PHYSICAL_VERBS:
+            return key
+    return None
+
+
+def _canonicalize_verb(
+    raw_verb: str,
+    canonical_reversibility: str,
+    canonical_externality: str | None = None,
+) -> str:
     """Map a raw action verb to its canonical SPEC §3 member.
+
+    RFX-427: when `canonical_externality` is "physical", one of the five
+    physical verbs spelled whole is kept as itself before any IT alias is
+    consulted.  Any other externality (or None) resolves exactly as before.
 
     Try the normalized verb as-is, then with separators/camel boundaries
     folded, then — for a compound only — the most-guarded word it contains
@@ -802,6 +867,10 @@ def _canonicalize_verb(raw_verb: str, canonical_reversibility: str) -> str:
     (F1 runs first), so a missing or garbage axes block has already become
     "irreversible" and lands here on the guarded default.
     """
+    if canonical_externality == "physical":
+        physical = _physical_verb(raw_verb)
+        if physical is not None:
+            return physical
     for key in _verb_key_variants(raw_verb):
         if key in _VERB_CANON:
             return _VERB_CANON[key]
@@ -917,7 +986,7 @@ def _environment_is_declared(raw_env: Any) -> bool:
     return _normalize_token(raw_env) in _ENV_CANON
 
 
-def _verb_is_declared(raw_verb: Any) -> bool:
+def _verb_is_declared(raw_verb: Any, canonical_externality: str | None = None) -> bool:
     """True if `action.verb`, AS THE CALLER SPELLED IT, matched the SPEC §3
     verb set or an alias of it.
 
@@ -939,6 +1008,8 @@ def _verb_is_declared(raw_verb: Any) -> bool:
     """
     if not isinstance(raw_verb, str):
         return False
+    if canonical_externality == "physical" and _physical_verb(raw_verb) is not None:
+        return True
     return any(key in _VERB_CANON for key in _verb_key_variants(raw_verb))
 
 
@@ -1069,6 +1140,19 @@ def is_money_amount(raw: Any) -> bool:
     if not isinstance(raw, (int, float)) or isinstance(raw, bool):
         return False
     return math.isfinite(raw)
+
+
+def is_envelope_fraction(raw: Any) -> bool:
+    """True if this is a `magnitude.physical.envelope_fraction` core accepts
+    (RFX-427): a finite number >= 0, bool excluded.
+
+    Shared by F10 (which refuses anything else with HTTP 400) and
+    ledger.append_entry (which sums it into `sum_physical_envelope`), so the
+    refusal and the charge cannot disagree -- the RFX-305 lesson. The NaN note
+    on is_money_amount() applies unchanged: one NaN in the sum would make
+    every later `> limit` comparison false and switch the budget off.
+    """
+    return is_money_amount(raw) and raw >= 0
 
 
 # ---------------------------------------------------------------------------
@@ -1270,6 +1354,19 @@ def validate_and_fill_defaults(raw: Any) -> dict:
     # change the canonical_hash preimage for every envelope that never had one.
     if "ref" in _norm_target:
         _norm_target["ref"] = canonicalize_target_ref(_norm_target["ref"])
+    # -- F10 (RFX-427): target.safety_function -- a JSON boolean or absent.
+    # R8 denies a write to a safety function, so a value R8 cannot read as
+    # `true` must not be quietly read as `false`: `"true"`, `1` and `"yes"`
+    # are refused rather than guessed at. Absent stays absent (= false, the
+    # SPEC §2 default); no key is added, so the hash preimage of every
+    # envelope that never carried it is unchanged.
+    if "safety_function" in _norm_target and not isinstance(
+            _norm_target["safety_function"], bool):
+        raise ValidationError(
+            "target.safety_function must be a boolean if present, got "
+            f"{type(_norm_target['safety_function']).__name__} "
+            f"{_norm_target['safety_function']!r}"
+        )
     envelope["target"] = _norm_target
 
     # -- params: free passthrough; must be a dict for ledger to iterate safely.
@@ -1371,7 +1468,8 @@ def validate_and_fill_defaults(raw: Any) -> dict:
     # `verb: "read"` carrying `ability: "wordpress/delete-post"` is counted as
     # the delete it describes.  See _delete_signal_from_ability().
     _norm_action = dict(action)
-    _canon_verb = _canonicalize_verb(verb, normalized_axes["reversibility"])
+    _canon_verb = _canonicalize_verb(
+        verb, normalized_axes["reversibility"], normalized_axes["externality"])
     if _canon_verb != "delete" and _delete_signal_from_ability(action.get("ability")):
         _canon_verb = "delete"
     _norm_action["verb"] = _canon_verb
@@ -1398,7 +1496,7 @@ def validate_and_fill_defaults(raw: Any) -> dict:
         _undeclared.append("axes.externality")
     if not _environment_is_declared(environment):
         _undeclared.append("target.environment")
-    if not _verb_is_declared(verb):
+    if not _verb_is_declared(verb, normalized_axes["externality"]):
         _undeclared.append("action.verb")
     # RFX-143. Judged on the RAW magnitude block, before F2 below fills the
     # default -- after the fill there is nothing left to tell apart.
@@ -1435,6 +1533,28 @@ def validate_and_fill_defaults(raw: Any) -> dict:
                 f"magnitude.count must be an integer >= 1, got {raw_count}"
             )
         magnitude["count"] = raw_count  # already a canonical int
+    # -- F10 (RFX-427): magnitude.physical.envelope_fraction -- a number >= 0.
+    # Read by R10a (deny above 1.0) and summed by the `physical_envelope`
+    # budget. Same treatment F2 and RFX-305 give the other decision-critical
+    # numbers: a value that is not a finite, non-negative number is REFUSED,
+    # never read as "no fraction". A negative one would SUBTRACT from the
+    # session's envelope sum and unwind the budget; a quoted "1.4" read as
+    # absent would walk past R10a. Absent stays absent (today's behaviour).
+    if "physical" in magnitude:
+        _physical = magnitude["physical"]
+        if not isinstance(_physical, dict):
+            raise ValidationError(
+                "magnitude.physical must be an object if present, got "
+                f"{type(_physical).__name__}"
+            )
+        if "envelope_fraction" in _physical:
+            _fraction = _physical["envelope_fraction"]
+            if not is_envelope_fraction(_fraction):
+                raise ValidationError(
+                    "magnitude.physical.envelope_fraction must be a finite "
+                    f"number >= 0 if present, got {type(_fraction).__name__} "
+                    f"{_fraction!r}"
+                )
     envelope["magnitude"] = magnitude
 
     # Ensure approval.present has a conservative default (false = not approved).

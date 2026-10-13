@@ -78,7 +78,7 @@ from app.field_treatments import (
     undeclared,
 )
 from app.decide import DECIDE_ENVELOPE_PATHS
-from app.ledger import LEDGER_ENVELOPE_PATHS
+from app.ledger import LEDGER_ENVELOPE_PATHS, LEDGER_ENVELOPE_SUBPATHS
 
 _POLICY_DIR = _repo_root / "policy"
 _LEDGER_PY = _repo_root / "app" / "ledger.py"
@@ -465,6 +465,13 @@ class TestLedgerDeclarationMatchesCode(unittest.TestCase):
         # Top-level envelope blocks the function reaches into.
         blocks = {p.split(".")[0] for p in LEDGER_ENVELOPE_PATHS}
         leaves = {p.split(".")[1] for p in LEDGER_ENVELOPE_PATHS}
+        # A key below the declared depth counts only if its two-segment
+        # parent is itself declared (RFX-427: magnitude.physical).
+        for sub in LEDGER_ENVELOPE_SUBPATHS:
+            parent = ".".join(sub.split(".")[:2])
+            self.assertIn(parent, LEDGER_ENVELOPE_PATHS,
+                          "sub-path %r has no declared parent" % sub)
+            leaves.add(sub.split(".")[-1])
         # Keys that are neither a declared block, a declared leaf, nor an
         # internal ledger entry field, are undeclared envelope reads.
         internal = {"count", "amount_by_currency", "ts", "verb", "ability",

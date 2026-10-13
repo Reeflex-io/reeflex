@@ -44,11 +44,12 @@ DIAGRAM_HEADING = "## How a verdict is reached"
 
 RULE_ID_RE = re.compile(r"reeflex\.policy/([a-z0-9_]+)")
 
-# The shipped pack's rule NUMBERS. Nine ids across eight numbers: R5 reports
-# under two (`session_delete_budget` for the deletions dimension,
-# `cumulative_budget` for every other), which is why "eight rules, nine ids"
-# is the only phrasing that is true of both.
-EXPECTED_RULE_NUMBERS = 8
+# The shipped pack's rule NUMBERS. Thirteen ids across twelve numbers (R0-R11,
+# RFX-427): R5 reports under two (`session_delete_budget` for the deletions
+# dimension, `cumulative_budget` for every other), and R10 is split into R10a
+# (its own deny id) and R10b (two budget dimensions reported under R5's
+# `cumulative_budget`), so the two counts differ by one.
+EXPECTED_RULE_NUMBERS = 12
 
 
 def _policy_files() -> list[pathlib.Path]:
@@ -88,7 +89,7 @@ class ShippedRuleIdsAreDocumented(unittest.TestCase):
         """A floor, so an empty parse cannot satisfy every other assertion."""
         ids = _shipped_rule_ids()
         self.assertGreaterEqual(
-            len(ids), 9,
+            len(ids), 13,
             "parsed only %d rule ids from %s -- the parser, not the pack, is "
             "probably what changed" % (len(ids), [p.name for p in _policy_files()]),
         )
@@ -124,9 +125,9 @@ class ShippedRuleIdsAreDocumented(unittest.TestCase):
         """
         n_ids = len(_shipped_rule_ids())
         self.assertEqual(
-            EXPECTED_RULE_NUMBERS, 8,
+            EXPECTED_RULE_NUMBERS, 12,
             "EXPECTED_RULE_NUMBERS is a human-maintained count of rule NUMBERS "
-            "(R0..R7). Rule numbers appear only in comments, so they cannot be "
+            "(R0..R11). Rule numbers appear only in comments, so they cannot be "
             "parsed reliably -- update this constant and the docs together.",
         )
 
@@ -158,14 +159,14 @@ class ShippedRuleIdsAreDocumented(unittest.TestCase):
 
         # The two files that state a numeral must state the derived one.
         for path, numeral in [
-            (REPO_ROOT / "docs" / "concepts" / "index.md", "nine rule ids"),
-            (REPO_ROOT / "docs" / "policy-guide.md", "nine rule ids"),
-            (REPO_ROOT / "README.md", "nine rule ids"),
-            (REPO_ROOT / "docs" / "llms.txt", "nine rule ids"),
+            (REPO_ROOT / "docs" / "concepts" / "index.md", "thirteen rule ids"),
+            (REPO_ROOT / "docs" / "policy-guide.md", "thirteen rule ids"),
+            (REPO_ROOT / "README.md", "thirteen rule ids"),
+            (REPO_ROOT / "docs" / "llms.txt", "thirteen rule ids"),
         ]:
             with self.subTest(path=str(path.relative_to(REPO_ROOT)), claim=numeral):
                 self.assertEqual(
-                    n_ids, 9,
+                    n_ids, 13,
                     "the pack now emits %d rule ids, so %r is no longer the true "
                     "claim -- update the docs and this list together."
                     % (n_ids, numeral),
@@ -228,7 +229,7 @@ class StaleRuleCountClaimsDoNotComeBack(unittest.TestCase):
 
         self.assertEqual(
             [], offenders,
-            "the shipped pack is R0-R7 (nine rule ids). These lines claim "
+            "the shipped pack is R0-R11 (thirteen rule ids). These lines claim "
             "otherwise:\n  " + "\n  ".join(offenders)
             + "\n\nFix the sentence. If the file genuinely cannot be fixed in "
               "this change, add it to KNOWN_STALE with the ticket that will.",

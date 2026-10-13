@@ -1,4 +1,12 @@
-# Reeflex — Action Envelope & Adapter Contract (v0.1)
+# Reeflex — Action Envelope & Adapter Contract (v0.2)
+
+> **v0.2 (2026-10-13, RFX-427)** adds physical / human-safety impact: five
+> physical verbs (§3.1), `target.safety_function` and `magnitude.physical`
+> (§2, §4.5), rules R8–R11 and two physical budgets (§4.5, §4.1.1). It is
+> **additive**: every new field is optional, and an envelope that does not
+> declare `axes.externality: "physical"` is decided exactly as under v0.1. The
+> envelope's own `reeflex_version` field is unchanged (`"0.1"`) — the wire
+> shape a v0.1 adapter sends is still a valid v0.2 envelope. See §9.
 
 > The portable heart of Reeflex. This spec defines **how any backend action is described** (the Action Envelope) and **what any integration must implement** (the Adapter Contract) so it can be governed by `reeflex-core`.
 >
@@ -41,13 +49,17 @@ The normalized representation every adapter MUST produce. JSON. This is the cont
   "target": {
     "kind": "post",                       // what is being acted on
     "ref": "post:1481",                   // stable identifier (nullable for bulk)
-    "environment": "production"           // production | staging | dev
+    "environment": "production",          // production | staging | dev
+    "safety_function": false              // OPTIONAL, bool, default false (§4.5)
   },
 
   "params": { },                          // adapter-specific, structured, typed
 
   "magnitude": {
-    "count": 1                            // how many entities this action affects
+    "count": 1,                           // how many entities this action affects
+    "physical": {                         // OPTIONAL (§4.5): physical magnitude
+      "envelope_fraction": 0.4            //   |requested - current| / (safe_max - safe_min), >= 0
+    }
   },
 
   "axes": {                               // the three universal risk axes (section 4)
@@ -104,12 +116,47 @@ The backend-specific operation is preserved in `action.ability` for fine-grained
 - a **compound** the alias map does not cover as a whole resolves to the **most-guarded word it contains**, not its first (RFX-304): `delete` outranks every other member, `read` is outranked by every other member, ties go to the earliest word so a verb-first name (`DeleteObject`, `GetObject`) is unaffected. Reading the first word alone resolved `findOneAndDelete` to `read` and handed an irreversible production deletion the read-only allow rule. The trade is stated rather than hidden: a genuine read whose name embeds a destructive word (`list_trash`) now escalates, which costs a hold once a deletions budget is exceeded — declare a canonical verb and it does not arise. A word the canon has no entry for is invisible to this, so it is a safety net and not a classifier;
 - an **unrecognized** verb resolves conservatively: to `delete` when `axes.reversibility` is `irreversible`, otherwise to `update`. It is never resolved to `read`, which would grant the read-only allow rule.
 
-Adapters SHOULD still emit one of the seven canonical verbs — that is the normative requirement above, and canonicalization is a safety net, not a licence to send anything. Two consequences worth knowing:
+Adapters SHOULD still emit one of the seven canonical verbs (or, on a physical envelope, one of the five in §3.1) — that is the normative requirement above, and canonicalization is a safety net, not a licence to send anything. Two consequences worth knowing:
 
 - The **normalized** verb is what appears in the cumulative ledger (`count_by_verb`), the hold record, and the audit line. The backend's own operation name is preserved in `action.ability`, which is where fine-grained detail belongs.
 - Because the verb is part of the action-defining projection, `envelope_hash` (§5.1) is computed over the *canonical* verb. Both submission and resubmission canonicalize identically, so the hold binding is unaffected.
 
 `action.verb` is **asserted by the adapter and not verifiable by core**. Canonicalization closes the near-miss and synonym surface; it cannot make a deliberately mislabelled action honest. As one cross-check, core treats a non-delete verb as a delete when any word of `action.ability`'s operation segment names one (e.g. `verb: "read"` carrying `ability: "wordpress/delete-post"`, or `"mongodb/findOneAndDelete"`; the namespace before the last `/` is not read, and past-tense forms such as `s3/list-deleted-objects` are absent from the alias map on purpose and do not signal). Full integrity here depends on envelope signing (§6, roadmap).
+
+### 3.1 Physical verbs (v0.2, RFX-427)
+
+Five verbs for actions on the physical world. They are additive to the seven
+above and are **canonical only on an envelope that declares
+`axes.externality: "physical"`**:
+
+| verb | meaning | typical raw actions |
+|---|---|---|
+| `set` | write a setpoint / parameter / recipe value | OPC-UA write, Modbus write register, `set_temperature`, `write_tag` |
+| `mode` | change operating mode | auto↔manual, maintenance, bypass, arm/disarm, start/stop a unit |
+| `override` | bypass or alter a safety function | disable interlock, mute an alarm limit, override E-stop, change a SIL parameter |
+| `actuate` | cause a physical, non-parametric effect | open valve, move axis, dose, dispense, launch, release, cut |
+| `flash` | replace firmware / control logic | firmware update, PLC program download, controller config load |
+
+`read`, `create`, `update`, `delete` keep their meaning on a physical envelope.
+An adapter that cannot classify a physical action maps it to `update` with
+`axes.externality: "physical"` and the most restrictive axes.
+
+How core canonicalizes them, normatively:
+
+- On a **physical** envelope, a verb that folds (as above) to one of the five,
+  spelled whole, is kept as that verb. A compound is **not** elected into a
+  physical verb: `set_temperature` resolves through the IT canon (to
+  `update`), so an adapter that wants R8/R9/R11 to read its action MUST emit
+  the canonical verb.
+- On **any other** envelope the five resolve exactly as under v0.1: `set` is
+  an alias of `update`, and `mode`/`override`/`actuate`/`flash` are
+  unrecognized verbs (the reversibility default above). This is deliberate:
+  mapping an irreversible IT `override` to anything but `delete` would take it
+  out of the deletions budget.
+
+Because the five are canonical only on physical envelopes,
+`cumulative.count_by_verb` for those five counts physical writes and nothing
+else (§4.1.1).
 
 ---
 
@@ -134,12 +181,11 @@ Every action is priced on three axes. This is what makes coverage intrinsic inst
 - `internal` — stays inside the controlled system
 - `outbound` — reaches third parties (email, API, publish)
 - `physical` — affects the physical world (SCADA, robotics, energy).
-  **The base policy pack does not read this member** (RFX-129): it is a
-  reserved enum value for extension packs, and an action declared `physical`
-  is decided exactly as the same action declared `internal` would be. Do not
-  cite it as coverage. What the base pack reads is `outbound` (R5's
-  `external_sends` budget) and `internal` (R1's label). Whether the base pack
-  should gain a rule of its own for `physical` is open on RFX-129.
+  Read by the physical rules R8–R11 and the two physical budgets (§4.5, since
+  v0.2). It is **never a default**: core's conservative value for an absent or
+  unrecognized externality is `outbound` (RFX-129), so an envelope is physical
+  only because its adapter declared it. The base pack also reads `outbound`
+  (R5's `external_sends` budget) and `internal` (R1's label).
 
 Policy reasons in these axes. A rule like *"irreversible + broad + production → require human approval"* protects Postgres, S3, and WordPress identically.
 
@@ -243,6 +289,14 @@ each aggregate across heterogeneous verbs/abilities:
 | `deletions` | `cumulative.count_by_verb.delete` | `magnitude.count` when `action.verb == "delete"` |
 | `external_sends` | `cumulative.count_by_externality.outbound` | `magnitude.count` when `axes.externality == "outbound"` |
 | `objects_touched` | `cumulative.total_count` | `magnitude.count`, **unconditionally, for every action** |
+| `physical_writes` (v0.2) | `cumulative.count_by_verb` for `set`, `mode`, `override`, `actuate`, `flash` | `magnitude.count` when `axes.externality == "physical"` and the verb is one of those five |
+| `physical_envelope` (v0.2) | `cumulative.sum_physical_envelope` (a float) | `magnitude.physical.envelope_fraction` when present |
+
+The two physical dimensions (R10b, §4.5) do not arm when
+`target.environment` is `dev`; the other four arm in every environment.
+"Contributes `magnitude.count`" means the charged count of §4.1.2 (the count
+raised to its blast-radius floor) for every count dimension, including
+`physical_writes`.
 
 `objects_touched` is the deliberate fix for a gap seen in rival products:
 a session-level cumulative amplifier that assigns weight **0** to small-tier
@@ -590,6 +644,89 @@ approval prompt and never a missed refusal.
 
 ---
 
+## 4.5 Physical / human-safety impact — R8–R11 (v0.2, RFX-427)
+
+Reeflex is **not a safety system**. Safety functions are SIL-rated hardware or
+safety-PLC logic (IEC 61508, ISO 13849); the rules below decide whether an
+**agent may issue** a supervisory command (setpoint, mode, recipe, firmware),
+one layer above that logic. The safety instrumented system stays the last
+line. The limits are listed in IMPACT-MODEL.md, "What the base policy does
+not catch".
+
+### The inputs
+
+- `axes.externality == "physical"` arms every rule in this section. Core
+  never guesses this value (§4).
+- `action.verb` — one of the five physical verbs (§3.1), or `update`/`delete`.
+- `target.safety_function` — OPTIONAL JSON boolean, default `false`. `true`
+  when the target is a safety function, interlock, E-stop, alarm limit,
+  SIL-rated logic or a safety-PLC parameter. A present non-boolean value is
+  refused with HTTP 400, because a value R8 cannot read as `true` would
+  otherwise be read as `false`.
+- `magnitude.physical` — OPTIONAL object:
+
+  ```jsonc
+  "physical": {
+    "envelope_fraction": 0.4,    // |requested - current| / (safe_max - safe_min), >= 0.
+                                 // 1.0 = a full-range step. > 1.0 = the REQUEST lies
+                                 // outside the declared safe range.
+    "unit": "degC",              // informational
+    "requested": 92.0,           // informational
+    "range": [20.0, 90.0]        // informational: the declared safe operating range
+  }
+  ```
+
+  Only `envelope_fraction` is read. It MUST be a finite number `>= 0`; any
+  other present value (negative, string, bool, NaN) is refused with HTTP 400.
+- `target.environment`, mapped for a plant as: `production` = live plant /
+  real device; `staging` = HIL rig or shadow controller (**real actuators**);
+  `dev` = digital twin / simulator.
+
+### The rules
+
+| id | rule id | fires when (and `externality == "physical"`) | verdict |
+|---|---|---|---|
+| **R8** | `safety_function_override_prod` | environment ∈ {production, staging} AND (verb `override`, OR `safety_function == true` AND verb ∈ {`set`, `update`, `delete`, `flash`, `mode`}) | **deny** — not resolvable |
+| **R10a** | `outside_operating_envelope_prod` | environment ∈ {production, staging} AND `envelope_fraction > 1.0` | **deny** — not resolvable |
+| **R9** | `physical_irreversible` | environment == production AND `reversibility == irreversible` AND verb ∈ {`actuate`, `flash`} | `require_approval` |
+| **R11** | `mode_change_live` | environment == production AND verb == `mode` | `require_approval` |
+| **R10b** | reported as `cumulative_budget` | the `physical_writes` or `physical_envelope` budget (§4.1.1) is exceeded; the reason names the dimension | `require_approval` |
+
+|  | production | staging | dev |
+|---|---|---|---|
+| R8, R10a | arm | arm | — |
+| R9, R11 | arm | — | — |
+| R10b | arm | arm | — |
+
+Shipped defaults (policy data an operator MUST review): `physical_writes` 10
+per session, `physical_envelope` 1.0 per session — one full-range sweep
+without a human. "Exceeded" is strict: a session whose fractions sum to
+exactly 1.0 is at its budget, not over it.
+
+### Precedence
+
+`R3 ≥ R8 ≥ R10a > R2 > R9 > R11 > R5 (incl. R10b) > R1 > R4`, total: exactly
+one decision for every envelope. R3 and R8 both deny; when both match the
+reported rule is R3. R6 and R7 keep their places below R5.
+
+**R0 and the physical rules.** R0 (§4.0) reports a match that rests on a value
+core guessed. It applies to R8, R10a and R11 when `target.environment` was
+guessed, and to R9 when the environment or `reversibility` was. R0 does
+**not** outrank R8 or R10a when the environment they read was declared:
+otherwise omitting `reversibility` on a systemic override would trip R0
+through R3 and turn R8's deny into a resolvable hold, although R8 does not
+read reversibility.
+
+### Approval binding
+
+`magnitude.physical` and `target.safety_function` are inside the hold hash
+projection (`action`, `axes`, `magnitude`, `target`, §5.1). An approval of a
+0.4 step does not release a 0.9 step, and an approval for a target declared
+`safety_function: false` does not release the same verb on one declared
+`true`.
+
+---
+
 ## 5. The Decision
 
 `reeflex-core` returns:
@@ -870,6 +1007,19 @@ reeflex-s3/           # future / community
 ```
 
 The core and the contract are the product. Adapters are the ecosystem — `reeflex-mock` is the worked in-memory reference (v0.1); `reeflex-claude`, `reeflex-wordpress`, and `reeflex-mcp` are conformance-tested reference adapters for the source, resource, and network-boundary sides respectively. The rest the community can build against this spec.
+
+---
+
+## 9. Spec changelog
+
+- **v0.2 (2026-10-13, RFX-427).** Physical / human-safety impact, additive:
+  §3.1 physical verbs; `target.safety_function` and `magnitude.physical` (§2,
+  §4.5); R8, R9, R10a, R11 and the `physical_writes` / `physical_envelope`
+  budgets (R10b) (§4.5, §4.1.1); `externality: physical` is now read by the
+  base pack (§4). No v0.1 field changes meaning, and an envelope that does not
+  declare `physical` is decided as under v0.1. The envelope's
+  `reeflex_version` stays `"0.1"`.
+- **v0.1.** Initial Action Envelope and Adapter Contract.
 
 ---
 

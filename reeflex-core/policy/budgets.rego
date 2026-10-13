@@ -28,6 +28,12 @@
 #   objects_touched   EVERY action, unconditionally — the dimension that
 #                      makes a long tail of small, individually-harmless
 #                      actions accumulate toward a hold.
+#   physical_writes   axes.externality == "physical" AND a physical write
+#                      verb (set | mode | override | actuate | flash) —
+#                      RFX-427, SPEC §4.1.1. Counts writes to a plant.
+#   physical_envelope magnitude.physical.envelope_fraction, summed — a FLOAT
+#                      dimension (RFX-427): how far the session has moved the
+#                      plant, in units of its declared safe ranges.
 #
 # A budget definition is {"limit": <number>}. `default_budgets` applies to
 # every principal; `principal_budgets` overrides specific dimensions for a
@@ -66,6 +72,18 @@ default_budgets := {
 	"deletions": {"limit": 20},
 	"external_sends": {"limit": 50},
 	"objects_touched": {"limit": 200},
+	# RFX-427 (SPEC §4.1.1). ILLUSTRATIVE DEFAULTS AN OPERATOR MUST REVIEW,
+	# like every limit above.
+	#   physical_writes    10 writes to a plant per session without a human.
+	#   physical_envelope  1.0 = one full-range sweep of a declared safe range
+	#                      per session without a human. Written `1.0`, and
+	#                      compared strictly (`>`): a session that has moved
+	#                      exactly one full range is AT its budget, not over
+	#                      it. `0.97 + 0.03` is exactly 1 in OPA's arithmetic
+	#                      and does not trip; `0.97 + 0.04` does. Pinned in
+	#                      physical_test.rego.
+	"physical_writes": {"limit": 10},
+	"physical_envelope": {"limit": 1.0},
 }
 
 # ---- what an UNCOUNTABLE action costs (RFX-143) ------------------------
@@ -252,7 +270,43 @@ ledger_charge := charged_count
 # the rule engine or any other principal's budget.
 principal_budgets := {}
 
-budget_dimensions := ["money", "deletions", "external_sends", "objects_touched"]
+budget_dimensions := [
+	"money", "deletions", "external_sends", "objects_touched",
+	"physical_writes", "physical_envelope",
+]
+
+# ---- the physical dimensions (RFX-427) ---------------------------------
+#
+# THE VERBS physical_writes CHARGES. The same five SPEC §3.1 names R8/R9/R11
+# read. core's envelope.py keeps one of these as the canonical verb ONLY when
+# the adapter declared `axes.externality: physical` (on any other envelope
+# `set` is still `update`, and the other four resolve exactly as they did
+# before RFX-427) -- so `cumulative.count_by_verb.<one of these>` is a count
+# of PHYSICAL writes and of nothing else, and this file can source the
+# dimension from it.
+#
+# WHY NOT `cumulative.count_by_externality.physical`, which the spec draft
+# named first. That aggregate counts EVERY physical entry -- reads, `update`s,
+# anything an adapter tagged physical -- while the current-action term below
+# charges writes only. The two sides of `prior + current > limit` would then
+# be in different units, the RFX-293 defect class. Measured (dev-1 round 154)
+# with that source: a session of physical `update`s (the verb an adapter
+# that cannot classify a plant action is told to use, SPEC §3.1) at the
+# systemic charge of 20 was HELD at call 2 by physical_writes, where main
+# allows it until objects_touched trips at call 11. Sourcing from the write
+# verbs keeps that session's verdicts unchanged.
+physical_write_verbs := {"set", "mode", "override", "actuate", "flash"}
+
+#: THIS action's envelope fraction. Absent -> 0. envelope.py's F10 has already
+#: refused a negative, non-finite or non-numeric value with HTTP 400; the
+#: `is_number` / `>= 0` guard is here so this file does not silently depend
+#: on that, and fails toward charging nothing only for a value core would
+#: never have let through.
+current_physical_envelope := f if {
+	f := object.get(input, ["magnitude", "physical", "envelope_fraction"], 0)
+	is_number(f)
+	f >= 0
+} else := 0
 
 # ---- the mechanism (reused by reeflex.rego; not what a user edits) ----
 
@@ -281,6 +335,15 @@ cumulative_for(dimension) := n if {
 } else := n if {
 	dimension == "external_sends"
 	n := object.get(input, ["cumulative", "count_by_externality", "outbound"], 0)
+} else := n if {
+	dimension == "physical_writes"
+	n := sum([c |
+		some v in physical_write_verbs
+		c := object.get(input, ["cumulative", "count_by_verb", v], 0)
+	])
+} else := n if {
+	dimension == "physical_envelope"
+	n := object.get(input, ["cumulative", "sum_physical_envelope"], 0)
 }
 
 # current_for: THIS action's contribution to a dimension, added to the
@@ -309,6 +372,22 @@ current_for(dimension) := c if {
 	dimension == "external_sends"
 	input.axes.externality != "outbound"
 	c := 0
+} else := c if {
+	# Charged like every other COUNT dimension: `charged_count`, so the
+	# current term and the ledger's history (which records ledger_charge) are
+	# in the same units (RFX-293). The spec draft wrote `magnitude.count`;
+	# charged_count IS magnitude.count whenever it is at or above the
+	# blast-radius floor, and is the floor otherwise (RFX-143).
+	dimension == "physical_writes"
+	input.axes.externality == "physical"
+	input.action.verb in physical_write_verbs
+	c := charged_count
+} else := c if {
+	dimension == "physical_writes"
+	c := 0
+} else := c if {
+	dimension == "physical_envelope"
+	c := current_physical_envelope
 }
 
 # ---- money has UNITS (RFX-133) ----------------------------------------
@@ -433,7 +512,22 @@ money_exceeded if {
 exceeded_dimensions contains dimension if {
 	some dimension in budget_dimensions
 	dimension != "money"
+	not physical_budget_disarmed(dimension)
 	current_for(dimension) + cumulative_for(dimension) > budget_limit(dimension)
+}
+
+# RFX-427: the two physical dimensions (R10b) do not arm in `dev`, the digital
+# twin -- SPEC §4.5's "in dev none of R8-R11 arm", and R10b is one of them.
+# Every other dimension stays environment-blind, as it always was.
+#
+# WHAT THIS DOES NOT DO, STATED: the ledger is per SESSION, not per
+# environment, so a twin write is still RECORDED and still counts toward the
+# session's history. A session that drives the twin and then the plant meets
+# its plant budget sooner. That errs toward a hold, and a session that crosses
+# from simulator to plant is the shape worth a human look anyway.
+physical_budget_disarmed(dimension) if {
+	dimension in {"physical_writes", "physical_envelope"}
+	input.target.environment == "dev"
 }
 
 exceeded_dimensions contains "money" if {
