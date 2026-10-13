@@ -284,7 +284,9 @@ magnitude:
 ```
 
 **Partial axes are fine.** Any axis you omit is filled with `reeflex-core`'s
-own restrictive default (`irreversible`/`systemic`/`physical`) — never a
+own restrictive default (`irreversible`/`systemic`/`outbound` —
+`CORE_AXIS_DEFAULTS` in `reeflex_mcp/mappings.py`, checked against core's
+`envelope.py` by `test_core_axis_defaults_match_core_envelope_py`) — never a
 different, gateway-invented guess. Point `reeflex-mcp.yaml`'s
 `mappings_dir:` (or `REEFLEX_MCP_MAPPINGS_DIR`) at the directory containing
 your file, or drop it into the package's own `reeflex_mcp/mappings/` in a
