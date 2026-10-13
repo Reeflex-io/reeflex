@@ -237,6 +237,13 @@ UNWIRED = {
     "bite-check-rfx211-rfx218.py":
         "one-shot: proved RFX-211/RFX-218 bite at the time. Kept as the record "
         "of that measurement, not as a standing check.",
+    "docs_envelopes_check.py":
+        "RFX-429: checks every verdict printed in docs/use-cases/ against "
+        "core's decision path. Not wired yet, on purpose: until RFX-427's "
+        "physical-impact rules are on main it exits 3 (PENDING-CORE) by "
+        "design, so a workflow step would red every docs PR; and the RFX-429 "
+        "brief kept docs.yml out of scope. Wire it into docs.yml (needs opa "
+        "and python3.12) once RFX-427 has merged.",
     "export-claude-conformance.py":
         "generator: writes the conformance corpus export. Its OUTPUT is what "
         "gets gated, not this script.",
