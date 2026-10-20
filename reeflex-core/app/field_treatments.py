@@ -231,13 +231,15 @@ TREATMENTS: dict[str, Treatment] = {
         conservative_default=_AXIS_DEFAULTS["externality"],
         unverifiable_assertion=True,
         approval_binding=BIND_HASH,
-        note="Read by R1 (internal) and by R5's external_sends budget "
-             "(outbound). 'physical' appears in no rule -- which is why it is "
-             "NOT the conservative default: RFX-129 measured that coercing "
-             "here to the one member no rule reads left external_sends "
-             "chargeable only by a caller that spelled 'outbound' exactly. "
-             "The conservative default is the member that restricts most, "
-             "and for this axis that is 'outbound'.",
+        note="Read by R1 (internal), by R5's external_sends budget "
+             "(outbound) and, since RFX-427, by R8-R11 and the physical "
+             "budgets (physical). 'physical' is still NOT the conservative "
+             "default: RFX-129 measured that coercing here to a member no "
+             "budget charged left external_sends chargeable only by a caller "
+             "that spelled 'outbound' exactly, and an envelope must be "
+             "physical only because its adapter declared it -- core never "
+             "guesses its way into R8-R11. The conservative default is "
+             "'outbound'.",
     ),
 
     # -- target.environment (SPEC §2) -- RFX-86 / PR #89 --------------------
@@ -343,6 +345,41 @@ TREATMENTS: dict[str, Treatment] = {
              "provenance.undeclared, and budgets.rego charges "
              "max(count, count_floor[blast_radius]) so a count can only raise "
              "the charge above its axis floor, never lower it. SPEC 4.1.2.",
+    ),
+
+    # -- the physical-impact fields -- RFX-427 ------------------------------
+    # Declared in the same commit that gives a rule its first read of them
+    # (R8 reads target.safety_function; R10a and the physical_envelope budget
+    # read magnitude.physical.envelope_fraction), the front-door way target.ref
+    # arrived. Both sit inside canonical_hash()'s {action, axes, magnitude,
+    # target} projection, so an approval binds them through check 5: a hold
+    # approved for a 0.4 step does not release a 0.9 step, and an approval of
+    # a non-safety tag does not release the same verb on a safety tag. Pinned
+    # by tests/test_physical_impact_rfx427.py at the decision level.
+    "target.safety_function": Treatment(
+        VALIDATE, "envelope.validate_and_fill_defaults (F10)",
+        unverifiable_assertion=True,
+        approval_binding=BIND_HASH,
+        note="JSON boolean or absent (= false); anything else is HTTP 400, "
+             "because a 'true' R8 cannot read would otherwise be read as false "
+             "and R8 would not fire. The ADAPTER's declaration that the target "
+             "is a safety function: a mapping that omits it on an interlock "
+             "turns R8's deny into whatever the other rules say. Core cannot "
+             "check it against the plant.",
+    ),
+    "magnitude.physical": Treatment(
+        VALIDATE, "envelope.validate_and_fill_defaults (F10) + "
+                  "envelope.is_envelope_fraction + ledger.append_entry",
+        unverifiable_assertion=True,
+        approval_binding=BIND_HASH,
+        note="An object if present; its envelope_fraction a finite number "
+             ">= 0 or HTTP 400 (bool, string, NaN, negative all refused). A "
+             "negative fraction would subtract from the session's "
+             "sum_physical_envelope; a quoted one read as absent would walk "
+             "past R10a. The rest of the object (unit, requested, range) is "
+             "informational and read by no rule. The fraction is the "
+             "adapter's arithmetic over the adapter's declared safe range: a "
+             "wrong range in a mapping is a wrong verdict.",
     ),
 
     # -- params: the money pair -- RFX-133, this PR -------------------------
@@ -466,10 +503,17 @@ TREATMENTS: dict[str, Treatment] = {
     ),
     "cumulative.count_by_verb": Treatment(
         CORE_COMPUTED, "ledger.compute_cumulative",
-        note="deletions; keyed on the CANONICAL verb",
+        note="deletions and physical_writes (RFX-427); keyed on the "
+             "CANONICAL verb, and the five physical verbs are canonical only "
+             "on a physical envelope",
     ),
     "cumulative.count_by_externality": Treatment(
         CORE_COMPUTED, "ledger.compute_cumulative", note="external_sends",
+    ),
+    "cumulative.sum_physical_envelope": Treatment(
+        CORE_COMPUTED, "ledger.compute_cumulative",
+        note="physical_envelope (RFX-427); math.fsum of the prior entries' "
+             "declared envelope_fraction",
     ),
     "cumulative.amount_by_currency": Treatment(
         CORE_COMPUTED, "ledger.compute_cumulative",

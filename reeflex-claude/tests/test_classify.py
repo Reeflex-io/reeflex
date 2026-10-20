@@ -34,8 +34,12 @@ def _c(tool_name: str, tool_input: dict) -> dict:
 # the policy pack, rather than mirroring it here. `parse, never import` applies
 # to .rego as much as to .py -- this is a regex over source text, no OPA
 # invocation and no dependency on core being installed.
+# `[^}]*?`, not `.*?`: the match must stay inside ONE rule body. With `.*?`
+# the `external_sends` clause that tests `!=` ran on past its own `}` into the
+# next dimension's body and read RFX-427's `physical_writes` comparison as an
+# external_sends value.
 _EXTERNAL_SENDS_BLOCK_RE = re.compile(
-    r'dimension\s*==\s*"external_sends".*?input\.axes\.externality\s*==\s*"([a-z_]+)"',
+    r'dimension\s*==\s*"external_sends"[^}]*?input\.axes\.externality\s*==\s*"([a-z_]+)"',
     re.DOTALL)
 
 

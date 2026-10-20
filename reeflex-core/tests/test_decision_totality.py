@@ -159,9 +159,39 @@ SPEC_VERDICTS = {"allow", "deny", "require_approval"}
 
 REVERSIBILITY = ["irreversible", "reversible"]
 BLAST_RADIUS = ["single", "broad", "systemic"]
-EXTERNALITY = ["internal", "outbound"]
 ENVIRONMENT = ["production", "staging"]
-VERB = ["read", "delete"]
+
+#: WHAT KIND OF ACTION: (externality, verb, target.safety_function,
+#: magnitude.physical.envelope_fraction), None = key absent.
+#:
+#: Until RFX-427 this was two independent dimensions, EXTERNALITY x VERB =
+#: {internal, outbound} x {read, delete}; those four points are the first four
+#: rows, unchanged. R8-R11 read four fields at once and only on
+#: `externality == "physical"`, so a full product (3 externalities x 7 verbs x
+#: 2 x 2) would multiply the grid by ~10 for points no rule distinguishes.
+#: Instead each physical row is chosen to make a SPECIFIC set of the new
+#: rules co-fire, so every pair among R8/R9/R10a/R11 -- and each of them with
+#: every older rule, via the other dimensions -- is on the grid:
+KIND = [
+    ("internal", "read", None, None),
+    ("internal", "delete", None, None),
+    ("outbound", "read", None, None),
+    ("outbound", "delete", None, None),
+    # -- physical (RFX-427) -----------------------------------------------
+    ("physical", "read", None, None),       # no physical rule
+    ("physical", "update", None, None),     # an unmapped tool's shape
+    ("physical", "update", True, None),     # R8 via a write verb
+    ("physical", "set", None, 0.5),         # physical_writes only
+    ("physical", "set", True, None),        # R8
+    ("physical", "set", None, 1.5),         # R10a
+    ("physical", "override", None, None),   # R8 unconditionally
+    ("physical", "mode", None, None),       # R11
+    ("physical", "mode", True, 1.5),        # R8 + R10a + R11
+    ("physical", "actuate", None, None),    # R9
+    ("physical", "actuate", True, 1.5),     # R9 + R10a (actuate is not R8's)
+    ("physical", "flash", None, None),      # R9
+    ("physical", "flash", True, None),      # R8 + R9
+]
 
 #: One ability per signal family in authority.rego (R7), plus a control that
 #: must match no family at all. Keep this in step with authority.rego's lists:
@@ -210,14 +240,17 @@ BUDGET = [
      {"amount_by_currency": {"EUR": 900000}}),                       # money > 5000
     ({}, {"count_by_externality": {"outbound": 201},
           "total_count": 201}),                                      # objects_touched > 200
+    ({}, {"count_by_verb": {"set": 11}, "total_count": 11}),         # physical_writes > 10
+    ({}, {"sum_physical_envelope": 1.01}),                           # physical_envelope > 1.0
 ]
 
-#: 2 * 3 * 2 * 2 * 2 * 5 * 3 * 5 * 4
-EXPECTED_GRID_SIZE = 14400
+#: 2 * 3 * 17 * 2 * 5 * 3 * 5 * 6
+EXPECTED_GRID_SIZE = 91800
 
 
-def _envelope(rev, blast, ext, env, verb, ability, ref, undeclared, budget, i):
+def _envelope(rev, blast, kind, env, ability, ref, undeclared, budget, i):
     """An Action Envelope in the shape the reference adapters emit."""
+    ext, verb, safety_function, envelope_fraction = kind
     params, cumulative = budget
     out = {
         "reeflex_version": "0.1",
@@ -247,6 +280,11 @@ def _envelope(rev, blast, ext, env, verb, ability, ref, undeclared, budget, i):
     # pack (`object.get(input, [...], default)`), so the empty case must be an
     # ABSENT key rather than an empty object -- otherwise the control points
     # stop being the shape a first call in a session actually has.
+    # Optional and absent on every IT envelope, so absent here too.
+    if safety_function is not None:
+        out["target"]["safety_function"] = safety_function
+    if envelope_fraction is not None:
+        out["magnitude"]["physical"] = {"envelope_fraction": envelope_fraction}
     if undeclared:
         out["provenance"] = {"undeclared": undeclared}
     if cumulative:
@@ -256,11 +294,11 @@ def _envelope(rev, blast, ext, env, verb, ability, ref, undeclared, budget, i):
 
 def _grid():
     return [
-        _envelope(rev, blast, ext, env, verb, ability, ref, undeclared, budget, i)
-        for i, (rev, blast, ext, env, verb, ability, ref, undeclared, budget)
+        _envelope(rev, blast, kind, env, ability, ref, undeclared, budget, i)
+        for i, (rev, blast, kind, env, ability, ref, undeclared, budget)
         in enumerate(
             itertools.product(
-                REVERSIBILITY, BLAST_RADIUS, EXTERNALITY, ENVIRONMENT, VERB,
+                REVERSIBILITY, BLAST_RADIUS, KIND, ENVIRONMENT,
                 ABILITY, REF, UNDECLARED, BUDGET
             )
         )

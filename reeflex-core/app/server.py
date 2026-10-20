@@ -121,8 +121,10 @@ the Art.14 audit line carry `decided_by_verified: false` / `principal_source:
 decision, and core warns on stderr.  The `decided_by` "{type}:{id}" shape is
 unchanged in every case.
 
-NON_RESOLVABLE_RULES: {"irreversible_systemic_prod"}.  Defensive guard:
-systemic is a terminal deny and should never be a hold, but we guard anyway.
+NON_RESOLVABLE_RULES: {"irreversible_systemic_prod",
+"safety_function_override_prod", "outside_operating_envelope_prod"}.
+Defensive guard: all three are terminal denies and should never be a hold,
+but we guard anyway.
 """
 
 from __future__ import annotations
@@ -145,7 +147,15 @@ _MAX_BODY_BYTES = int(os.environ.get("REEFLEX_MAX_BODY_BYTES", str(256 * 1024)))
 # Non-resolvable rules (design §R2/systemic — see module docstring)
 # ---------------------------------------------------------------------------
 
-NON_RESOLVABLE_RULES: frozenset[str] = frozenset({"irreversible_systemic_prod"})
+# RFX-427: R8 and R10a are terminal denies like R3 ("no approval overrides
+# it", SPEC §4.5). A deny raises no hold, so this is the same defensive guard
+# R3 has: if a future precedence change ever let either rule's id reach a hold
+# record, the resolve route still refuses it.
+NON_RESOLVABLE_RULES: frozenset[str] = frozenset({
+    "irreversible_systemic_prod",
+    "safety_function_override_prod",
+    "outside_operating_envelope_prod",
+})
 
 
 # ---------------------------------------------------------------------------

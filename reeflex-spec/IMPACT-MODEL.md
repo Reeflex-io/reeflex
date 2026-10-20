@@ -94,7 +94,8 @@ window (`reeflex-core/app/ledger.py`):
   "count_by_ability":     { "wordpress/delete-post": 47 },
   "count_by_externality": { "outbound": 12 },
   "amount_by_currency":   { "EUR": 480.00 },
-  "total_count": 61
+  "total_count": 61,
+  "sum_physical_envelope": 0.42
 }
 ```
 
@@ -104,6 +105,19 @@ the adapter — computes this. The adapter's only extra duty is to supply a stab
 "delete 500": fragmentation buys nothing. `count_by_externality` and
 `total_count` aggregate regardless of verb/ability — the basis for R5's
 configurable, cross-cutting budgets below.
+
+**Physical impact (SPEC §4.5, RFX-427).** `sum_physical_envelope` is the summed
+`magnitude.physical.envelope_fraction` of the session's prior actions — how far
+the session has already moved the plant, in units of the declared safe ranges
+(1.0 = one full-range sweep). It has the same window and the same
+prior-actions-only semantics as every other aggregate here; it is summed with
+`math.fsum`, so ten declared steps of 0.1 add up to exactly 1.0. Physical
+*writes* need no new aggregate: the five physical verbs (`set`, `mode`,
+`override`, `actuate`, `flash`) are canonical only on an envelope declared
+`externality: physical`, so `count_by_verb` for those five already counts
+physical writes and nothing else. This is how "40 setpoint steps of 3 %, each
+inside its range, together a full sweep" trips a budget that no single step
+does.
 
 > **Deliberate strictness:** once a session has exceeded a cumulative
 > budget, the base policy holds *every* subsequent action from that
@@ -132,12 +146,31 @@ r3_deny if {
 }
 
 # Any configured cumulative dimension (money / deletions / external_sends /
-# objects_touched — budgets.rego) exceeded its budget → require approval.
+# objects_touched / physical_writes / physical_envelope — budgets.rego)
+# exceeded its budget → require approval.
 budget_require_approval if {
     count(exceeded_dimensions) > 0
     not input.approval.present
 }
+
+# R8: a physical override of, or write to, a safety function, in production
+# or staging → deny (even with approval).
+r8_safety_function_override if {
+    input.axes.externality == "physical"
+    input.target.environment in {"production", "staging"}
+    input.target.safety_function == true
+    input.action.verb in {"set", "update", "delete", "flash", "mode"}
+}
 ```
+
+For physical impact the policy reads four more inputs, all declared by the
+adapter: the verb (one of the five physical verbs), `target.safety_function`,
+`magnitude.physical.envelope_fraction`, and `axes.externality == "physical"`,
+which arms every one of R8–R11 and which core never guesses (its default for a
+missing externality is `outbound`). R8 and R10a deny in production and staging
+(staging, for a plant, is a HIL rig with real actuators); R9 and R11 hold in
+production; none of them arms in `dev`, the digital twin. The full table and
+the precedence are SPEC §4.5.
 
 Same envelope + same cumulative → same decision, every time. No LLM in this path.
 
@@ -195,6 +228,11 @@ No industry standard exists yet for governing agent *actions* — the category i
 | **R3** · irreversible + systemic, in production → *deny* | catastrophic actions are refused, not waved through | safety engineering (aviation, nuclear) — past a severity line you re-scope, you don't approve |
 | **R4** · default → *allow* | govern by exception, not by blanket block | least astonishment / default-permit |
 | **R5** · configurable cumulative budgets (deletions / money / external\_sends / objects\_touched) → *require approval* | split-up actions are caught together, the way banks have watched structured transactions for 50 years — generalized from one hardcoded verb (deletions) to budgets a policy author writes as data, aggregated across *heterogeneous* verbs/abilities, with `objects_touched` weighing every action so no small-tier action is exempt from accumulating | fraud-detection velocity checks (structuring / "smurfing") — extended past a payments-only, zero-weighted-small-tier cumulative check |
+| **R8** · physical override of, or write to, a safety function, in production or staging → *deny* | an agent's override of, or write to, a target its adapter declared a safety function is refused, approved or not | functional safety (IEC 61508, ISO 13849) — a safety function is changed through the plant's own management-of-change procedure, not through the control channel it protects |
+| **R10a** · physical request outside the declared safe range, in production or staging → *deny* | a setpoint past the operating envelope is refused | operating envelopes / safe operating limits in process safety |
+| **R9** · irreversible physical actuation or firmware / logic load, in production → *require approval* | dosing, cutting, a PLC program download waits for a human | permit-to-work and management of change for control-system changes |
+| **R11** · operating-mode change on a live plant → *require approval* | auto↔manual, bypass, arm/disarm, start/stop a unit waits for a human | mode-change procedures and shift handover in plant operations |
+| **R10b** · physical budgets (`physical_writes`, `physical_envelope`) → *require approval* | many small in-range steps that add up to a full sweep reach a human | the same structuring logic as R5, measured in fractions of the safe range |
 | **The three axes** · reversibility × blast radius × externality | severity × scope × reversibility, scored on every action | classic risk assessment — and the same axes make **egress control** (externality) and **transaction thresholds** (magnitude) expressible as ready extension packs |
 
 New rules for a new domain; old, proven principles underneath.
@@ -208,6 +246,13 @@ Honesty over promises. The base policy governs structural, destructive impact �
 - **Exfiltration through reads.** A read is read / reversible / internal, so R1 alone would allow any volume of it — but every read still counts toward `objects_touched` (R5), so a mass-read run now hits a session budget rather than passing unbounded; a *dedicated* mass-read guard tuned to the actual sensitivity of reads is still a natural data-protection pack candidate, not part of the base policy.
 - **Semantic damage.** One product set to the wrong price is single / reversible → allowed. Content *correctness* is not an impact axis.
 - **Slow-burn abuse across sessions.** The cumulative ledger is per-session over a rolling window; rotating sessions dilutes it.
+
+**Physical / human-safety impact (R8–R11, RFX-427).** What this does NOT claim:
+
+- Reeflex is **not a safety system** and must never be described as one. Safety functions are SIL-rated hardware / safety-PLC logic (IEC 61508, ISO 13849). Reeflex is a defence-in-depth layer **above** the safety PLC, at the agent boundary: it decides whether the agent may **issue** the command. The SIS stays the last line.
+- **Supervisory level only.** Setpoints, modes, recipes, firmware, missions — not the control loop (milliseconds).
+- **Verdict ≠ outcome.** Reeflex records the decision and the *declared* magnitude; it does not read sensors. Attest says so, as it does for IT evidence (received vs occurred).
+- `envelope_fraction` and `safety_function` are the **adapter's** declarations. A wrong safe range in a mapping is a wrong verdict — mapping files are controlled documents, and the docs say so.
 
 The axes are universal; the base rules are a strong start, not a ceiling. The policy is plain Rego — read it in a minute, extend it in an afternoon.
 
