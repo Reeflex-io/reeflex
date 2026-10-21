@@ -162,6 +162,7 @@ SUITE_ROOTS = [
     "reeflex-claude/policy",
     "reeflex-claude/tests",
     "reeflex-litellm/tests",
+    "integrations/openhands/tests",
     "reeflex-mcp/tests",
     "reeflex-holds/tests",
     "n8n-nodes-reeflex/test",
@@ -745,14 +746,21 @@ class Gate:
                 # classifier the repo does not contain.
                 # tests/test_classifier_vintage.py is the tripwire under this
                 # line: it goes red if the stale wheel ever wins the resolve.
-                ("pytest-litellm", "reeflex-litellm", ["reeflex-claude"])]
+                ("pytest-litellm", "reeflex-litellm", ["reeflex-claude"]),
+                # RFX-449: reeflex-openhands takes the ONE classifier from
+                # reeflex-claude for the same reason as reeflex-litellm, so it
+                # is installed from the checkout here too. The `[tools]` extra
+                # is installed so the fixture round-trip test validates every
+                # recorded event back into the SDK's real action classes; without
+                # it that test is an importorskip, i.e. a silent skip.
+                ("pytest-openhands", "integrations/openhands[tools]", ["reeflex-claude"])]
         # One venv PER package, not one shared venv (RFX-26): reeflex-mcp pins
         # mcp>=1.2,<2 while reeflex-holds (ported to MCPServer) now requires
         # mcp>=2 -- installing both editable into a single venv is an
         # unsatisfiable pip resolve, not a real conflict in the tree (each
         # package's own dependency contract is internally consistent).
         for key, pkg, local_deps in keys:
-            venv_path, err = self.make_venv("venv-suite-%s" % pkg)
+            venv_path, err = self.make_venv("venv-suite-%s" % pkg.split("[", 1)[0].replace("/", "-"))
             if not venv_path:
                 self.component(key, "FAIL", "suite venv creation failed: %s" % err)
                 continue
@@ -771,13 +779,16 @@ class Gate:
             for dep in local_deps:
                 install += ["-e", os.path.join(REPO_ROOT, dep)]
             install += ["-e", os.path.join(REPO_ROOT, pkg)]
+            # `pkg` may carry an extras suffix ("dir[extra]"): pip takes it as
+            # written; the venv name and the cwd use the bare directory.
+            pkg_dir = pkg.split("[", 1)[0]
             code, out = self.run_cmd(install)
             if code != 0:
                 self.show(out, full=True)
                 self.component(key, "FAIL", "suite venv install failed")
                 continue
             code, out = self.run_cmd([py, "-m", "pytest", "tests/", "-q"],
-                                     cwd=os.path.join(REPO_ROOT, pkg))
+                                     cwd=os.path.join(REPO_ROOT, pkg_dir))
             ok, detail = parse_pytest(code, out)
             self.show(out, full=not ok, tail=6)
             self.component(key, "PASS" if ok else "FAIL", detail)
@@ -1402,7 +1413,7 @@ class Gate:
             ("rego-core       opa test reeflex-core/policy/", lambda: self.run_rego("rego-core", "reeflex-core/policy")),
             ("rego-claude     opa test reeflex-claude/policy/", lambda: self.run_rego("rego-claude", "reeflex-claude/policy")),
             ("unittest-core   full discovery over reeflex-core/tests", self.run_core_unittest),
-            ("pytest suites   reeflex-mcp + reeflex-holds + reeflex-claude + reeflex-litellm", self.run_pytest_suites),
+            ("pytest suites   reeflex-mcp + reeflex-holds + reeflex-claude + reeflex-litellm + reeflex-openhands", self.run_pytest_suites),
             ("npm-n8n         n8n-nodes-reeflex npm ci + npm test", self.run_n8n),
             ("entrypoints     build wheels from tree + invoke every entry point", self.run_entrypoints),
             ("pypi-smoke      fresh install of the PUBLISHED packages", self.run_pypi_smoke),

@@ -180,6 +180,7 @@ CENSUS_ROOTS = [
     ("reeflex-holds/tests", "pytest"),
     ("reeflex-claude/tests", "pytest"),
     ("reeflex-litellm/tests", "pytest"),
+    ("integrations/openhands/tests", "pytest"),
 ]
 
 # (relative path, test name or "" for a whole file) -> "reason (TICKET)"
