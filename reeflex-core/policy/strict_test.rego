@@ -181,3 +181,17 @@ test_off_guessed_reversibility_on_a_single_target_still_allows if {
 	d := policy.decision with input as x
 	d.rule == "reeflex.policy/default_allow"
 }
+
+# R0's R2s clause fires only when R2s is the hold that would be reported. On
+# an envelope R7 already holds, a guessed reversibility must not rename R7's
+# hold to R0 when the preset is switched on (R0 does not read R7).
+test_on_r0_does_not_rename_a_hold_r2s_would_not_report if {
+	x := object.union(base, {
+		"action": {"ability": "iam/delete-role"},
+		"provenance": {"undeclared": ["axes.reversibility"]},
+	})
+	off_rule := policy.decision.rule with input as x
+	on_rule := policy.decision.rule with input as x with policy.strict as on
+	off_rule == "reeflex.policy/authority_change_prod"
+	on_rule == off_rule
+}

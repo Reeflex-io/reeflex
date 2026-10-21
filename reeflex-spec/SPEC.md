@@ -725,6 +725,23 @@ projection (`action`, `axes`, `magnitude`, `target`, §5.1). An approval of a
 `safety_function: false` does not release the same verb on one declared
 `true`.
 
+## 4.6 The strict preset — R2s (RFX-433)
+
+Policy data, not an envelope field: `strict.hold_every_irreversible_in_production`
+in the base pack's `strict.rego`, default `false`. Only the boolean `true`
+arms it.
+
+| id | rule id | fires when | verdict |
+|---|---|---|---|
+| **R2s** | `irreversible_prod_strict` | preset on AND `reversibility == irreversible` AND environment == production — any blast radius, externality and verb | `require_approval` (resolvable) |
+
+**Precedence.** R2s is last among the holds: `… > R7 > R2s > R1 > R4`. It only
+ever turns an allow into a hold — every deny keeps its verdict and every hold
+another rule raises keeps its rule id. R0 (§4.0) reports an R2s match whose
+`reversibility` or `target.environment` core guessed, and only when R2s is the
+hold that would otherwise be reported. With the preset off, no decision
+changes.
+
 ---
 
 ## 5. The Decision
