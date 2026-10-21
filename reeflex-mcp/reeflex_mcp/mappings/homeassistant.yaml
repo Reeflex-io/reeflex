@@ -101,10 +101,16 @@ tools:
 
   intent__HassSetPosition:
     # position: Coerce(int), Percentage() -- covers and valves only.
-    verb: set
+    # Top level is `actuate`, not `set`: moving a garage door or a valve to a
+    # position opens or closes it, the same effect HassTurnOn/Off has, and
+    # R9 reads only `actuate`/`flash`. As `set`, "Garage, position 100" was
+    # ALLOWED in production on core e0f06f0 while "HassTurnOff Garage" was
+    # held (dev-2 round 034). A blind keeps `set`.
+    verb: actuate
     axes: { reversibility: irreversible, blast_radius: scoped, externality: physical }
     cases:
       - when: *cover_soft
+        verb: set
         axes: { reversibility: recoverable }
     magnitude:
       physical:

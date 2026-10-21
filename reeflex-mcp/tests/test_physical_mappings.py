@@ -454,8 +454,8 @@ _HA_CASES = [
     ("intent__HassTurnOff", {"name": "Lamp", "domain": "light"}, "mode", "recoverable", "scoped", "physical", None, None, None),
     # position 40 of [0, 100]: worst case max(40, 60)/100
     ("intent__HassSetPosition", {"name": "Bedroom", "position": 40, "domain": "cover", "device_class": "blind"}, "set", "recoverable", "scoped", "physical", None, 0.6, "worst_case"),
-    ("intent__HassSetPosition", {"name": "Garage", "position": 100}, "set", "irreversible", "scoped", "physical", None, 1.0, "worst_case"),
-    ("intent__HassSetPosition", {"name": "Garage", "position": 150}, "set", "irreversible", "scoped", "physical", None, 1.5, "outside_range"),
+    ("intent__HassSetPosition", {"name": "Garage", "position": 100}, "actuate", "irreversible", "scoped", "physical", None, 1.0, "worst_case"),
+    ("intent__HassSetPosition", {"name": "Garage", "position": 150}, "actuate", "irreversible", "scoped", "physical", None, 1.5, "outside_range"),
     ("intent__HassStopMoving", {"name": "Garage"}, "actuate", "recoverable", "scoped", "physical", None, None, None),
     ("intent__HassCancelAllTimers", {}, "update", "recoverable", "scoped", "internal", None, None, None),
     # 21 degC of [7, 35]: max(14, 14)/28

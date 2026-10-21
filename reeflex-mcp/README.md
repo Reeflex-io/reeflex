@@ -170,8 +170,10 @@ would have coerced it anyway if you had sent nothing at all.
 
 The `externality` entry was `physical` until RFX-129. Because this gateway
 FILLS the axis before sending, core saw it as declared and never applied its
-own coercion — and `physical` is read by no rule in the base pack, so a partial
-mapping that omitted `externality` was charged against nothing. If you are
+own coercion — and at the time no rule in the base pack read `physical`, so a
+partial mapping that omitted `externality` was charged against nothing. Since
+RFX-427 rules R8–R11 do read `physical`; a fill of `physical` would now arm them
+for every tool whose mapping left the axis out. If you are
 authoring mappings, specify `externality` explicitly wherever you know it: the
 fill is a floor, not a measurement of your tool.
 
