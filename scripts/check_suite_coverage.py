@@ -196,6 +196,10 @@ WIRED = {
     "check_published_content.py": "gate.py",
     "check_suite_coverage.py": "gate.py",
     "check_test_census.py": "gate.py",
+    # RFX-429: docs.yml's `verdicts` job. Declared unwired until RFX-427 (#243)
+    # put the physical-impact rules on main; wired by the round that rebased
+    # #242 onto it.
+    "docs_envelopes_check.py": ".github/workflows/docs.yml",
     # RFX-134 (#200), landed under this branch. Three files in the tree name
     # this script; only gate.yml does so in an executed `run:` block (lines
     # 111 and 113). ci.yml and ci-reeflex-mcp.yml name it in a COMMENT
