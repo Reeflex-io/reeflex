@@ -6,7 +6,7 @@ Documentation for the open-source `reeflex-core` engine and its reference adapte
 
 ## Docs
 - [Getting started](https://docs.reeflex.io/getting-started/): install an adapter, try a real decision in 30 seconds, and the observe → enforce playbook
-- [Concepts](https://docs.reeflex.io/concepts/): the Action Envelope, the base policy pack (R0–R7 plus the physical rules R8–R11, thirteen rule ids), allow/hold/deny, the fail-closed invariant, sessions, HIL/HOTL/AIL
+- [Concepts](https://docs.reeflex.io/concepts/): the Action Envelope, the base policy pack (R0–R7 plus the physical rules R8–R11 and the opt-in strict preset R2s, fourteen rule ids), allow/hold/deny, the fail-closed invariant, sessions, HIL/HOTL/AIL
 - [Architecture](https://docs.reeflex.io/architecture/): the seams, guarantees, the decision round-trip, and [how a verdict is reached](https://docs.reeflex.io/architecture/diagrams/#how-a-verdict-is-reached) — every rule by its id, the production gating, and the precedence order
 - [Adapters](https://docs.reeflex.io/adapters/): Claude Code, WordPress, n8n, and the MCP gateway
 - [Reference — REST API](https://docs.reeflex.io/reference/rest-api/): POST /v1/decide, the holds API, auth, and errors

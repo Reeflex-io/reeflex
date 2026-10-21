@@ -17,7 +17,7 @@ package reeflex.policy
 #                          production or staging, environment declared
 #   deny              R10a physical request outside its declared safe range,
 #                          production or staging, environment declared
-#   require_approval  R0   R2/R3/R6/R8/R9/R10a/R11 matched on an input core
+#   require_approval  R0   R2/R3/R6/R8/R9/R10a/R11/R2s matched on an input core
 #                          GUESSED (see the R0 block)
 #   require_approval  R2   irreversible + broad + production
 #   require_approval  R9   physical irreversible actuate/flash in production
@@ -26,6 +26,8 @@ package reeflex.policy
 #                          physical_envelope)
 #   require_approval  R6   irreversible change to a declared production asset
 #   require_approval  R7   authority / credential / executable change in prod
+#   require_approval  R2s  strict preset (strict.rego, OFF by default):
+#                          irreversible + production, any blast radius
 #   allow             R1   read-only internal
 #   allow             R4   default
 #
@@ -242,6 +244,20 @@ r0_unclassified if {
 	r11_mode_change_live
 }
 
+# R0 AND THE STRICT PRESET (RFX-433). R2s reads exactly the two fields R6
+# reads, so it takes R6's input set: a strict hold that rests on a guessed
+# reversibility or environment is a coverage gap, not the preset working.
+#
+# It reads `r2s_would_hold`, not the bare predicate, and that is measured, not
+# taste: with the bare predicate, switching the preset ON renamed 1,206 grid
+# points that R5, R7 and R11 ALREADY held to `unclassified_action` -- R0 fired
+# on a rule that was never going to be the one reported. R2s may only ever
+# turn an ALLOW into a hold; so may its R0 clause.
+r0_unclassified if {
+	count(r6_guessed_inputs) > 0
+	r2s_would_hold
+}
+
 # R1: read-only internal action.
 r1_allow if {
 	input.action.verb == "read"
@@ -293,6 +309,30 @@ r6_require_approval if {
 	input.axes.reversibility == "irreversible"
 	input.target.environment == "production"
 	protected_target
+}
+
+# R2s: the STRICT PRESET (RFX-433, strict.rego). Off by default. When on, an
+# irreversible production action is held at ANY blast radius, externality and
+# verb. `== true` and not truthiness: a value that is not the boolean true
+# (a string "true", a missing key) leaves the preset off, which is the
+# shipped behaviour, not a new one.
+r2s_strict_irreversible_prod if {
+	object.get(strict, "hold_every_irreversible_in_production", false) == true
+	input.axes.reversibility == "irreversible"
+	input.target.environment == "production"
+}
+
+# R2s matched and no other HOLD does, so R2s is the hold that would be
+# reported. Denies and R0 are excluded at the decision body, not here: R0 reads
+# this predicate, and R3/R8/R10a are folded through r0_unclassified.
+r2s_would_hold if {
+	r2s_strict_irreversible_prod
+	not r2_require_approval
+	not budget_require_approval
+	not r6_require_approval
+	not r7_authority_change
+	not r9_physical_irreversible
+	not r11_mode_change_live
 }
 
 # ===========================================================================
@@ -605,6 +645,31 @@ decision := {
 	not r11_mode_change_live
 }
 
+# require_approval (R2s) — the STRICT PRESET (strict.rego, RFX-433): with
+# `strict.hold_every_irreversible_in_production` true, an irreversible action
+# in production is held at any blast radius. RESOLVABLE.
+#
+# R2s IS LAST AMONG THE HOLDS, FOR R6's REASON. The switch's job is to close
+# the ALLOW that R2 leaves open below `broad`. Every envelope R2s matches that
+# a rule above already holds keeps that rule's id: R2 when broad, R6 when the
+# operator declared the asset, R5 when a budget tripped, R9/R11/R7 for their
+# narrower reasons. Each of those says more than "the preset is on". So R2s
+# CAN ONLY EVER CONVERT AN ALLOW INTO A HOLD, turning the switch on renames
+# no verdict, and the set of envelopes whose VERDICT changes is the same
+# wherever among the holds it sits (they are all require_approval). Measured
+# in tests/test_strict_preset_rfx433.py. R3/R8/R10a deny and R0 outrank it,
+# as they outrank every hold.
+decision := {
+	"decision": "require_approval",
+	"reason": "strict preset: every irreversible action in production requires human approval, at any blast radius",
+	"rule": "reeflex.policy/irreversible_prod_strict",
+} if {
+	r2s_would_hold
+	not r3_deny
+	not r0_unclassified
+	not physical_deny
+}
+
 # allow (R1) — read-only internal, when no higher-risk rule applies.
 #
 # R6 OUTRANKS R1 ON PURPOSE.  A `read` declared `irreversible` on a protected
@@ -632,6 +697,7 @@ decision := {
 	not physical_deny
 	not r9_physical_irreversible
 	not r11_mode_change_live
+	not r2s_strict_irreversible_prod
 }
 
 # allow (R4) — default: nothing high-risk matched and R1 did not apply.
@@ -653,4 +719,5 @@ decision := {
 	not physical_deny
 	not r9_physical_irreversible
 	not r11_mode_change_live
+	not r2s_strict_irreversible_prod
 }
