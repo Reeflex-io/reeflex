@@ -40,9 +40,9 @@ WHAT IT CANNOT SEE, said out loud:
     for THAT raw action is the adapter's own conformance suite's question;
   * the approval path (approval.present is forced false by core, as in prod).
 
-PENDING-CORE. The physical-impact rules (R8-R11, the physical budgets;
-PHYSICAL-IMPACT-SPEC draft 2026-10-13) are being added to core in parallel. A
-block whose envelope uses any of that spec's additions -- externality
+PENDING-CORE. The physical-impact rules (R8-R11, the physical budgets) reached
+main with RFX-427 (#243, e0f06f0); an older core tree does not carry them. A
+block whose envelope uses any of those additions -- externality
 `physical`, a verb in {set, mode, override, actuate, flash},
 `target.safety_function`, `magnitude.physical` -- is reported `PENDING-CORE`
 when the core tree does not carry them yet, with what that tree answers today
