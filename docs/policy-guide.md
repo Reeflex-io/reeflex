@@ -363,8 +363,8 @@ strict := {
 ```
 
 With the strict preset on, every action your adapters declare irreversible in
-production waits for a human — at any blast radius, externality and verb —
-under its own rule id, `reeflex.policy/irreversible_prod_strict` (R2s), so an
+production waits for a human, unless a deny rule refuses it outright — at any
+blast radius, externality and verb. The hold is reported under its own rule id, `reeflex.policy/irreversible_prod_strict` (R2s), so an
 audit row says the preset asked and not R2. It only ever turns an allow into a
 hold: R3, R8 and R10a still deny, and an action another rule already holds
 keeps that rule's id (R2s is last among the holds). If core had to guess the
