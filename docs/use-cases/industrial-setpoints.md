@@ -165,7 +165,12 @@ the safe range — it is what R10a and the envelope budget read.
 
 A tool the mapping does not name is not passed through as harmless:
 reeflex-mcp gives it the most restrictive axes (see the
-[MCP tool-using agent](mcp-tool-agent.md) page).
+[MCP tool-using agent](mcp-tool-agent.md) page). That floor's externality is
+`outbound`, not `physical`, so an unmapped tool is decided by R3 and the IT
+rules and never reaches R8–R11 or the physical budgets. In `production` R3
+refuses it; in `staging` — a rig with real actuators — no rule does, and it is
+allowed. Map every write tool on an OT upstream; a per-upstream physical floor
+is tracked as RFX-431.
 
 ## What Reeflex does NOT do here
 

@@ -93,6 +93,22 @@ physical action beyond that one value.
 | `magnitude.physical.envelope_fraction` | The size of the requested change relative to the declared safe operating range, `>= 0`. `1.0` is a full-range step; **above `1.0` means the requested value lies outside the declared safe range**. Read by R10a and summed per session by the `physical_envelope` budget. How it is computed from a raw request is the adapter mapping's job — see the [MCP gateway](../mcp-gateway.md). |
 | `magnitude.physical.unit`, `.requested`, `.range` | Informational. Carried into the decision record so a reviewer can see what the fraction was computed from; no rule reads them. |
 
+Core reads the number; it does not compute it. With the declared safe range
+`[min, max]` and `span = max − min`, the adapter computes it as follows (the
+rules in dev-2's RFX-428 mapping work, which correct the first draft's single
+`abs(requested − current) / span`):
+
+| Case | `envelope_fraction` |
+|---|---|
+| `requested` inside the range, `current` known | `abs(requested − current) / span`, capped at `1.0` — a move back into range from a drifted plant is not read as out of range |
+| `requested` inside the range, `current` not supplied | the worst-case step, `max(requested − min, max − requested) / span` — never below the true step. A midpoint guess would read a min→max move as `0.5` |
+| `requested` outside the range | `1.0 + distance_outside / span` — always above `1.0`, whatever `current` is |
+
+Example, range `[20, 90]`: from 85 to 92 is `1.0 + 2/70 ≈ 1.03` (R10a), not
+`abs(92 − 85) / 70 = 0.1`. The worst-case default has a cost: every write without
+`current` reads at least `0.5`, so the default `physical_envelope` budget of
+`1.0` holds the third such write in a session.
+
 | Verb | Meaning | Typical raw actions |
 |---|---|---|
 | `set` | write a setpoint / parameter / recipe value | OPC-UA write, Modbus write register, `set_temperature`, `write_tag` |

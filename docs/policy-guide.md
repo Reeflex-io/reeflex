@@ -85,9 +85,15 @@ read are in the [Action Envelope reference](reference/action-envelope.md#physica
 | **R11** | `reeflex.policy/mode_change_live` | environment is `production`, verb is `mode` | `require_approval` |
 | **R10b** | `reeflex.policy/cumulative_budget` (R5's mechanism; the reason names the dimension) | the session's `physical_writes` or `physical_envelope` budget is exceeded | `require_approval` |
 
-**Precedence**, which stays total — exactly one decision for any input:
-`R3 (deny) ≥ R8 (deny) ≥ R10a (deny) > R2 > R9 > R11 > R5 (incl. R10b) > R1 > R4`.
-R3 already denies `irreversible + systemic + production` regardless of
+**Precedence**, which stays total — exactly one decision for any input. Read
+top to bottom; each line fires only if no line above it did (the header of
+`reeflex.rego`):
+
+`R3 (deny) → R8 (deny) → R10a (deny) → R0 → R2 → R9 → R11 → R5 (incl. R10b) → R6 → R7 → R1 → R4`
+
+R0 sits below the three denies: when the environment R8 or R10a reads was
+declared, an undeclared `reversibility` does not turn their deny into an R0
+hold. R3 already denies `irreversible + systemic + production` regardless of
 externality, so a systemic physical action is reported as R3, not R9. In `dev`
 (a digital twin or simulator) none of R8–R11 arm, and neither physical budget
 does. The ledger is still per session: a twin write is recorded, and counts
