@@ -59,7 +59,7 @@ record either way. The `/v1/decide` sequence and the hold lifecycle are in
   `blast_radius`, `externality`) + magnitude + a stable `session_id`. The
   portable contract between any adapter and the engine.
   ([SPEC §2](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-spec/SPEC.md))
-- **The base policy pack (R0–R11, thirteen rule ids)** — deterministic allow / hold
+- **The base policy pack (R0–R11 plus the opt-in strict preset R2s, fourteen rule ids)** — deterministic allow / hold
   / deny with total precedence (`deny > require_approval > allow`). **R2, R3,
   R6 and R7 are gated on `production`**: in `dev` or `staging`, only R1, R4 and
   R5 apply to an action that is not declared `physical`. The physical rules

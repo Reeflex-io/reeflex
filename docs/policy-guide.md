@@ -28,8 +28,10 @@ Nothing in this guide requires touching `reeflex-core`'s Python. The engine
 
 Every request to `POST /v1/decide` carries an Action Envelope (3 risk axes +
 verb + target + magnitude + cumulative state). The base policy evaluates twelve
-rules — **R0–R11, thirteen rule ids** (R5 reports under two; R10 is split into
-R10a, a deny, and R10b, two budgets reported under R5's id) — against those fields
+rules — **R0–R11, plus the opt-in strict preset R2s: fourteen rule ids** (R5
+reports under two; R10 is split into R10a, a deny, and R10b, two budgets
+reported under R5's id; R2s is off unless you switch it on, see
+[Which default is yours](#2c-which-default-is-yours-the-strict-preset)) — against those fields
 and returns exactly one `decision` object: `allow`, `deny`, or
 `require_approval`. Precedence is explicit and total —
 **deny > require_approval > allow** — so for any input exactly one Rego block
@@ -339,6 +341,54 @@ Both lists and the switch are covered by
 copies the policy dir, flips the switch, and shows one unchanged envelope
 answering `allow` under one posture and `require_approval` under the other,
 with zero Python changes.
+
+---
+
+## 2c. Which default is yours — the strict preset
+
+The base pack holds an irreversible production action when it is broad (R2),
+denies it when it is systemic (R3), and holds it on a path you declared
+production state (R6). An irreversible production action on **one** entity or
+a bounded set that matches none of those is **allowed**. For a **coding
+agent** that is the right default: deleting a file in a production checkout
+is everyday work, and a gate that asks every time gets switched off. For a
+**regulated or OT** deployment — a hospital, a plant, a bank's ledger — it is
+the wrong one, and the fix is one line of data in
+`reeflex-core/policy/strict.rego`:
+
+```rego
+strict := {
+	"hold_every_irreversible_in_production": true,
+}
+```
+
+With the strict preset on, every action your adapters declare irreversible in
+production waits for a human, unless a deny rule refuses it outright — at any
+blast radius, externality and verb. The hold is reported under its own rule id, `reeflex.policy/irreversible_prod_strict` (R2s), so an
+audit row says the preset asked and not R2. It only ever turns an allow into a
+hold: R3, R8 and R10a still deny, and an action another rule already holds
+keeps that rule's id (R2s is last among the holds). If core had to guess the
+reversibility or the environment, the hold is reported as R0
+`unclassified_action` instead. What it cannot see: it reads the reversibility
+and environment your adapter **declared**, so an adapter that prices an
+irreversible action `recoverable`, or a production target `staging`, is not
+held by it. Only the boolean `true` switches it on.
+
+**Which default is yours:** coding agents — leave it off (the shipped
+default). Regulated / OT — turn it on.
+
+How it differs from R6's `default_protected := true` posture (LEVEL 1b): that
+posture also holds every irreversible production action, but it exempts refs
+you list in `ephemeral_assets` and reports the hold as "declared production
+asset". The strict preset has no exemptions and its own reason. Both can be
+on; R6 then reports first.
+
+Covered by `reeflex-core/policy/strict_test.rego` (both settings, every
+precedence neighbour) and, through core, by
+`reeflex-core/tests/test_strict_preset_rfx433.py`, which copies the policy
+dir, flips the line above, and drives `app.decide.process`.
+`tests/test_decision_totality.py` checks the ladder stays total with the
+switch on.
 
 ---
 
@@ -737,10 +787,10 @@ needs):
 | Field | Type | Used by |
 |---|---|---|
 | `input.action.verb` | string (`read`/`create`/`update`/`delete`/`execute`/`transact`/`emit`) | R1, R7 |
-| `input.axes.reversibility` | `reversible`/`recoverable`/`irreversible` | R2, R3, R6 |
+| `input.axes.reversibility` | `reversible`/`recoverable`/`irreversible` | R2, R3, R6, R2s |
 | `input.axes.blast_radius` | `single`/`scoped`/`broad`/`systemic` | R2, R3 |
 | `input.axes.externality` | `internal`/`outbound`/`physical` | R1 |
-| `input.target.environment` | `production`/`staging`/`dev` | R2, R3, R6 |
+| `input.target.environment` | `production`/`staging`/`dev` | R2, R3, R6, R2s |
 | `input.target.ref` | string or `null`; canonicalized by core (SPEC §4.3) | R6 |
 | `input.magnitude.count` | integer | R5, R7 |
 | `input.axes.externality` | `internal`/`outbound`/`physical` | R1 (`internal`), R5's `external_sends` budget (`outbound`), R8–R11 and the `physical_writes` / `physical_envelope` budgets (`physical`, SPEC §4.5) |
