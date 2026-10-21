@@ -170,14 +170,99 @@ would have coerced it anyway if you had sent nothing at all.
 
 The `externality` entry was `physical` until RFX-129. Because this gateway
 FILLS the axis before sending, core saw it as declared and never applied its
-own coercion — and `physical` is read by no rule in the base pack, so a partial
-mapping that omitted `externality` was charged against nothing. If you are
+own coercion — and at the time no rule in the base pack read `physical`, so a
+partial mapping that omitted `externality` was charged against nothing. Since
+RFX-427 rules R8–R11 do read `physical`; a fill of `physical` would now arm them
+for every tool whose mapping left the axis out. If you are
 authoring mappings, specify `externality` explicitly wherever you know it: the
 fill is a floor, not a measurement of your tool.
 
 Point `reeflex-mcp.yaml`'s `mappings_dir:` (or `REEFLEX_MCP_MAPPINGS_DIR`) at
 the directory containing your file, or drop it directly into this package's
 own `reeflex_mcp/mappings/` if you're running from a source checkout.
+
+### Physical impact (RFX-428)
+
+Two more packs ship for tools that move physical equipment, written against
+`PHYSICAL-IMPACT-SPEC` (draft 2026-10-13):
+
+| File | Targets (real server, commit read) | Covers |
+|---|---|---|
+| `opcua.yaml` | `IndustriAgents/OPCUA-MCP` @ `7e6cc37`, all 15 tools of its `contract/tools.json` | setpoint write (`set`), method call (`actuate`, or `override` on a safety node), alarm shelve (`override`, safety function). **The node-id patterns and the one example range are a convention you replace, not a discovery.** |
+| `homeassistant.yaml` | Home Assistant's `mcp_server` integration, `home-assistant/core` @ `de7e90f` (tool names `intent__HassTurnOn` ...) | thermostat (`set`, range 7–35 °C), lights (`mode`), lock / cover / valve (`actuate`). Lock and garage door are the same tool as a lamp; only the `domain` argument tells them apart. |
+
+> **Do not use these packs against a core that predates the physical-impact
+> rules (R8–R11, `physical_writes`, `physical_envelope`).** Measured against
+> core v0.2.3 in `production`: a safety-tag write, an interlock reset, an alarm
+> shelve, an out-of-range setpoint, a garage door close and a 70 °C
+> thermostat request were each **denied** unmapped (the floor, R3) and
+> **allowed** with the pack. The packs declare what the new rules read; a
+> core without those rules reads nothing from them.
+
+Each header says what was verified, what was not, and why each reversibility
+was chosen. The schema additions, all optional (a mapping that uses none of
+them classifies as before):
+
+```yaml
+tools:
+  write_opcua_nodes:
+    verb: set                      # + mode | override | actuate | flash
+    axes: { reversibility: recoverable, blast_radius: scoped, externality: physical }
+    safety_function: false         # -> target.safety_function
+    safety_function_when:          # true when ANY value the path reaches matches
+      arg: "nodes[].node_id"       # a.b, and a[] = every element of a list
+      matches: '^ns=2;s=Safety\.'  # re.search -- anchor it
+    cases:                         # first case whose conditions (a list is AND)
+      - when: { arg: action, matches: '^comment$' }   # hold for EVERY value
+        verb: update               # overrides verb / axes / safety_function
+        safety_function: false
+    magnitude:
+      physical:                    # -> magnitude.physical
+        each: nodes                # optional: assess every element of a list
+        select:                    # optional: one extractor per tag family
+          - when: { arg: node_id, matches: '^ns=2;s=Line1\.Oven\.TempSP$' }
+            value_arg: value       # the requested value
+            range: [20, 250]       # OR min_arg: / max_arg:
+            current_arg: current   # optional
+            unit: degC
+```
+
+A tool that declares a physical verb, a safety flag or an extractor must
+declare `axes.externality`; the loader refuses it otherwise, because the rules
+arm only on `physical` and the fill is `outbound`. A static `range` whose min
+is not below its max is refused at load.
+
+**How `envelope_fraction` is computed** (`mappings.assess_physical`):
+
+| case | value | `context.physical_basis` |
+|---|---|---|
+| request inside the range, `current` known | `abs(requested − current) / (max − min)`, capped at 1.0 | `current` |
+| request inside, `current` absent (default) | `max(requested − min, max − requested) / (max − min)` | `worst_case` |
+| request inside, `current` absent, `when_current_absent: midpoint` | `abs(requested − (min+max)/2) / (max − min)` | `midpoint` |
+| request outside the range | `1.0 + distance outside / (max − min)` — always above 1.0 | `outside_range` |
+| cannot be measured | `2.0`, axes `irreversible`/`systemic`/`physical`, reason in `context.physical_error` and on stderr | `fail_closed` |
+
+Why not the plain spec formula on its own: `|requested − current| /
+(max − min)` reads range [20, 90], current 85, requested 92 as a 0.1 step,
+so an out-of-range request does not reliably exceed 1.0. Why `worst_case` and
+not `midpoint` by default: the midpoint rule reads a full min → max step as
+0.5, half its size. The worst-case rule is never below the true step while the
+plant is inside its range. It is also coarse: any request reads at least 0.5,
+so with `physical_envelope: 1.0` the third current-less write in a session is
+held. Neither real server above sends a current value, so both packs are
+priced this way. A request inside the range is capped at 1.0 so that moving a
+drifted plant back into its range is not read as "outside the envelope".
+
+With `each`, the envelope carries the largest element's fraction (each tag
+is one step) and `magnitude.count` is the list length, which is what
+`physical_writes` charges. An element that no `select` entry names adds no
+fraction, and the out-of-range rule cannot see it.
+
+`envelope_fraction` and `safety_function` are this file's declarations, not
+measurements of the plant: a wrong range is a wrong verdict.
+
+The 40-steps demo (`examples/physical-demo/run_oven_demo.py`) builds its
+envelopes through this normalizer; see its docstring.
 
 ## Obligations (Track 5.1, design doc ADDENDUM v1.5 section 25)
 

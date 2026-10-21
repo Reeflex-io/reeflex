@@ -1,0 +1,138 @@
+# mappings/homeassistant.yaml -- Home Assistant's official "Model Context
+# Protocol Server" integration (homeassistant/components/mcp_server), read in
+# github.com/home-assistant/core at commit
+# de7e90f494ebab3dc624d68776a5d3231c1dd29f (2026-10-13).
+#
+# WHERE THE TOOL NAMES COME FROM. The MCP server exposes the tools of the
+# selected LLM API (server.py `_format_tool`, name=tool.name). With the
+# default Assist API they are built per integration as
+# `IntentTool(f"{DOMAIN}__{handler.intent_type}", ...)`:
+#   components/intent/llm.py   LLM_INTENTS: HassTurnOn, HassTurnOff,
+#                              HassCancelAllTimers, HassSetPosition,
+#                              HassStopMoving          -> intent__<name>
+#   components/climate/llm.py  HassClimateSetTemperature -> climate__<name>
+#   mcp_server/server.py       LIVE_CONTEXT_TOOL_NAME = "homeassistant__GetLiveContext"
+# Older Home Assistant releases named these without the `<domain>__` prefix
+# (`HassTurnOn`). This pack is for the current naming; on an older instance
+# no entry matches and every call falls to the conservative floor.
+# When an operator selects SEVERAL LLM APIs, helpers/llm.py wraps every tool
+# in `NamespacedTool` and prefixes the API's slug again -- this pack does not
+# match that either.
+#
+# THE FACT THIS PACK IS BUILT AROUND: lock/unlock and cover/valve open/close
+# are NOT separate tools. They are HassTurnOn / HassTurnOff
+# (components/intent/__init__.py, OnOffIntentHandler: "For locks, this
+# performs a 'lock' action"; a cover's turn_on is `open_cover`, turn_off is
+# `close_cover`; a valve's is `open_valve` / `close_valve`). The one thing in
+# the arguments that says which is the optional `domain` slot -- and Home
+# Assistant applies it as a match constraint, so `domain: light` with
+# `name: Garage Door` matches no entity rather than opening the garage. So:
+#   * no `domain`, or one this pack does not name -> the top-level reading,
+#     which is the most restrictive: `actuate`, `irreversible`.
+#   * a `case` lightens it only when EVERY domain given is one it names.
+#
+# REVERSIBILITY, CHOSEN (the brief asked for the reasoning in writing):
+#   lock (HassTurnOn + lock)      recoverable  -- the failure is someone
+#                                                locked out; unlocking fixes it.
+#   unlock (HassTurnOff + lock)   irreversible -- the device state can be put
+#                                                back, what came through the
+#                                                door meanwhile cannot.
+#   blind/curtain/shade/shutter/  recoverable  -- domain cover AND every
+#   awning open/close/position                    device_class one of these.
+#   any other cover (garage,      irreversible -- a garage door or gate
+#   gate, door, window, damper,                   closing on a person cannot
+#   or no device_class), valve                    be undone, and the gateway
+#                                                 cannot see who is under it.
+#   switch                        irreversible -- a switch entity is whatever
+#                                                is plugged into it.
+#   light, fan, media_player,     `mode`, recoverable.
+#   input_boolean
+#
+# WHAT WAS NOT VERIFIED:
+#   * No call was made to a running Home Assistant. Names and slots are from
+#     the source at the commit above.
+#   * The thermostat range [7, 35] is Home Assistant's own DEFAULT_MIN_TEMP /
+#     DEFAULT_MAX_TEMP (components/climate/const.py), in degrees CELSIUS. A
+#     device's real min_temp/max_temp is not in the call's arguments. An
+#     instance configured in Fahrenheit sends 70 for a normal room, which this
+#     pack reads as far outside [7, 35] -- change the range for such an
+#     instance.
+#   * HassClimateSetTemperature carries no current temperature, so its
+#     envelope_fraction is the worst-case step (README, "Physical impact").
+#   * Unmapped tools fall to the floor, including HassLightSet,
+#     HassFanSetSpeed, HassVacuumStart, HassLawnMowerStartMowing,
+#     HassHumidifierSetpoint, the todo and timer tools and HassBroadcast.
+
+x-cases:
+  cover_soft: &cover_soft
+    - { arg: domain, matches: '^cover$' }
+    - { arg: device_class, matches: '^(awning|blind|curtain|shade|shutter)$' }
+
+tools:
+  homeassistant__GetLiveContext:
+    verb: read
+    axes: { reversibility: reversible, blast_radius: scoped, externality: internal }
+
+  intent__HassTurnOn:
+    # Top level = lock with no domain given, a cover, a valve, a switch, or
+    # anything unnamed. `actuate` + `irreversible` + production is R9: a
+    # human approves.
+    verb: actuate
+    axes: { reversibility: irreversible, blast_radius: scoped, externality: physical }
+    cases:
+      - when: { arg: domain, matches: '^(light|fan|media_player|input_boolean)$' }
+        verb: mode
+        axes: { reversibility: recoverable }
+      - when: { arg: domain, matches: '^lock$' }   # = lock
+        axes: { reversibility: recoverable, blast_radius: single }
+      - when: *cover_soft                          # = open a blind
+        axes: { reversibility: recoverable }
+
+  intent__HassTurnOff:
+    verb: actuate
+    axes: { reversibility: irreversible, blast_radius: scoped, externality: physical }
+    cases:
+      - when: { arg: domain, matches: '^(light|fan|media_player|input_boolean)$' }
+        verb: mode
+        axes: { reversibility: recoverable }
+      # domain lock here is UNLOCK -- stays on the top level, irreversible.
+      - when: *cover_soft                          # = close a blind
+        axes: { reversibility: recoverable }
+
+  intent__HassSetPosition:
+    # position: Coerce(int), Percentage() -- covers and valves only.
+    # Top level is `actuate`, not `set`: moving a garage door or a valve to a
+    # position opens or closes it, the same effect HassTurnOn/Off has, and
+    # R9 reads only `actuate`/`flash`. As `set`, "Garage, position 100" was
+    # ALLOWED in production on core e0f06f0 while "HassTurnOff Garage" was
+    # held (dev-2 round 034). A blind keeps `set`.
+    verb: actuate
+    axes: { reversibility: irreversible, blast_radius: scoped, externality: physical }
+    cases:
+      - when: *cover_soft
+        verb: set
+        axes: { reversibility: recoverable }
+    magnitude:
+      physical:
+        value_arg: position
+        range: [0, 100]
+        unit: "%"
+
+  intent__HassStopMoving:
+    # Stops a moving cover or valve. Physical, and the safe direction.
+    verb: actuate
+    axes: { reversibility: recoverable, blast_radius: scoped, externality: physical }
+
+  intent__HassCancelAllTimers:
+    verb: update
+    axes: { reversibility: recoverable, blast_radius: scoped, externality: internal }
+
+  climate__HassClimateSetTemperature:
+    # temperature: Required, Coerce(float); target by name/area/floor.
+    verb: set
+    axes: { reversibility: recoverable, blast_radius: single, externality: physical }
+    magnitude:
+      physical:
+        value_arg: temperature
+        range: [7, 35]
+        unit: degC
