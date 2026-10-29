@@ -91,7 +91,7 @@ read are in the [Action Envelope reference](reference/action-envelope.md#physica
 top to bottom; each line fires only if no line above it did (the header of
 `reeflex.rego`):
 
-`R3 (deny) → R8 (deny) → R10a (deny) → R0 → R2 → R9 → R11 → R5 (incl. R10b) → R6 → R7 → R1 → R4`
+`R3 (deny) → R8 (deny) → R10a (deny) → R0 → R2 → R9 → R11 → R5 (incl. R10b) → R6 → R7 → R2s (strict preset, off by default) → R1 → R4`
 
 R0 sits below the three denies: when the environment R8 or R10a reads was
 declared, an undeclared `reversibility` does not turn their deny into an R0
