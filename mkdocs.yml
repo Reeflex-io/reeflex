@@ -239,6 +239,7 @@ nav:
   - Operations:
       - operations/index.md
       - SIEM export: siem.md
+      - Evidence connector: connector.md
       - Compliance & open core:
           - compliance/index.md
           - Evidence for auditors: compliance/evidence-for-auditors.md
