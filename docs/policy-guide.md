@@ -67,6 +67,51 @@ you edit anything below.
 > you use (e.g. `prod-eu`, `critical`) by editing `reeflex.rego` — with zero
 > core changes.
 
+### Physical-impact rules: R8–R11 and two budgets
+
+!!! note "Requires a core that carries RFX-427"
+
+    Added to the base pack under RFX-427, additively — no existing rule id or
+    verdict changes. **reeflex-core v0.2.3 and earlier do not have them.**
+
+All of them arm only when `axes.externality` is `physical`. The fields they
+read are in the [Action Envelope reference](reference/action-envelope.md#physical-impact-fields).
+
+| id | rule id | fires when | verdict |
+|---|---|---|---|
+| **R8** | `reeflex.policy/safety_function_override_prod` | environment is `production` or `staging`, AND the verb is `override`, or `target.safety_function` is true and the verb is `set`, `update`, `delete`, `flash` or `mode` | **deny** — no approval overrides it |
+| **R10a** | `reeflex.policy/outside_operating_envelope_prod` | environment is `production` or `staging`, AND `magnitude.physical.envelope_fraction > 1.0` | **deny** |
+| **R9** | `reeflex.policy/physical_irreversible` | environment is `production`, `reversibility` is `irreversible`, verb is `actuate` or `flash` | `require_approval` |
+| **R11** | `reeflex.policy/mode_change_live` | environment is `production`, verb is `mode` | `require_approval` |
+| **R10b** | `reeflex.policy/cumulative_budget` (R5's mechanism; the reason names the dimension) | the session's `physical_writes` or `physical_envelope` budget is exceeded | `require_approval` |
+
+**Precedence**, which stays total — exactly one decision for any input. Read
+top to bottom; each line fires only if no line above it did (the header of
+`reeflex.rego`):
+
+`R3 (deny) → R8 (deny) → R10a (deny) → R0 → R2 → R9 → R11 → R5 (incl. R10b) → R6 → R7 → R1 → R4`
+
+R0 sits below the three denies: when the environment R8 or R10a reads was
+declared, an undeclared `reversibility` does not turn their deny into an R0
+hold. R3 already denies `irreversible + systemic + production` regardless of
+externality, so a systemic physical action is reported as R3, not R9. In `dev`
+(a digital twin or simulator) none of R8–R11 arm, and neither physical budget
+does. The ledger is still per session: a twin write is recorded, and counts
+toward the budgets if the same session later acts on `production` or
+`staging`. Give twin work its own session.
+
+The two budgets are dimensions in `budgets.rego`, edited like any other
+(LEVEL 1 below):
+
+| dimension | counts | default limit |
+|---|---|---|
+| `physical_writes` | each physical action whose verb is `set`, `mode`, `override`, `actuate` or `flash`, charged like every count budget — `magnitude.count`, raised to the floor its `blast_radius` implies (a `systemic` write is charged 20 and trips at once) | 10 per session |
+| `physical_envelope` | the sum of `magnitude.physical.envelope_fraction` | 1.0 per session — a full-range sweep once per session without a human |
+
+On the defaults, many small steps trip `physical_writes` before they add up to
+1.0: forty steps of 0.025 are held at the 11th. The worked sequence, with both
+budgets, is in [Industrial setpoints](use-cases/industrial-setpoints.md#the-forty-steps).
+
 This guide does not re-derive the axis model or the shipped rules — see:
 
 - [`docs/why-reeflex.md`](why-reeflex.md) — why the model looks like this, HITL/HOTL/AIL.
