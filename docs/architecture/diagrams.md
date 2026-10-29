@@ -98,7 +98,8 @@ flowchart TD
     on a value core
     GUESSED?
     reads R2 / R3 / R6 /
-    R8 / R9 / R10a / R11"}
+    R8 / R9 / R10a / R11
+    and R2s"}
     R2{"R2
     irreversible
     + broad
@@ -124,6 +125,11 @@ flowchart TD
     credentials, or
     what code runs
     PRODUCTION ONLY"}
+    R2s{"R2s · strict preset
+    OFF by default
+    irreversible, any
+    blast radius
+    PRODUCTION ONLY"}
     R1{"R1
     read + internal?
     any environment"}
@@ -140,7 +146,8 @@ flowchart TD
     R11 -- no --> R5
     R5 -- no --> R6
     R6 -- no --> R7
-    R7 -- no --> R1
+    R7 -- no --> R2s
+    R2s -- no --> R1
     R1 -- no --> A4
 
     H0["HOLD
@@ -167,6 +174,8 @@ flowchart TD
     reeflex.policy/irreversible_protected_asset_prod"]
     H7["HOLD
     reeflex.policy/authority_change_prod"]
+    H2s["HOLD
+    reeflex.policy/irreversible_prod_strict"]
     A1["ALLOW
     reeflex.policy/read_only_internal"]
     A4["ALLOW · the default
@@ -182,6 +191,7 @@ flowchart TD
     R5 -- yes --> H5
     R6 -- yes --> H6
     R7 -- yes --> H7
+    R2s -- yes --> H2s
     R1 -- yes --> A1
 
     %% Invisible links, same idiom as the three-seams diagram below. Without
@@ -191,14 +201,14 @@ flowchart TD
     %% Chaining the verdicts pins them into their own column: two columns, no
     %% drift. The ranks are already consecutive, so this constrains nothing
     %% the layout did not already imply.
-    D3 ~~~ D8 ~~~ D10 ~~~ H0 ~~~ H2 ~~~ H9 ~~~ H11 ~~~ H5 ~~~ H6 ~~~ H7 ~~~ A1
+    D3 ~~~ D8 ~~~ D10 ~~~ H0 ~~~ H2 ~~~ H9 ~~~ H11 ~~~ H5 ~~~ H6 ~~~ H7 ~~~ H2s ~~~ A1
 
     classDef deny fill:#7f1d1d,stroke:#ef4444,color:#fff;
     classDef hold fill:#78350f,stroke:#f59e0b,color:#fff;
     classDef allow fill:#14532d,stroke:#22c55e,color:#fff;
     classDef coerce fill:#1e3a8a,stroke:#60a5fa,color:#fff;
     class D3,D8,D10 deny;
-    class H0,H2,H9,H11,H5,H6,H7 hold;
+    class H0,H2,H9,H11,H5,H6,H7,H2s hold;
     class A1,A4 allow;
     class COE coerce;
 ```
@@ -251,17 +261,20 @@ to look strict, and the two should not be reported under the same rule id. R0
 does **not** outrank R8 or R10a when the environment they read was declared:
 neither reads reversibility or blast radius, so leaving one of those out must
 not turn a safety-function deny into a hold. Among the holds the order is
-R2 → R9 → R11 → R5 → R6 → R7, and it is a reporting decision rather than a
+R2 → R9 → R11 → R5 → R6 → R7 → R2s, and it is a reporting decision rather than a
 safety one: each of those returns `require_approval` either way, so the
-ordering only picks which reason the operator reads. The ladder above is the
-order the shipped file evaluates in; `reeflex-core/tests/test_decision_totality.py`
-checks over 91,800 envelopes that exactly one of these ids answers each.*
+ordering only picks which reason the operator reads. R2s is last so that
+switching the strict preset on renames no hold another rule already raises.
+The ladder above is the order the shipped file evaluates in;
+`reeflex-core/tests/test_decision_totality.py` checks over 91,800 envelopes
+with the strict preset off, and the 22,950 of them it can reach with it on,
+that exactly one of these ids answers each.*
 
 *The rule bodies are in
 [`reeflex-core/policy/reeflex.rego`](https://github.com/Reeflex-io/reeflex/blob/main/reeflex-core/policy/reeflex.rego),
-with R5's budgets (including the two physical ones), R6's asset list and R7's signal lists in the sibling
-`budgets.rego`, `protected.rego` and `authority.rego` — all four are files you
-are meant to edit. See the [policy guide](../policy-guide.md) to change a
+with R5's budgets (including the two physical ones), R6's asset list, R7's signal lists and
+the strict-preset switch in the sibling `budgets.rego`, `protected.rego`,
+`authority.rego` and `strict.rego` — all five are files you are meant to edit. See the [policy guide](../policy-guide.md) to change a
 threshold or add a rule of your own.*
 
 ## The evidence path: what happens to the record after the verdict

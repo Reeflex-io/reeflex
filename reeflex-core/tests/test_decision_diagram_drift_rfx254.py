@@ -44,11 +44,12 @@ DIAGRAM_HEADING = "## How a verdict is reached"
 
 RULE_ID_RE = re.compile(r"reeflex\.policy/([a-z0-9_]+)")
 
-# The shipped pack's rule NUMBERS. Thirteen ids across twelve numbers (R0-R11,
-# RFX-427): R5 reports under two (`session_delete_budget` for the deletions
-# dimension, `cumulative_budget` for every other), and R10 is split into R10a
-# (its own deny id) and R10b (two budget dimensions reported under R5's
-# `cumulative_budget`), so the two counts differ by one.
+# The shipped pack's rule NUMBERS. Fourteen ids across twelve numbers (R0-R11,
+# RFX-427, plus R2s, RFX-433): R5 reports under two (`session_delete_budget`
+# for the deletions dimension, `cumulative_budget` for every other), R10 is
+# split into R10a (its own deny id) and R10b (two budget dimensions reported
+# under R5's `cumulative_budget`), and R2s is the opt-in strict preset, a
+# variant of R2 with its own id rather than a new number.
 EXPECTED_RULE_NUMBERS = 12
 
 
@@ -159,14 +160,14 @@ class ShippedRuleIdsAreDocumented(unittest.TestCase):
 
         # The two files that state a numeral must state the derived one.
         for path, numeral in [
-            (REPO_ROOT / "docs" / "concepts" / "index.md", "thirteen rule ids"),
-            (REPO_ROOT / "docs" / "policy-guide.md", "thirteen rule ids"),
-            (REPO_ROOT / "README.md", "thirteen rule ids"),
-            (REPO_ROOT / "docs" / "llms.txt", "thirteen rule ids"),
+            (REPO_ROOT / "docs" / "concepts" / "index.md", "fourteen rule ids"),
+            (REPO_ROOT / "docs" / "policy-guide.md", "fourteen rule ids"),
+            (REPO_ROOT / "README.md", "fourteen rule ids"),
+            (REPO_ROOT / "docs" / "llms.txt", "fourteen rule ids"),
         ]:
             with self.subTest(path=str(path.relative_to(REPO_ROOT)), claim=numeral):
                 self.assertEqual(
-                    n_ids, 13,
+                    n_ids, 14,
                     "the pack now emits %d rule ids, so %r is no longer the true "
                     "claim -- update the docs and this list together."
                     % (n_ids, numeral),
@@ -229,7 +230,7 @@ class StaleRuleCountClaimsDoNotComeBack(unittest.TestCase):
 
         self.assertEqual(
             [], offenders,
-            "the shipped pack is R0-R11 (thirteen rule ids). These lines claim "
+            "the shipped pack is R0-R11 plus R2s (fourteen rule ids). These lines claim "
             "otherwise:\n  " + "\n  ".join(offenders)
             + "\n\nFix the sentence. If the file genuinely cannot be fixed in "
               "this change, add it to KNOWN_STALE with the ticket that will.",

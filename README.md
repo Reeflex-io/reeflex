@@ -148,7 +148,7 @@ read [the deployment requirement](INSTALL.md#the-session-ledger-must-be-shared-a
 before scaling out. `GET /healthz` reports which mode a core is in.
 
 The whole base policy is **twelve rules you can read in a few minutes** — R0–R11,
-thirteen rule ids, each a decades-old safety principle applied to agent actions,
+plus an opt-in strict preset (R2s, off by default), fourteen rule ids, each a decades-old safety principle applied to agent actions,
 with its limits
 [documented honestly](reeflex-spec/IMPACT-MODEL.md#what-the-base-policy-does-not-catch).
 They are not a score and not a model: you can read the rule that decided, by
@@ -283,7 +283,7 @@ Already running MCP servers (filesystem, GitHub, Postgres, your own)? Put
 **Shipping today:**
 
 - `reeflex-core` decision engine (`POST /v1/decide`) — Python + OPA/Rego, **255** unit tests (1 platform-specific skip), **9/9** policy tests
-- Base policy pack (R0–R11, thirteen rule ids): unclassifiable-action **hold** (never a deny), read-only allow, irreversible-broad-prod approval, irreversible-systemic-prod deny, configurable cumulative budgets, declared-production-asset approval, authority/credential/executability-change approval, default allow — and, for actions an adapter declares `physical`, a deny on overriding or writing a safety function (R8), a deny on a request outside the declared safe range (R10a), approval for irreversible actuation / firmware loads (R9) and live mode changes (R11), and two physical budgets (R10b). R3, R8 and R10a are the refusals no approval can clear. R2, R3, R6, R7, R9 and R11 apply in `production` only; R8 and R10a in `production` and `staging` — [the whole ladder in one picture](https://docs.reeflex.io/architecture/diagrams/#how-a-verdict-is-reached)
+- Base policy pack (R0–R11 plus the opt-in strict preset R2s, fourteen rule ids): unclassifiable-action **hold** (never a deny), read-only allow, irreversible-broad-prod approval, irreversible-systemic-prod deny, configurable cumulative budgets, declared-production-asset approval, authority/credential/executability-change approval, default allow — and, for actions an adapter declares `physical`, a deny on overriding or writing a safety function (R8), a deny on a request outside the declared safe range (R10a), approval for irreversible actuation / firmware loads (R9) and live mode changes (R11), and two physical budgets (R10b). An opt-in strict preset (R2s, `strict.rego`, off by default) holds every irreversible action in production at any blast radius. R3, R8 and R10a are the refusals no approval can clear. R2, R3, R6, R7, R9 and R11 apply in `production` only; R8 and R10a in `production` and `staging` — [the whole ladder in one picture](https://docs.reeflex.io/architecture/diagrams/#how-a-verdict-is-reached)
 - Fail-closed on any OPA error or unreachable core — never a silent allow
 - Anti-fragmentation: a durable per-session cumulative ledger defeats split-batch evasion — survives restarts, and shared by every replica that shares its volume ([limits](INSTALL.md#the-session-ledger-must-be-shared-and-must-survive-a-restart))
 - Three conformance-tested reference adapters (Claude Code, WordPress, MCP gateway)

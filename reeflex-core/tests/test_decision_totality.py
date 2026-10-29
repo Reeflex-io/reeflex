@@ -247,6 +247,19 @@ BUDGET = [
 #: 2 * 3 * 17 * 2 * 5 * 3 * 5 * 6
 EXPECTED_GRID_SIZE = 91800
 
+#: THE STRICT PRESET (RFX-433). `strict.hold_every_irreversible_in_production`
+#: is policy DATA (strict.rego), not an input field, so it cannot be a column of
+#: the envelope: it is a second evaluation, with the switch set ON by `with`.
+#: It is evaluated over the points where it can change anything and nowhere
+#: else: every body and clause R2s adds conjoins `r2s_strict_irreversible_prod`,
+#: which requires irreversible + production, so on the other three quarters of
+#: the grid the ON evaluation is the OFF one. The subset is FILTERED out of
+#: _grid() rather than written down, so a dimension added above is inherited.
+STRICT_ON = {"hold_every_irreversible_in_production": True}
+
+#: 91800 / 2 (reversibility) / 2 (environment)
+EXPECTED_STRICT_GRID_SIZE = 22950
+
 
 def _envelope(rev, blast, kind, env, ability, ref, undeclared, budget, i):
     """An Action Envelope in the shape the reference adapters emit."""
@@ -292,6 +305,15 @@ def _envelope(rev, blast, kind, env, ability, ref, undeclared, budget, i):
     return out
 
 
+def _strict_grid():
+    """The points of _grid() the strict preset can reach (see STRICT_ON)."""
+    return [
+        e for e in _grid()
+        if e["axes"]["reversibility"] == "irreversible"
+        and e["target"]["environment"] == "production"
+    ]
+
+
 def _grid():
     return [
         _envelope(rev, blast, kind, env, ability, ref, undeclared, budget, i)
@@ -312,6 +334,9 @@ def _grid():
 _QUERY = (
     "out := [d | some e in input.grid; d := data.reeflex.policy.decision with input as e]"
 )
+
+#: The same positive collection with the strict preset switched ON.
+_STRICT_QUERY = _QUERY + " with data.reeflex.policy.strict as " + json.dumps(STRICT_ON)
 
 _NEGATED_QUERY = (
     "out := [i | some i, e in input.grid; not data.reeflex.policy.decision with input as e]"
@@ -352,7 +377,7 @@ def _eval(envelopes, query=_QUERY):
     return True, results[0]["bindings"]["out"]
 
 
-def _bisect_to_one(envelopes):
+def _bisect_to_one(envelopes, query=_QUERY):
     """Narrow a failing set to a single offending envelope.
 
     ~log2(n) extra `opa eval` calls. The point of this function is the error
@@ -363,10 +388,10 @@ def _bisect_to_one(envelopes):
     while len(lo) > 1:
         mid = len(lo) // 2
         left, right = lo[:mid], lo[mid:]
-        if not _eval(left)[0]:
+        if not _eval(left, query)[0]:
             lo = left
             continue
-        if not _eval(right)[0]:
+        if not _eval(right, query)[0]:
             lo = right
             continue
         # Neither half fails alone: the failure is not per-envelope (it would
@@ -387,6 +412,7 @@ class TestDecisionTotality(unittest.TestCase):
             EXPECTED_GRID_SIZE,
             "grid contains duplicate points -- a dimension is not varying",
         )
+        self.assertEqual(len(_strict_grid()), EXPECTED_STRICT_GRID_SIZE)
 
     def test_the_grid_reaches_every_rule_id_the_pack_can_emit(self) -> None:
         """The grid must be able to REACH every rule, or the pairs it misses
@@ -418,9 +444,11 @@ class TestDecisionTotality(unittest.TestCase):
             )
         self.assertTrue(pack_rule_ids, "read no rule ids out of the pack at all")
 
-        ok, decisions = _eval(_grid())
-        self.assertTrue(ok, f"pack did not evaluate: {json.dumps(decisions)[:400]}")
-        reached = {d["rule"] for d in decisions}
+        reached = set()
+        for grid, query in ((_grid(), _QUERY), (_strict_grid(), _STRICT_QUERY)):
+            ok, decisions = _eval(grid, query)
+            self.assertTrue(ok, f"pack did not evaluate: {json.dumps(decisions)[:400]}")
+            reached |= {d["rule"] for d in decisions}
 
         self.assertEqual(
             pack_rule_ids - reached, set(),
@@ -435,10 +463,17 @@ class TestDecisionTotality(unittest.TestCase):
 
     def test_every_envelope_yields_exactly_one_decision(self) -> None:
         """THE assertion. A missing precedence guard fails here and nowhere else."""
-        grid = _grid()
-        ok, payload = _eval(grid)
+        for setting, grid, query in (
+            ("strict preset off (shipped)", _grid(), _QUERY),
+            ("strict preset ON", _strict_grid(), _STRICT_QUERY),
+        ):
+            with self.subTest(setting):
+                self._assert_one_decision_each(grid, query)
+
+    def _assert_one_decision_each(self, grid, query) -> None:
+        ok, payload = _eval(grid, query)
         if not ok:
-            offenders = _bisect_to_one(grid)
+            offenders = _bisect_to_one(grid, query)
             detail = "\n".join(json.dumps(e, indent=2, sort_keys=True) for e in offenders)
             self.fail(
                 "reeflex.policy/decision did not resolve to a single value for "
@@ -458,10 +493,12 @@ class TestDecisionTotality(unittest.TestCase):
         )
 
     def test_every_decision_is_a_spec_verdict_under_a_namespaced_rule(self) -> None:
-        """Shape of what the grid produced -- runs off the same single eval."""
-        grid = _grid()
-        ok, decisions = _eval(grid)
-        self.assertTrue(ok, f"pack did not evaluate: {json.dumps(decisions)[:400]}")
+        """Shape of what the grid produced, with the strict preset off and on."""
+        decisions = []
+        for grid, query in ((_grid(), _QUERY), (_strict_grid(), _STRICT_QUERY)):
+            ok, out = _eval(grid, query)
+            self.assertTrue(ok, f"pack did not evaluate: {json.dumps(out)[:400]}")
+            decisions += out
         verdicts = {d["decision"] for d in decisions}
         self.assertEqual(
             verdicts - SPEC_VERDICTS, set(),
