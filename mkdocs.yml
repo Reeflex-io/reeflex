@@ -235,6 +235,7 @@ nav:
       - OpenHands: integrations/openhands.md
       - MCP gateway: mcp-gateway.md
       - WooCommerce: adapters/woocommerce.md
+      - "Devin (Cognition): evidence + boundary gate": integrations/devin.md
   - Operations:
       - operations/index.md
       - SIEM export: siem.md
