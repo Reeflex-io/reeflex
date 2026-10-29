@@ -232,6 +232,7 @@ nav:
       - adapters/index.md
       - n8n (zero-code): guides/n8n.md
       - LiteLLM in Docker: guides/litellm-docker.md
+      - OpenHands: integrations/openhands.md
       - MCP gateway: mcp-gateway.md
       - WooCommerce: adapters/woocommerce.md
   - Operations:
