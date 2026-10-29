@@ -98,7 +98,12 @@ markdown_extensions:
       line_spans: __span
       pygments_lang_class: true
   - pymdownx.inlinehilite
-  - pymdownx.snippets
+  # check_paths: a snippet that does not resolve FAILS the build. The default
+  # (false) renders a missing include as nothing, so the spec §4 callout every
+  # OT use-case page carries (docs/use-cases/_snippets/) could vanish with
+  # `--strict` green.
+  - pymdownx.snippets:
+      check_paths: true
   - pymdownx.critic
   - pymdownx.caret
   - pymdownx.keys
@@ -147,7 +152,7 @@ extra:
       name: reeflex.io
   generator: false
 
-# 7 top-level sidebar groups (the left-tree top level). Policy is nested under
+# 8 top-level sidebar groups (the left-tree top level; Use cases added by RFX-429). Policy is nested under
 # Concepts (customizing the five rules is an extension of understanding them);
 # Compliance is nested under Operations (it is a run-time evidence concern).
 # FAQ + Roadmap will live in the footer + Home, not in the tree, when they land.
@@ -185,6 +190,11 @@ validation:
 hooks:
   - scripts/check_diagram_contrast.py
 
+# Include-only fragments (pymdownx.snippets reads them from disk); they are not
+# pages and must not be published as orphans.
+exclude_docs: |
+  /use-cases/_snippets/
+
 not_in_nav: |
   /faq.md
   /roadmap.md
@@ -200,6 +210,21 @@ nav:
       - Policy & customization:
           - policy/index.md
           - Adapt the policy: policy-guide.md
+  - Use cases:
+      - use-cases/index.md
+      - Coding agent on production: use-cases/coding-agent.md
+      - Database agent (Postgres): use-cases/database-agent.md
+      - CMS / ops agent (WordPress): use-cases/cms-agent.md
+      - Automation agent (n8n): use-cases/automation-agent.md
+      - Any MCP tool-using agent: use-cases/mcp-tool-agent.md
+      - LLM-gateway fleet (LiteLLM): use-cases/llm-gateway-fleet.md
+      - Outbound communications & payments: use-cases/outbound-and-payments.md
+      - Evidence for an auditor: use-cases/evidence-for-an-auditor.md
+      - Above the safety PLC: use-cases/above-the-safety-plc.md
+      - Industrial setpoints (OPC-UA / Modbus): use-cases/industrial-setpoints.md
+      - Building management: use-cases/building-management.md
+      - Lab automation & robotics: use-cases/lab-automation.md
+      - Mobile robots & drones: use-cases/mobile-robots-and-drones.md
   - Architecture:
       - architecture.md
       - Diagrams: architecture/diagrams.md
@@ -207,11 +232,14 @@ nav:
       - adapters/index.md
       - n8n (zero-code): guides/n8n.md
       - LiteLLM in Docker: guides/litellm-docker.md
+      - OpenHands: integrations/openhands.md
       - MCP gateway: mcp-gateway.md
       - WooCommerce: adapters/woocommerce.md
+      - "Devin (Cognition): evidence + boundary gate": integrations/devin.md
   - Operations:
       - operations/index.md
       - SIEM export: siem.md
+      - Evidence connector: connector.md
       - Compliance & open core:
           - compliance/index.md
           - Evidence for auditors: compliance/evidence-for-auditors.md

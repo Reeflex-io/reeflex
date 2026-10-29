@@ -15,3 +15,7 @@ blocks a decision, and a broken or ambiguous policy never opens one.
   for every decision (JSON or CEF), the severity map, and worked
   configuration examples for Splunk, QRadar, Wazuh, FortiSIEM, Graylog,
   Loki, Datadog, Logstash, Filebeat, Fluentd, and Kafka.
+- [Evidence connector](../connector.md) — the published container that ships
+  each decision from your engine's audit log to the Reeflex portal as signed
+  evidence: configuration, what it sends and does not send, and how to verify
+  delivery.
