@@ -34,6 +34,13 @@ on:
       # a change to either must re-run against the built site.
       - "scripts/probe_diagrams.py"
       - "scripts/diagram_probe_baseline.json"
+      # The use-case pages print verdicts that core's decision path must
+      # reproduce (RFX-429). A change to the pack or to the code that
+      # normalises an envelope can falsify a page without touching docs/, so
+      # those paths trigger the `verdicts` job too.
+      - "scripts/docs_envelopes_check.py"
+      - "reeflex-core/policy/**"
+      - "reeflex-core/app/**"
   pull_request:
     branches: [main]
     paths:
@@ -45,6 +52,9 @@ on:
       - "scripts/check_diagram_contrast.py"
       - "scripts/probe_diagrams.py"
       - "scripts/diagram_probe_baseline.json"
+      - "scripts/docs_envelopes_check.py"
+      - "reeflex-core/policy/**"
+      - "reeflex-core/app/**"
   workflow_dispatch:
 
 # Deploy via the GitHub Pages artifact path (actions/deploy-pages) — no
@@ -186,10 +196,40 @@ jobs:
             diagram-probe-shots/
           retention-days: 14
 
+  # EVERY VERDICT A USE-CASE PAGE PRINTS, RE-DECIDED (RFX-429). Each envelope
+  # under a `**Verdict:**` line in docs/use-cases/ goes through core's own
+  # `app.decide.process` from this checkout (envelope.py's normalisation, the
+  # session ledger, `opa eval` over the pack), and the printed decision, rule
+  # id and call number must come back. Exit 3 (PENDING-CORE) is red here: the
+  # physical-impact rules are on main, so a page that needs them and a tree
+  # that lacks them is a defect. It cannot see the HTTP layer, a deployed
+  # instance or any adapter; the script's header says so in full.
+  #
+  # Unlike `probe`, it GATES PUBLICATION: a page whose verdict core no longer
+  # gives is wrong documentation, not a rendering nit.
+  verdicts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install OPA (same version ci.yml pins)
+        run: |
+          curl -sL -o opa https://github.com/open-policy-agent/opa/releases/download/v1.18.0/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+          opa version
+
+      - name: Re-decide every printed verdict against this tree's core
+        run: python scripts/docs_envelopes_check.py --core-tree . --python python --opa opa
+
   deploy:
     # A pull request BUILDS the docs and never publishes them.
     if: github.event_name != 'pull_request'
-    needs: build
+    needs: [build, verdicts]
     runs-on: ubuntu-latest
     environment:
       name: github-pages

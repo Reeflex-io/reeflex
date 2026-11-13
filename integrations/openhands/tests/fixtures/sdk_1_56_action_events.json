@@ -1,0 +1,518 @@
+{
+ "events": [
+  {
+   "action": {
+    "command": "rm -rf ./build",
+    "is_input": false,
+    "kind": "TerminalAction",
+    "reset": false,
+    "timeout": null
+   },
+   "critic_result": null,
+   "id": "5c55844a-ad25-47cf-8079-fa17ba2465c3",
+   "kind": "ActionEvent",
+   "llm_response_id": "test-response-1",
+   "parent_id": null,
+   "reasoning_content": null,
+   "responses_reasoning_item": null,
+   "security_risk": "LOW",
+   "source": "agent",
+   "summary": "clean build",
+   "thinking_blocks": [],
+   "thought": [
+    {
+     "cache_prompt": false,
+     "text": "",
+     "type": "text"
+    }
+   ],
+   "timestamp": "2026-10-21T17:21:52.625037",
+   "tool_call": {
+    "arguments": "{\"command\": \"rm -rf ./build\", \"security_risk\": \"LOW\", \"summary\": \"clean build\"}",
+    "id": "call_0",
+    "name": "terminal",
+    "origin": "completion",
+    "responses_item_id": null
+   },
+   "tool_call_id": "call_0",
+   "tool_name": "terminal"
+  },
+  {
+   "action": {
+    "command": "git push --force origin main",
+    "is_input": false,
+    "kind": "TerminalAction",
+    "reset": false,
+    "timeout": null
+   },
+   "critic_result": null,
+   "id": "094df2a2-e1eb-4e54-985f-50705aedb3d7",
+   "kind": "ActionEvent",
+   "llm_response_id": "test-response-1",
+   "parent_id": null,
+   "reasoning_content": null,
+   "responses_reasoning_item": null,
+   "security_risk": "LOW",
+   "source": "agent",
+   "summary": "push",
+   "thinking_blocks": [],
+   "thought": [
+    {
+     "cache_prompt": false,
+     "text": "",
+     "type": "text"
+    }
+   ],
+   "timestamp": "2026-10-21T17:21:52.880941",
+   "tool_call": {
+    "arguments": "{\"command\": \"git push --force origin main\", \"security_risk\": \"LOW\", \"summary\": \"push\"}",
+    "id": "call_1",
+    "name": "terminal",
+    "origin": "completion",
+    "responses_item_id": null
+   },
+   "tool_call_id": "call_1",
+   "tool_name": "terminal"
+  },
+  {
+   "action": {
+    "command": "curl https://unknown.example/",
+    "is_input": false,
+    "kind": "TerminalAction",
+    "reset": false,
+    "timeout": null
+   },
+   "critic_result": null,
+   "id": "b1e569b2-0383-4536-9597-f66c01f2b335",
+   "kind": "ActionEvent",
+   "llm_response_id": "test-response-1",
+   "parent_id": null,
+   "reasoning_content": null,
+   "responses_reasoning_item": null,
+   "security_risk": "LOW",
+   "source": "agent",
+   "summary": "fetch",
+   "thinking_blocks": [],
+   "thought": [
+    {
+     "cache_prompt": false,
+     "text": "",
+     "type": "text"
+    }
+   ],
+   "timestamp": "2026-10-21T17:21:53.091278",
+   "tool_call": {
+    "arguments": "{\"command\": \"curl https://unknown.example/\", \"security_risk\": \"LOW\", \"summary\": \"fetch\"}",
+    "id": "call_2",
+    "name": "terminal",
+    "origin": "completion",
+    "responses_item_id": null
+   },
+   "tool_call_id": "call_2",
+   "tool_name": "terminal"
+  },
+  {
+   "action": {
+    "command": "ls -la",
+    "is_input": false,
+    "kind": "TerminalAction",
+    "reset": false,
+    "timeout": null
+   },
+   "critic_result": null,
+   "id": "b73391d0-4607-4daa-8602-e898a81cffa9",
+   "kind": "ActionEvent",
+   "llm_response_id": "test-response-1",
+   "parent_id": null,
+   "reasoning_content": null,
+   "responses_reasoning_item": null,
+   "security_risk": "LOW",
+   "source": "agent",
+   "summary": "list",
+   "thinking_blocks": [],
+   "thought": [
+    {
+     "cache_prompt": false,
+     "text": "",
+     "type": "text"
+    }
+   ],
+   "timestamp": "2026-10-21T17:21:53.293090",
+   "tool_call": {
+    "arguments": "{\"command\": \"ls -la\", \"security_risk\": \"LOW\", \"summary\": \"list\"}",
+    "id": "call_3",
+    "name": "terminal",
+    "origin": "completion",
+    "responses_item_id": null
+   },
+   "tool_call_id": "call_3",
+   "tool_name": "terminal"
+  },
+  {
+   "action": {
+    "command": "create",
+    "file_text": "hello",
+    "insert_line": null,
+    "kind": "FileEditorAction",
+    "new_str": null,
+    "old_str": null,
+    "path": "/workspace/notes.txt",
+    "view_range": null
+   },
+   "critic_result": null,
+   "id": "09a40496-a637-45b4-a75b-bcf558b567b0",
+   "kind": "ActionEvent",
+   "llm_response_id": "test-response-1",
+   "parent_id": null,
+   "reasoning_content": null,
+   "responses_reasoning_item": null,
+   "security_risk": "LOW",
+   "source": "agent",
+   "summary": "create",
+   "thinking_blocks": [],
+   "thought": [
+    {
+     "cache_prompt": false,
+     "text": "",
+     "type": "text"
+    }
+   ],
+   "timestamp": "2026-10-21T17:21:53.478076",
+   "tool_call": {
+    "arguments": "{\"command\": \"create\", \"path\": \"/workspace/notes.txt\", \"file_text\": \"hello\", \"security_risk\": \"LOW\", \"summary\": \"create\"}",
+    "id": "call_4",
+    "name": "file_editor",
+    "origin": "completion",
+    "responses_item_id": null
+   },
+   "tool_call_id": "call_4",
+   "tool_name": "file_editor"
+  },
+  {
+   "action": {
+    "command": "str_replace",
+    "file_text": null,
+    "insert_line": null,
+    "kind": "FileEditorAction",
+    "new_str": "bye",
+    "old_str": "hello",
+    "path": "/workspace/notes.txt",
+    "view_range": null
+   },
+   "critic_result": null,
+   "id": "bab3f83a-b593-4f63-8eb9-32e8e65fd2f3",
+   "kind": "ActionEvent",
+   "llm_response_id": "test-response-1",
+   "parent_id": null,
+   "reasoning_content": null,
+   "responses_reasoning_item": null,
+   "security_risk": "LOW",
+   "source": "agent",
+   "summary": "edit",
+   "thinking_blocks": [],
+   "thought": [
+    {
+     "cache_prompt": false,
+     "text": "",
+     "type": "text"
+    }
+   ],
+   "timestamp": "2026-10-21T17:21:53.673468",
+   "tool_call": {
+    "arguments": "{\"command\": \"str_replace\", \"path\": \"/workspace/notes.txt\", \"old_str\": \"hello\", \"new_str\": \"bye\", \"security_risk\": \"LOW\", \"summary\": \"edit\"}",
+    "id": "call_5",
+    "name": "file_editor",
+    "origin": "completion",
+    "responses_item_id": null
+   },
+   "tool_call_id": "call_5",
+   "tool_name": "file_editor"
+  },
+  {
+   "action": {
+    "command": "view",
+    "file_text": null,
+    "insert_line": null,
+    "kind": "FileEditorAction",
+    "new_str": null,
+    "old_str": null,
+    "path": "/workspace/notes.txt",
+    "view_range": null
+   },
+   "critic_result": null,
+   "id": "45ccde4b-3b16-439b-8c97-0ffed374e110",
+   "kind": "ActionEvent",
+   "llm_response_id": "test-response-1",
+   "parent_id": null,
+   "reasoning_content": null,
+   "responses_reasoning_item": null,
+   "security_risk": "LOW",
+   "source": "agent",
+   "summary": "view",
+   "thinking_blocks": [],
+   "thought": [
+    {
+     "cache_prompt": false,
+     "text": "",
+     "type": "text"
+    }
+   ],
+   "timestamp": "2026-10-21T17:21:53.880503",
+   "tool_call": {
+    "arguments": "{\"command\": \"view\", \"path\": \"/workspace/notes.txt\", \"security_risk\": \"LOW\", \"summary\": \"view\"}",
+    "id": "call_6",
+    "name": "file_editor",
+    "origin": "completion",
+    "responses_item_id": null
+   },
+   "tool_call_id": "call_6",
+   "tool_name": "file_editor"
+  },
+  {
+   "action": {
+    "kind": "BrowserNavigateAction",
+    "new_tab": false,
+    "url": "https://unknown.example/"
+   },
+   "critic_result": null,
+   "id": "4ad39453-442e-4f05-81d7-ea4bfe3695f3",
+   "kind": "ActionEvent",
+   "llm_response_id": "test-response-1",
+   "parent_id": null,
+   "reasoning_content": null,
+   "responses_reasoning_item": null,
+   "security_risk": "LOW",
+   "source": "agent",
+   "summary": "nav",
+   "thinking_blocks": [],
+   "thought": [
+    {
+     "cache_prompt": false,
+     "text": "",
+     "type": "text"
+    }
+   ],
+   "timestamp": "2026-10-21T17:21:54.125551",
+   "tool_call": {
+    "arguments": "{\"url\": \"https://unknown.example/\", \"security_risk\": \"LOW\", \"summary\": \"nav\"}",
+    "id": "call_7",
+    "name": "browser_navigate",
+    "origin": "completion",
+    "responses_item_id": null
+   },
+   "tool_call_id": "call_7",
+   "tool_name": "browser_navigate"
+  },
+  {
+   "action": {
+    "index": 3,
+    "kind": "BrowserClickAction",
+    "new_tab": false
+   },
+   "critic_result": null,
+   "id": "44699116-2152-426b-84d4-bb2647c9c48f",
+   "kind": "ActionEvent",
+   "llm_response_id": "test-response-1",
+   "parent_id": null,
+   "reasoning_content": null,
+   "responses_reasoning_item": null,
+   "security_risk": "LOW",
+   "source": "agent",
+   "summary": "click",
+   "thinking_blocks": [],
+   "thought": [
+    {
+     "cache_prompt": false,
+     "text": "",
+     "type": "text"
+    }
+   ],
+   "timestamp": "2026-10-21T17:21:54.336413",
+   "tool_call": {
+    "arguments": "{\"index\": 3, \"security_risk\": \"LOW\", \"summary\": \"click\"}",
+    "id": "call_8",
+    "name": "browser_click",
+    "origin": "completion",
+    "responses_item_id": null
+   },
+   "tool_call_id": "call_8",
+   "tool_name": "browser_click"
+  },
+  {
+   "action": {
+    "extract_links": false,
+    "kind": "BrowserGetContentAction",
+    "start_from_char": 0
+   },
+   "critic_result": null,
+   "id": "b32c9bf1-0a8c-40c2-9016-63c543f9adce",
+   "kind": "ActionEvent",
+   "llm_response_id": "test-response-1",
+   "parent_id": null,
+   "reasoning_content": null,
+   "responses_reasoning_item": null,
+   "security_risk": "UNKNOWN",
+   "source": "agent",
+   "summary": "read",
+   "thinking_blocks": [],
+   "thought": [
+    {
+     "cache_prompt": false,
+     "text": "",
+     "type": "text"
+    }
+   ],
+   "timestamp": "2026-10-21T17:21:54.549966",
+   "tool_call": {
+    "arguments": "{\"security_risk\": \"LOW\", \"summary\": \"read\"}",
+    "id": "call_9",
+    "name": "browser_get_content",
+    "origin": "completion",
+    "responses_item_id": null
+   },
+   "tool_call_id": "call_9",
+   "tool_name": "browser_get_content"
+  },
+  {
+   "action": {
+    "data": {
+     "ids": [
+      "r1",
+      "r2",
+      "r3"
+     ]
+    },
+    "kind": "MCPToolAction"
+   },
+   "critic_result": null,
+   "id": "6b708d01-3a6e-4fa6-9304-fd1ccc0cba73",
+   "kind": "ActionEvent",
+   "llm_response_id": "test-response-1",
+   "parent_id": null,
+   "reasoning_content": null,
+   "responses_reasoning_item": null,
+   "security_risk": "UNKNOWN",
+   "source": "agent",
+   "summary": "delete_records: {\"ids\": [\"r1\", \"r2\", \"r3\"]}",
+   "thinking_blocks": [],
+   "thought": [
+    {
+     "cache_prompt": false,
+     "text": "",
+     "type": "text"
+    }
+   ],
+   "timestamp": "2026-10-21T17:22:34.192899",
+   "tool_call": {
+    "arguments": "{\"ids\": [\"r1\", \"r2\", \"r3\"]}",
+    "id": "m0",
+    "name": "delete_records",
+    "origin": "completion",
+    "responses_item_id": null
+   },
+   "tool_call_id": "m0",
+   "tool_name": "delete_records"
+  },
+  {
+   "action": {
+    "data": {
+     "query": "pricing"
+    },
+    "kind": "MCPToolAction"
+   },
+   "critic_result": null,
+   "id": "c5628859-e747-4bcb-8dc5-297162d7c3fb",
+   "kind": "ActionEvent",
+   "llm_response_id": "test-response-1",
+   "parent_id": null,
+   "reasoning_content": null,
+   "responses_reasoning_item": null,
+   "security_risk": "UNKNOWN",
+   "source": "agent",
+   "summary": "search_docs: {\"query\": \"pricing\"}",
+   "thinking_blocks": [],
+   "thought": [
+    {
+     "cache_prompt": false,
+     "text": "",
+     "type": "text"
+    }
+   ],
+   "timestamp": "2026-10-21T17:22:35.214118",
+   "tool_call": {
+    "arguments": "{\"query\": \"pricing\"}",
+    "id": "m1",
+    "name": "search_docs",
+    "origin": "completion",
+    "responses_item_id": null
+   },
+   "tool_call_id": "m1",
+   "tool_name": "search_docs"
+  },
+  {
+   "action": {
+    "data": {
+     "account": "acme-synthetic"
+    },
+    "kind": "MCPToolAction"
+   },
+   "critic_result": null,
+   "id": "15425670-0db1-4748-b96b-a1848d2a1a9c",
+   "kind": "ActionEvent",
+   "llm_response_id": "test-response-1",
+   "parent_id": null,
+   "reasoning_content": null,
+   "responses_reasoning_item": null,
+   "security_risk": "UNKNOWN",
+   "source": "agent",
+   "summary": "sync_partner: {\"account\": \"acme-synthetic\"}",
+   "thinking_blocks": [],
+   "thought": [
+    {
+     "cache_prompt": false,
+     "text": "",
+     "type": "text"
+    }
+   ],
+   "timestamp": "2026-10-21T17:22:36.066816",
+   "tool_call": {
+    "arguments": "{\"account\": \"acme-synthetic\"}",
+    "id": "m2",
+    "name": "sync_partner",
+    "origin": "completion",
+    "responses_item_id": null
+   },
+   "tool_call_id": "m2",
+   "tool_name": "sync_partner"
+  }
+ ],
+ "how": "captured 2026-10-21 by a TestLLM-scripted Conversation with AlwaysConfirm and a recording analyzer: the SDK built every event itself and executed none of them",
+ "mcp_annotations": {
+  "delete_records": {
+   "destructiveHint": true,
+   "idempotentHint": false,
+   "openWorldHint": false,
+   "readOnlyHint": false
+  },
+  "finish": {
+   "destructiveHint": false,
+   "idempotentHint": true,
+   "openWorldHint": false,
+   "readOnlyHint": true,
+   "title": "finish"
+  },
+  "search_docs": {
+   "destructiveHint": true,
+   "idempotentHint": false,
+   "openWorldHint": true,
+   "readOnlyHint": true
+  },
+  "think": {
+   "destructiveHint": false,
+   "idempotentHint": true,
+   "openWorldHint": false,
+   "readOnlyHint": true
+  }
+ },
+ "sdk": "openhands-sdk 1.56.0 + openhands-tools 1.56.0"
+}

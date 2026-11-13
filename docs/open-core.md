@@ -29,6 +29,7 @@ any public repository, in any form — no code, no configuration, no schema, no 
 | Community adapters (`reeflex-postgres`, `reeflex-s3`, etc.) | Open | Apache 2.0 | Community-built against the spec |
 | Base policy packs (Rego rules for the Action Envelope) | Open | Apache 2.0 | Available |
 | Mock adapter + demo | Open | Apache 2.0 | Available |
+| Evidence connector (ships decisions to the Reeflex portal) | Commercial / closed — the built image is distributed publicly | Proprietary | Image: `ghcr.io/reeflex-io/reeflex-evidence-connector`; source not in any public repo |
 | **Attest** — audit-ready control evidence (NIS2 · DORA · EU AI Act · SOC 2) | Commercial / closed | Proprietary | Not in any public repo |
 | **Fleet** — multi-site management | Commercial / closed | Proprietary | **[ROADMAP — not built, not available]** |
 | **Cloud** — hosted Reeflex (multi-tenancy, auth, billing) | Commercial / closed | Proprietary | **[ROADMAP — not built, not available]** |
@@ -150,6 +151,17 @@ directly addresses — plus DORA, SOC 2, and the EU AI Act (Articles 12/14, whos
 obligations do not apply until 2 December 2027, per the Digital Omnibus). Pre-built
 reporting templates and evidence packages for teams that must prove control to an auditor.
 This is the commercial value-add; it is not part of the open-source governance engine.
+
+### The evidence connector image
+
+The connector that ships an engine's decisions to the Reeflex portal
+([The evidence connector](connector.md)) is closed-tier: its source lives in a
+private repository and is not Apache 2.0. Its built container image,
+`ghcr.io/reeflex-io/reeflex-evidence-connector`, is published so that a
+customer can pull and run it with no credentials from us, the same way they
+pull `reeflex-core`. Distributing the image is not publishing the source:
+being able to pull it (and, since it is a Python program, read the modules
+inside it) does not put that code under Apache 2.0 or in the open tier.
 
 ### Fleet — multi-site management
 
