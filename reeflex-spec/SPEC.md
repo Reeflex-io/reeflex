@@ -58,7 +58,7 @@ The normalized representation every adapter MUST produce. JSON. This is the cont
   "magnitude": {
     "count": 1,                           // how many entities this action affects
     "physical": {                         // OPTIONAL (§4.5): physical magnitude
-      "envelope_fraction": 0.4            //   |requested - current| / (safe_max - safe_min), >= 0
+      "envelope_fraction": 0.4            //   the request against the declared safe range, >= 0 (§4.5)
     }
   },
 
@@ -184,17 +184,26 @@ Every action is priced on three axes. This is what makes coverage intrinsic inst
   Read by the physical rules R8–R11 and the two physical budgets (§4.5, since
   v0.2). It is **never a default**: core's conservative value for an absent or
   unrecognized externality is `outbound` (RFX-129), so an envelope is physical
-  only because its adapter declared it. The base pack also reads `outbound`
+  only because its adapter declared it. `"Physical"` and `" physical "` are a
+  declaration of `physical` (axis values are folded, §4.0). A value that is
+  present and still not a member after folding (`"phsyical"`) is held by R0 in
+  production and staging (§4.0). The base pack also reads `outbound`
   (R5's `external_sends` budget) and `internal` (R1's label).
 
 Policy reasons in these axes. A rule like *"irreversible + broad + production → require human approval"* protects Postgres, S3, and WordPress identically.
 
 ### 4.0 When the adapter cannot price the action (RFX-132)
 
-An axis value core does not recognise — absent, misspelled, or a member of no
-closed enum — coerces to the **most-guarded** member (§7's fail-closed bias).
+Axis values are **folded** before they are matched — Unicode NFKC, control
+and format characters dropped, trimmed, casefolded, the fold §3 applies to
+verbs — so `"Irreversible"` and `" physical "` are the members they spell
+(RFX-455). An axis value core still does not recognise — absent, misspelled,
+or a member of no closed enum — coerces to the **most-guarded** member (§7's
+fail-closed bias).
 Core also **records that it did so**, per field, in a core-computed
-`provenance.undeclared` list on the envelope it evaluates.
+`provenance.undeclared` list on the envelope it evaluates, and separately, in
+`provenance.unrecognised`, the axes the adapter *supplied* a value for that
+core could not read (absent, `null` and `""` are not in it).
 
 **"Most-guarded" means what the rules do with a member, not where this section
 lists it.** RFX-129: `externality` coerced to `physical` — last in the list
@@ -220,11 +229,19 @@ human"* is the most honest thing the product can say about an input it cannot
 verify.
 
 **Bounds, so the rule cannot be read as more than it is.**
-- R0 only ever converts a **refusal**: it fires when R2 or R3 would, never on
-  an allow. An unaliased verb on a declared, reversible, non-production action
-  is still R4.
-- Only the three inputs R2 and R3 read — `axes.reversibility`,
-  `axes.blast_radius`, `target.environment` — can trigger it. Guessing a field
+- R0 converts a **refusal** when R2, R3, R6 or a physical rule would fire on a
+  guessed input (§4.5). An unaliased verb on a declared, reversible,
+  non-production action is still R4.
+- **One exception converts an allow (RFX-455).** An `externality` the adapter
+  supplied and core could not read after folding is held as R0 in production
+  and staging when no other rule stops the action. Its default, `outbound`,
+  arms none of R8–R11, so without this a typo in `physical` on a safety-function
+  override was an allow. It does not soften a deny or rename another rule's
+  hold (it is guarded against each of them, and the totality grid carries the
+  input). An *absent* externality is not held: it keeps `outbound`.
+- Apart from that, the inputs that can trigger R0 are the three R2 and R3 read
+  — `axes.reversibility`, `axes.blast_radius`, `target.environment` — and, per
+  rule, the ones R6 and the physical rules read (§4.5). Guessing a field
   no rule reads cannot soften a verdict.
 - "Declared" is judged on the **folded** token, so `Systemic` is a declaration
   of `systemic`. Judged on the raw exact match, a caller would downgrade a
@@ -667,7 +684,7 @@ not catch".
 
   ```jsonc
   "physical": {
-    "envelope_fraction": 0.4,    // |requested - current| / (safe_max - safe_min), >= 0.
+    "envelope_fraction": 0.4,    // >= 0, computed as in the table below.
                                  // 1.0 = a full-range step. > 1.0 = the REQUEST lies
                                  // outside the declared safe range.
     "unit": "degC",              // informational
@@ -678,6 +695,25 @@ not catch".
 
   Only `envelope_fraction` is read. It MUST be a finite number `>= 0`; any
   other present value (negative, string, bool, NaN) is refused with HTTP 400.
+
+  **How the adapter computes it.** Core reads the number and does not compute
+  it. With the declared safe range `[safe_min, safe_max]` and
+  `span = safe_max − safe_min` (MUST be `> 0`):
+
+  | the request | `current` | `envelope_fraction` |
+  |---|---|---|
+  | inside `[safe_min, safe_max]` | known | `min(abs(requested − current) / span, 1.0)` |
+  | inside `[safe_min, safe_max]` | absent | `max(requested − safe_min, safe_max − requested) / span`, the worst-case step |
+  | outside the range | either | `1.0 + distance_outside / span`, where `distance_outside = max(safe_min − requested, requested − safe_max)` |
+
+  Range `[20, 90]`, current 85, requested 92: `1.0 + 2/70 ≈ 1.029`, so R10a
+  denies it. The single `abs(requested − current) / span` of the v0.2 draft gives
+  `0.1` for the same request and cannot place any request outside the range.
+  The cap keeps a move back into range from a drifted plant (current 200,
+  requested 60) at `1.0`. The worst-case step is at least the true step for a
+  plant inside its range, and it costs this: every write without `current`
+  reads at least `0.5`. Vectors: `reeflex-spec/conformance/envelope-fraction.json`
+  (§7).
 - `target.environment`, mapped for a plant as: `production` = live plant /
   real device; `staging` = HIL rig or shadow controller (**real actuators**);
   `dev` = digital twin / simulator.
@@ -935,6 +971,7 @@ Machine-readable vectors are in **`reeflex-spec/conformance/`**, one file per no
 | file | asserts | §  |
 |---|---|---|
 | `blast-radius.json` | `axes.blast_radius` from the shape of the affected set | §4.2 |
+| `envelope-fraction.json` | `magnitude.physical.envelope_fraction` from a safe range, a request and an optional current value | §4.5 |
 
 Both reference adapters run the same file — `reeflex-claude/tests/test_conformance_blast_radius.py` and `reeflex-wordpress/tests/conformance-blast-radius.php` — and neither carries its own copy of the expectations. A runner **MUST** report a case it cannot express as NOT APPLICABLE **by name** rather than skipping it silently, so that the number of cases actually exercised stays a real number.
 

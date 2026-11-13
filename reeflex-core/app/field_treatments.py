@@ -239,7 +239,10 @@ TREATMENTS: dict[str, Treatment] = {
              "that spelled 'outbound' exactly, and an envelope must be "
              "physical only because its adapter declared it -- core never "
              "guesses its way into R8-R11. The conservative default is "
-             "'outbound'.",
+             "'outbound'. Folded before the match since RFX-455, so "
+             "'Physical' is physical; a value still unreadable after the "
+             "fold is recorded in provenance.unrecognised and held by R0 in "
+             "production/staging.",
     ),
 
     # -- target.environment (SPEC §2) -- RFX-86 / PR #89 --------------------
@@ -547,6 +550,18 @@ TREATMENTS: dict[str, Treatment] = {
              "'Systemic' is a declaration and not a guess -- judged on the raw "
              "exact match a caller would downgrade a terminal R3 to a "
              "resolvable hold by capitalising one letter.",
+    ),
+    # RFX-455. Same F8 block, same overwrite, so the same CORE_COMPUTED reason:
+    # a caller that could write it could hold its own allow, or -- the case
+    # that matters -- omit it and keep a typo'd `physical` on `outbound`.
+    "provenance.unrecognised": Treatment(
+        CORE_COMPUTED, "envelope.validate_and_fill_defaults (F8)",
+        note="Sorted list of the axes the caller supplied a value for that "
+             "core could not read even after folding (a typo, a list, a "
+             "number) -- a subset of the axes in provenance.undeclared, which "
+             "also counts silence. R0 reads only axes.externality from it: "
+             "that default (outbound) arms none of R8-R11, so an unreadable "
+             "'physical' is held in production/staging instead of allowed.",
     ),
 }
 

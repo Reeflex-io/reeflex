@@ -219,12 +219,22 @@ REF = [
 #: filled it. R0's three clauses all key on `provenance.undeclared`, and nothing
 #: else in the pack reads it -- so with no dimension here, `unclassified_action`
 #: could not fire on this grid at all and every pair involving it was unreachable.
+#:
+#: Each point is (provenance.undeclared, provenance.unrecognised). The second
+#: list (RFX-455) names the axes the adapter DID supply and core could not read
+#: after folding; R0 holds an unreadable externality in production/staging
+#: where nothing else stops the action. It is always a subset of the first, as
+#: envelope.py computes it. The last two rows put it alone and next to the
+#: older R0 inputs, so the two R0 bodies are on the grid together.
 UNDECLARED = [
-    [],                                          # adapter declared everything
-    ["axes.reversibility"],
-    ["axes.blast_radius"],
-    ["target.environment"],
-    ["axes.reversibility", "target.environment"],
+    ([], []),                                    # adapter declared everything
+    (["axes.reversibility"], []),
+    (["axes.blast_radius"], []),
+    (["target.environment"], []),
+    (["axes.reversibility", "target.environment"], []),
+    (["axes.externality"], ["axes.externality"]),
+    (["axes.externality", "axes.reversibility", "target.environment"],
+     ["axes.externality"]),
 ]
 
 #: WHAT THE SESSION HAS ALREADY SPENT (R5). budgets.rego reads `input.cumulative`
@@ -244,13 +254,14 @@ BUDGET = [
     ({}, {"sum_physical_envelope": 1.01}),                           # physical_envelope > 1.0
 ]
 
-#: 2 * 3 * 17 * 2 * 5 * 3 * 5 * 6
-EXPECTED_GRID_SIZE = 91800
+#: 2 * 3 * 17 * 2 * 5 * 3 * 7 * 6
+EXPECTED_GRID_SIZE = 128520
 
 
-def _envelope(rev, blast, kind, env, ability, ref, undeclared, budget, i):
+def _envelope(rev, blast, kind, env, ability, ref, provenance, budget, i):
     """An Action Envelope in the shape the reference adapters emit."""
     ext, verb, safety_function, envelope_fraction = kind
+    undeclared, unrecognised = provenance
     params, cumulative = budget
     out = {
         "reeflex_version": "0.1",
@@ -287,6 +298,8 @@ def _envelope(rev, blast, kind, env, ability, ref, undeclared, budget, i):
         out["magnitude"]["physical"] = {"envelope_fraction": envelope_fraction}
     if undeclared:
         out["provenance"] = {"undeclared": undeclared}
+    if unrecognised:
+        out["provenance"]["unrecognised"] = unrecognised
     if cumulative:
         out["cumulative"] = cumulative
     return out

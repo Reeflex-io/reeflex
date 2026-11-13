@@ -267,7 +267,11 @@ ledger_charge := charged_count
 # Empty by default; a deployment adds entries like:
 #   "agent:some-session-id": {"objects_touched": {"limit": 10}}
 # to tighten (or loosen) one dimension for one principal without touching
-# the rule engine or any other principal's budget.
+# the rule engine or any other principal's budget. An entry names only the
+# dimensions it changes; `money` may carry `limit`, `limits` or both. Every
+# other dimension, and every currency the entry does not name, keeps the
+# default. (Until RFX-455 an entry without a full `money` object failed
+# `opa check` and every decision failed closed -- see money_limit below.)
 principal_budgets := {}
 
 budget_dimensions := [
@@ -311,8 +315,12 @@ current_physical_envelope := f if {
 # ---- the mechanism (reused by reeflex.rego; not what a user edits) ----
 
 # budget_limit: per-principal override wins; falls back to the default.
+# object.get, not a dotted ref, for the reason given at money_limit below: an
+# entry whose only key is `money: {"limits": {...}}` has no `.limit` anywhere,
+# and the dotted form was a rego_type_error for it (RFX-455).
 budget_limit(dimension) := limit if {
-	limit := principal_budgets[input.agent.session_id][dimension].limit
+	limit := object.get(principal_budgets, [input.agent.session_id, dimension, "limit"], null)
+	limit != null
 } else := limit if {
 	limit := default_budgets[dimension].limit
 }
@@ -458,12 +466,27 @@ current_money_currency := c if {
 
 # Per-currency limit: per-principal override wins, then the per-currency
 # table, then the principal's scalar fallback, then the default scalar.
+#
+# THE TWO principal_budgets LOOKUPS GO THROUGH object.get, AND MUST (RFX-455).
+# `opa check` infers the TYPE of principal_budgets from its literal. A dotted
+# ref into a key that literal does not have -- `.money.limits[c]` against an
+# entry that only tightens `objects_touched` -- is a rego_type_error, and core
+# loads the pack with that check on, so EVERY decision failed closed with HTTP
+# 500 the moment an operator enabled the example above (dev-2 round 034,
+# measured on OPA 1.18.0). The policy tests could not see it: they inject
+# overrides with `with`, which the type checker never sees. object.get is
+# typed `any`, so a partial entry -- one dimension, or `money` without
+# `limits` -- is valid. A missing key reads as "no override" and falls
+# through to the next line, exactly as before. Pinned by
+# tests/test_principal_budgets_example_rfx455.py on the SHIPPED example text.
 money_limit(currency) := lim if {
-	lim := principal_budgets[input.agent.session_id].money.limits[currency]
+	lim := object.get(principal_budgets, [input.agent.session_id, "money", "limits", currency], null)
+	lim != null
 } else := lim if {
 	lim := default_budgets.money.limits[currency]
 } else := lim if {
-	lim := principal_budgets[input.agent.session_id].money.limit
+	lim := object.get(principal_budgets, [input.agent.session_id, "money", "limit"], null)
+	lim != null
 } else := lim if {
 	lim := default_budgets.money.limit
 }

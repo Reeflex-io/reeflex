@@ -4,7 +4,9 @@ envelope.py — Action Envelope validation and conservative-default injection.
 Implements SPEC §2 rules:
   - REQUIRED fields: action.verb, target.environment, axes (object present).
   - Missing AXIS VALUES -> safe-conservative defaults (never silent allow).
-  - Non-canonical axis values -> coerced to most-restrictive (fail-closed).
+  - Axis values are folded; one that is still unrecognised -> coerced to
+    most-restrictive (fail-closed), and an unrecognised externality is
+    recorded in provenance.unrecognised so R0 can hold it (RFX-455).
   - Structural invalidity -> ValidationError (caller returns HTTP 400).
 
 EVERY CLOSED ENUM IS CANONICALIZED HERE, IN ONE PLACE.  The rules in
@@ -74,10 +76,11 @@ def _normalize_token(raw: str) -> str:
 # ---------------------------------------------------------------------------
 # F1: Closed enums + conservative defaults for axis VALUES (SPEC §2, §4)
 #
-# Match is EXACT (case-sensitive, lowercase canonical).
-# Anything NOT in the allowed set (including absent) -> most-restrictive member.
-# This means a non-canonical value like "Irreversible" or "permanent" is treated
-# as "irreversible" (deny-class), never silently passed to OPA as unknown.
+# The value is FOLDED (_normalize_token) and then matched against the closed
+# set, so "Irreversible" is `irreversible` (RFX-455; see _fold_axis). Anything
+# still NOT in the allowed set (absent, "permanent", a list) -> the
+# most-restrictive member, never silently passed to OPA as unknown -- and a
+# present-but-unreadable externality is also recorded, so R0 can hold it.
 #
 # "Most-restrictive" is decided by what the RULES do with each member, not by
 # where SPEC §4's prose lists it -- see the block above _AXIS_DEFAULTS for the
@@ -150,6 +153,41 @@ _AXIS_DEFAULTS: dict[str, str] = {
     "blast_radius": "systemic",
     "externality": "outbound",
 }
+
+
+# THE VALUE IS FOLDED, NOT ONLY THE JUDGEMENT (RFX-455). Until RFX-455 the
+# value was matched EXACTLY, and only F8's "was it declared?" test folded. That
+# was argued as conservative (see F8's note), and for two axes it was: a
+# re-cased `reversibility` or `blast_radius` landed on `irreversible` /
+# `systemic`, the members every rule that reads them restricts on. For
+# externality it was the opposite, because the default is `outbound` and
+# RFX-427 made `physical` the member that arms R8-R11. Measured on main
+# 747d38e (qa--215 first, 21 Oct), a production `override`:
+#
+#   "physical"                         -> deny  safety_function_override_prod
+#   "PHYSICAL" / "Physical" / " physical "
+#                                      -> allow default_allow
+#
+# A case or whitespace slip took a safety-function override from a deny no one
+# may clear to an allow. F5 folds `target.environment` and F6 folds
+# `action.verb`; the axes now fold the same way.
+#
+# THE COST, STATED. Folding the value also RELAXES a verdict for the other two
+# axes: `blast_radius: "SINGLE"` on an irreversible production action was read
+# as `systemic` (declared, so R3 -- a terminal deny) and is now read as
+# `single`, which is what the adapter said. That moves a wrong DENY to the
+# verdict the declared value earns. Measured in dev-1 round 159 (Nov) over
+# 3,024 envelopes, each tree through its own envelope.py and pack: 414 moved,
+# all toward the spelled member, 0 canonical spellings moved, and every one of
+# the 2,376 re-cased points got exactly the decision its lowercase spelling
+# already got on main 747d38e. So the fold grants a caller nothing it could
+# not get by typing the member in lowercase.
+def _fold_axis(raw_value: Any, axis: str) -> str | None:
+    """The member of `axis` the caller spelled, after folding, or None."""
+    if not isinstance(raw_value, str):
+        return None
+    folded = _normalize_token(raw_value)
+    return folded if folded in _AXIS_ALLOWED[axis] else None
 
 # ---------------------------------------------------------------------------
 # F5: target.environment is a CLOSED ENUM (SPEC §2: production | staging | dev),
@@ -915,15 +953,13 @@ def _canonicalize_verb(
 # exact match, a caller would downgrade a terminal R3 DENY to a resolvable
 # hold by capitalising one letter, which is RFX-86's evasion one tier up.
 #
-# The fold is NOT used to pick the VALUE, and that restraint is deliberate.
-# `_AXIS_ALLOWED` is still matched exactly, so "Broad" still coerces to
-# `systemic` exactly as it did before this change -- because folding the value
-# too would turn `blast_radius: "SINGLE"` on an irreversible production action
-# from a DENY into an ALLOW, and a case fix that relaxes a refusal is not
-# something this ticket is chartered to do. The residual (a recognisable but
-# non-canonical spelling is read as the most-guarded member, a wrong DENY) is
-# UNCHANGED by this change and is its own ticket. Stated rather than quietly
-# fixed or quietly ignored.
+# RFX-132 did NOT fold the VALUE, and said why: folding it would turn
+# `blast_radius: "SINGLE"` on an irreversible production action from a DENY
+# into an ALLOW, and that ticket was not chartered to relax a refusal. It named
+# the residual (a recognisable spelling read as the most-guarded member, a
+# wrong DENY) as its own ticket. RFX-455 is that ticket, raised by the
+# externality case where the same exact match failed OPEN. The value is now
+# folded too (_fold_axis), so the judgement and the value agree.
 #
 # CORE-COMPUTED, UNCONDITIONALLY.  A caller supplying its own `provenance`
 # block would otherwise be able to assert "you guessed at this" about an
@@ -974,9 +1010,46 @@ def _count_is_declared(raw_magnitude: Any) -> bool:
 
 def _axis_is_declared(raw_value: Any, axis: str) -> bool:
     """True if the caller supplied a value for `axis` that core RECOGNISES."""
-    if not isinstance(raw_value, str):
+    return _fold_axis(raw_value, axis) is not None
+
+
+# UNDECLARED IS TWO FACTS, AND FOR ONE AXIS THE DIFFERENCE DECIDES (RFX-455).
+# `undeclared` lumps "the adapter said nothing" with "the adapter said
+# something core cannot read". For externality those two must not share an
+# answer, because the default they share is `outbound`, and `outbound` is the
+# member that arms NONE of R8-R11:
+#
+#   absent / null / ""      -> outbound, as before. RFX-129's measured
+#                              decision: an IT adapter that never heard of the
+#                              axis is not a plant, and core must not guess its
+#                              way into the physical rules.
+#   "phsyical", "physical!" -> outbound would be the same guess -- and here it
+#                              is a guess AGAINST the adapter, which plainly
+#                              tried to say something. Measured on main
+#                              747d38e: a production `override` spelled that
+#                              way is allow / default_allow, where the exact
+#                              spelling is deny / safety_function_override_prod.
+#
+# So the second case is recorded here and policy/reeflex.rego routes it to R0
+# (a hold) in production and staging when nothing else would stop it. The
+# other two axes are recorded too, but no rule reads them from this list:
+# their defaults (`irreversible`, `systemic`) are the members the rules that
+# read them restrict on, so a typo there lands on the guarded side. That is measured, not assumed --
+# tests/test_externality_near_miss_rfx455.py
+# TestTheOtherTwoAxesNeedNoRoute.
+def _axis_is_unrecognised(raw_value: Any, axis: str) -> bool:
+    """True if the caller supplied a value for `axis` that core could not read
+    even after folding.
+
+    Silence is: the key absent, `null`, or a string that folds to "" (so "",
+    "  " and a lone zero-width character). Everything else that is not a
+    member -- a typo, `["physical"]`, `1`, `true` -- was the adapter trying to
+    say something, and is recorded."""
+    if raw_value is None:
         return False
-    return _normalize_token(raw_value) in _AXIS_ALLOWED[axis]
+    if isinstance(raw_value, str) and not _normalize_token(raw_value):
+        return False
+    return _fold_axis(raw_value, axis) is None
 
 
 def _environment_is_declared(raw_env: Any) -> bool:
@@ -1284,8 +1357,9 @@ def validate_and_fill_defaults(raw: Any) -> dict:
     Does NOT raise on missing-but-defaultable axis values; those are coerced
     to the most-restrictive canonical member (fail-closed per SPEC §2).
 
-    F1: Non-canonical axis values are coerced to most-restrictive, not passed
-    through verbatim (prevents silent allow on typo/case mismatch).
+    F1: Axis values are folded (case, whitespace, NFKC); anything still
+    unrecognised is coerced to most-restrictive, never passed through
+    verbatim (prevents silent allow on typo/case mismatch).
     F2: magnitude.count is canonicalized to int; invalid values raise.
     F3: agent.session_id is required; missing/empty raises ValidationError.
     F5: target.environment is canonicalized to the closed SPEC §2 tier enum;
@@ -1436,19 +1510,17 @@ def validate_and_fill_defaults(raw: Any) -> dict:
             )
             envelope["params"] = _norm_params
 
-    # -- F1: Axes: coerce absent OR non-canonical values to most-restrictive --
-    # Exact, case-sensitive match against the SPEC §4 closed enum.
-    # Anything outside the allowed set (including absent, wrong case, typo)
-    # coerces to the conservative default — it is never passed to OPA verbatim.
+    # -- F1: Axes: fold, then coerce absent OR unrecognised values --
+    # Folded (_normalize_token) and then matched against the SPEC §4 closed
+    # enum, so "Physical" / " physical " / "IRREVERSIBLE" are the member they
+    # spell -- see _fold_axis for why the fold is applied to the VALUE now and
+    # not only to the provenance judgement. Anything that is still outside the
+    # enum after folding (absent, typo, non-string) coerces to the conservative
+    # default; it is never passed to OPA verbatim.
     normalized_axes = dict(axes) if isinstance(axes, dict) else {}
     for axis, default in _AXIS_DEFAULTS.items():
-        raw_value = normalized_axes.get(axis)
-        # Unhashable types (list, dict) cannot be checked against a frozenset;
-        # any non-str value is by definition non-canonical -> coerce to default.
-        if not isinstance(raw_value, str) or raw_value not in _AXIS_ALLOWED[axis]:
-            # Absent, wrong-case ("Irreversible"), typo ("permanent"),
-            # or unhashable garbage (list/dict) -> most-restrictive default.
-            normalized_axes[axis] = default
+        folded = _fold_axis(normalized_axes.get(axis), axis)
+        normalized_axes[axis] = default if folded is None else folded
     envelope["axes"] = normalized_axes
 
     # -- F6: canonicalize action.verb to the closed SPEC §3 verb set. --
@@ -1502,7 +1574,19 @@ def validate_and_fill_defaults(raw: Any) -> dict:
     # default -- after the fill there is nothing left to tell apart.
     if not _count_is_declared(raw.get("magnitude")):
         _undeclared.append("magnitude.count")
-    envelope["provenance"] = {"undeclared": sorted(_undeclared)}
+    # RFX-455. The axes that WERE supplied, as a non-empty string, and that core
+    # still could not read after folding -- a typo, not a silence. A subset of
+    # the axes in `undeclared`. See the "UNDECLARED IS TWO FACTS" block above
+    # _axis_is_unrecognised for which rule reads it and why only one axis.
+    _unrecognised = [
+        "axes." + axis for axis in sorted(_AXIS_DEFAULTS)
+        if _axis_is_unrecognised(
+            axes.get(axis) if isinstance(axes, dict) else None, axis)
+    ]
+    envelope["provenance"] = {
+        "undeclared": sorted(_undeclared),
+        "unrecognised": _unrecognised,
+    }
 
     # -- F2: magnitude.count: canonicalize to int; reject invalid values --
     # Guard: magnitude must be a dict if present; a string/list is a hard error.

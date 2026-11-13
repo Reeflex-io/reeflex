@@ -117,21 +117,20 @@ class TestProvenanceRecordsWhatCoreGuessed(unittest.TestCase):
         ))
         self.assertEqual(got["provenance"]["undeclared"], [])
 
-    def test_the_value_coercion_is_deliberately_unchanged(self):
-        """A recognised-but-non-canonical spelling still coerces exactly as
-        it did before this change.
+    def test_a_recognised_spelling_is_the_member_it_spells(self):
+        """RFX-455 changed this, deliberately: the VALUE is folded now too.
 
-        Folding the VALUE too would turn `blast_radius: "SINGLE"` on an
-        irreversible production action from a DENY into an ALLOW, and a case
-        fix that relaxes a refusal is not RFX-132's to make. The residual (a
-        wrong DENY on "Broad") is unchanged and stated in the module comment,
-        not silently fixed here.
+        RFX-132 left the value on an exact match ("Broad" was read as
+        `systemic`, a wrong DENY) because folding it relaxes that refusal, and
+        named the residual as its own ticket. RFX-455 is that ticket: the same
+        exact match made `externality: "Physical"` an `outbound` allow on a
+        safety-function override. The judgement and the value now agree.
         """
         got = validate_and_fill_defaults(_envelope(
             axes={"reversibility": "irreversible", "blast_radius": "Broad",
                   "externality": "internal"},
         ))
-        self.assertEqual(got["axes"]["blast_radius"], "systemic")
+        self.assertEqual(got["axes"]["blast_radius"], "broad")
         self.assertNotIn("axes.blast_radius", got["provenance"]["undeclared"])
 
     def test_a_caller_cannot_supply_its_own_provenance(self):

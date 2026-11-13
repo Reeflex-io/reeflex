@@ -11,11 +11,17 @@ on:
     branches: [main]
     paths:
       - "reeflex-mcp/**"
+      # RFX-455: tests/test_conformance_envelope_fraction.py runs these vectors,
+      # so an edit to the vector file alone must run this suite.
+      - "reeflex-spec/conformance/envelope-fraction.json"
       - ".github/workflows/ci-reeflex-mcp.yml"
   pull_request:
     branches: [main]
     paths:
       - "reeflex-mcp/**"
+      # RFX-455: tests/test_conformance_envelope_fraction.py runs these vectors,
+      # so an edit to the vector file alone must run this suite.
+      - "reeflex-spec/conformance/envelope-fraction.json"
       - ".github/workflows/ci-reeflex-mcp.yml"
 
 concurrency:

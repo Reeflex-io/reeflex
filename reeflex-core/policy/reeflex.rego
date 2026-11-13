@@ -18,7 +18,9 @@ package reeflex.policy
 #   deny              R10a physical request outside its declared safe range,
 #                          production or staging, environment declared
 #   require_approval  R0   R2/R3/R6/R8/R9/R10a/R11 matched on an input core
-#                          GUESSED (see the R0 block)
+#                          GUESSED (see the R0 block); and, below every other
+#                          hold, an externality core could not read, in
+#                          production or staging (RFX-455)
 #   require_approval  R2   irreversible + broad + production
 #   require_approval  R9   physical irreversible actuate/flash in production
 #   require_approval  R11  physical mode change in production
@@ -39,7 +41,9 @@ package reeflex.policy
 # THE PHYSICAL RULES (R8-R11, RFX-427) ARM ONLY ON `axes.externality ==
 # "physical"`, which core never guesses: envelope.py's conservative default
 # for an absent or unrecognised externality is `outbound`, so an envelope is
-# physical only because its adapter said so. Environment table (SPEC §4.5):
+# physical only because its adapter said so. ("Physical" is folded to
+# physical; an unreadable value is held by R0 instead -- RFX-455, R0 block.)
+# Environment table (SPEC §4.5):
 #
 #                     production   staging   dev
 #   R8  deny             arms        arms      -
@@ -242,6 +246,44 @@ r0_unclassified if {
 	r11_mode_change_live
 }
 
+# R0 AND AN EXTERNALITY CORE COULD NOT READ (RFX-455). envelope.py folds case
+# and whitespace, so "Physical" IS physical. What is left is a value the
+# adapter supplied and core still cannot read -- "phsyical", "physical!" --
+# and that gets `outbound`, the member that arms none of R8-R11. Measured on
+# main 747d38e: a production `override` spelled that way was allow /
+# default_allow, the exact spelling deny / safety_function_override_prod.
+#
+# So in the environments where the physical rules arm, such an envelope is
+# held as unclassified. It is guarded so that it CONVERTS AN ALLOW AND NOT A
+# DENY OR ANOTHER RULE'S HOLD -- the property R6 keeps -- for two reasons:
+#   * it must not SOFTEN a deny. R3 does not read externality, so a typo in it
+#     is not what R3's verdict rests on -- letting it turn a declared R3 into
+#     a resolvable hold would be the evasion described under "R0 AND THE
+#     PHYSICAL DENIES" above, through a different field;
+#   * it must not RENAME another rule's hold. R2/R5/R6/R7 already stop the
+#     action under a reason that names what tripped; replacing that with
+#     "could not classify" loses information and changes no verdict.
+# An ABSENT externality (missing, null, "") is not recorded and keeps the
+# `outbound` default, RFX-129's measured decision for IT adapters that never
+# set the axis. Dev is excluded because the physical rules do not arm there.
+r0_externality_unreadable if {
+	"axes.externality" in object.get(input, ["provenance", "unrecognised"], [])
+	input.target.environment in physical_armed_environments
+}
+
+r0_externality_hold if {
+	r0_externality_unreadable
+	not r0_unclassified
+	not r3_deny
+	not r2_require_approval
+	not budget_require_approval
+	not r6_require_approval
+	not r7_authority_change
+	not physical_deny
+	not r9_physical_irreversible
+	not r11_mode_change_live
+}
+
 # R1: read-only internal action.
 r1_allow if {
 	input.action.verb == "read"
@@ -397,6 +439,18 @@ decision := {
 } if {
 	r0_unclassified
 	not physical_deny
+}
+
+# require_approval (R0, RFX-455) — an externality the adapter supplied and
+# core could not read, where nothing else stops the action. Same rule id as
+# the body above: it is the same fact, "core cannot say what this is". Its own
+# reason, because the field WAS declared -- it was not readable.
+decision := {
+	"decision": "require_approval",
+	"reason": "this action could not be classified: axes.externality was supplied but is not one of internal, outbound, physical, so core cannot tell whether it acts on the physical world -- a human decides",
+	"rule": "reeflex.policy/unclassified_action",
+} if {
+	r0_externality_hold
 }
 
 r0_was_were := "was" if count(r0_guessed_inputs) == 1
@@ -629,6 +683,10 @@ decision := {
 	# verdict: before RFX-427 R0 required R2/R3/R6, all excluded above. Its
 	# physical clauses do not, so it has to be named.
 	not r0_unclassified
+	# RFX-455. Unreachable through core (R1 needs `internal`, an unreadable
+	# externality is coerced to `outbound`) and named anyway, so a grid input
+	# carrying both cannot make two bodies true.
+	not r0_externality_hold
 	not physical_deny
 	not r9_physical_irreversible
 	not r11_mode_change_live
@@ -650,6 +708,7 @@ decision := {
 	# verdict: before RFX-427 R0 required R2/R3/R6, all excluded above. Its
 	# physical clauses do not, so it has to be named.
 	not r0_unclassified
+	not r0_externality_hold # RFX-455: the allow it exists to convert
 	not physical_deny
 	not r9_physical_irreversible
 	not r11_mode_change_live

@@ -1,0 +1,76 @@
+{
+  "$comment": [
+    "Conformance vectors for SPEC §4.5 — how an adapter computes",
+    "magnitude.physical.envelope_fraction from a declared safe range.",
+    "",
+    "WHY THIS FILE EXISTS (RFX-455). SPEC.md said envelope_fraction =",
+    "|requested - current| / (safe_max - safe_min), and in the same breath that",
+    "> 1.0 means the request lies outside the declared safe range. The formula",
+    "cannot deliver the sentence: range [20, 90], current 85, requested 92 gives",
+    "0.1, so R10a — the deny for a request outside the range — would not fire for a",
+    "request 2 degrees past it. reeflex-mcp (RFX-428) implemented the corrected",
+    "rule and docs/reference/action-envelope.md documented it; the SPEC did not.",
+    "qa--215 found the disagreement (21 Oct). Nothing pinned the formula, and a",
+    "prose guard would only pin the sentence. These rows pin the arithmetic.",
+    "",
+    "HOW A CASE IS WRITTEN. `given` is the situation abstractly: the declared safe",
+    "range, the requested value, and the plant's current value (null = the adapter",
+    "does not know it). `required.envelope_fraction` is the value SPEC §4.5's table",
+    "gives, to within `tolerance`. `required.outside_range` says which row of that",
+    "table applies, and `required.r10a` whether core's R10a (envelope_fraction >",
+    "1.0, production or staging) denies an envelope carrying that value. A runner",
+    "that cannot express a case MUST report it NOT APPLICABLE by name (§7).",
+    "",
+    "RUNNERS. reeflex-mcp/tests/test_conformance_envelope_fraction.py computes",
+    "every row through reeflex-mcp's extractor (assess_physical). reeflex-core/",
+    "tests/test_conformance_envelope_fraction_r10a.py feeds every row's required",
+    "value through the shipped pack and checks `r10a`."
+  ],
+  "spec_section": "4.5",
+  "ticket": "RFX-455",
+  "tolerance": 1e-9,
+  "cases": [
+    {
+      "name": "outside above, small step (the SPEC example)",
+      "given": {"range": [20, 90], "current": 85, "requested": 92},
+      "required": {"envelope_fraction": 1.0285714285714285, "outside_range": true, "r10a": true},
+      "draft_formula_gave": 0.1
+    },
+    {
+      "name": "outside below, current absent",
+      "given": {"range": [20, 90], "current": null, "requested": 10},
+      "required": {"envelope_fraction": 1.1428571428571428, "outside_range": true, "r10a": true}
+    },
+    {
+      "name": "outside above by a whole span",
+      "given": {"range": [20, 90], "current": 20, "requested": 160},
+      "required": {"envelope_fraction": 2.0, "outside_range": true, "r10a": true}
+    },
+    {
+      "name": "inside, current known",
+      "given": {"range": [20, 90], "current": 55, "requested": 62},
+      "required": {"envelope_fraction": 0.1, "outside_range": false, "r10a": false}
+    },
+    {
+      "name": "inside, a full-range step is exactly 1.0 and is not R10a",
+      "given": {"range": [20, 90], "current": 20, "requested": 90},
+      "required": {"envelope_fraction": 1.0, "outside_range": false, "r10a": false}
+    },
+    {
+      "name": "inside, from a drifted plant, capped at 1.0",
+      "given": {"range": [20, 90], "current": 200, "requested": 60},
+      "required": {"envelope_fraction": 1.0, "outside_range": false, "r10a": false},
+      "draft_formula_gave": 2.0
+    },
+    {
+      "name": "inside, current absent: the worst-case step",
+      "given": {"range": [20, 90], "current": null, "requested": 62},
+      "required": {"envelope_fraction": 0.6, "outside_range": false, "r10a": false}
+    },
+    {
+      "name": "on the upper bound, current absent: a full-range worst case",
+      "given": {"range": [20, 90], "current": null, "requested": 90},
+      "required": {"envelope_fraction": 1.0, "outside_range": false, "r10a": false}
+    }
+  ]
+}
