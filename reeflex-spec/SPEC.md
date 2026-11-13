@@ -58,7 +58,7 @@ The normalized representation every adapter MUST produce. JSON. This is the cont
   "magnitude": {
     "count": 1,                           // how many entities this action affects
     "physical": {                         // OPTIONAL (§4.5): physical magnitude
-      "envelope_fraction": 0.4            //   |requested - current| / (safe_max - safe_min), >= 0
+      "envelope_fraction": 0.4            //   the request against the declared safe range, >= 0 (§4.5)
     }
   },
 
@@ -684,7 +684,7 @@ not catch".
 
   ```jsonc
   "physical": {
-    "envelope_fraction": 0.4,    // |requested - current| / (safe_max - safe_min), >= 0.
+    "envelope_fraction": 0.4,    // >= 0, computed as in the table below.
                                  // 1.0 = a full-range step. > 1.0 = the REQUEST lies
                                  // outside the declared safe range.
     "unit": "degC",              // informational
@@ -695,6 +695,25 @@ not catch".
 
   Only `envelope_fraction` is read. It MUST be a finite number `>= 0`; any
   other present value (negative, string, bool, NaN) is refused with HTTP 400.
+
+  **How the adapter computes it.** Core reads the number and does not compute
+  it. With the declared safe range `[safe_min, safe_max]` and
+  `span = safe_max − safe_min` (MUST be `> 0`):
+
+  | the request | `current` | `envelope_fraction` |
+  |---|---|---|
+  | inside `[safe_min, safe_max]` | known | `min(abs(requested − current) / span, 1.0)` |
+  | inside `[safe_min, safe_max]` | absent | `max(requested − safe_min, safe_max − requested) / span`, the worst-case step |
+  | outside the range | either | `1.0 + distance_outside / span`, where `distance_outside = max(safe_min − requested, requested − safe_max)` |
+
+  Range `[20, 90]`, current 85, requested 92: `1.0 + 2/70 ≈ 1.029`, so R10a
+  denies it. The single `abs(requested − current) / span` of the v0.2 draft gives
+  `0.1` for the same request and cannot place any request outside the range.
+  The cap keeps a move back into range from a drifted plant (current 200,
+  requested 60) at `1.0`. The worst-case step is at least the true step for a
+  plant inside its range, and it costs this: every write without `current`
+  reads at least `0.5`. Vectors: `reeflex-spec/conformance/envelope-fraction.json`
+  (§7).
 - `target.environment`, mapped for a plant as: `production` = live plant /
   real device; `staging` = HIL rig or shadow controller (**real actuators**);
   `dev` = digital twin / simulator.
@@ -952,6 +971,7 @@ Machine-readable vectors are in **`reeflex-spec/conformance/`**, one file per no
 | file | asserts | §  |
 |---|---|---|
 | `blast-radius.json` | `axes.blast_radius` from the shape of the affected set | §4.2 |
+| `envelope-fraction.json` | `magnitude.physical.envelope_fraction` from a safe range, a request and an optional current value | §4.5 |
 
 Both reference adapters run the same file — `reeflex-claude/tests/test_conformance_blast_radius.py` and `reeflex-wordpress/tests/conformance-blast-radius.php` — and neither carries its own copy of the expectations. A runner **MUST** report a case it cannot express as NOT APPLICABLE **by name** rather than skipping it silently, so that the number of cases actually exercised stays a real number.
 
