@@ -135,6 +135,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -485,9 +486,11 @@ def classify_call(
     """The 4-tier resolution (design doc section 8 + BUG 2 fix). Returns
     (classification, magnitude_count, source_tag).
 
-    classification has exactly {"verb", "reversibility", "blast_radius",
+    classification has {"verb", "reversibility", "blast_radius",
     "externality"} -- ready to drop straight into build_envelope()'s action/
-    axes. source_tag is one of "mapping" / "annotation:<bucket>" /
+    axes -- plus, from the mapping tier only and only when the entry declares
+    them (RFX-428), "safety_function" (bool) and "physical" (a
+    mappings.PhysicalAssessment). source_tag is one of "mapping" / "annotation:<bucket>" /
     "heuristic:<bucket>" / "heuristic:default" -- see the module docstring.
 
     Precedence (never reordered): declarative mapping > MCP annotations >
@@ -612,6 +615,11 @@ def build_envelope(
         "ref": _guess_ref(arguments),
         "environment": target_environment,
     }
+    # RFX-428 (PHYSICAL-IMPACT-SPEC section 1): present only when the mapping
+    # entry declared a safety flag -- absent stays today's envelope, and
+    # today's hash.
+    if "safety_function" in cls:
+        target["safety_function"] = cls["safety_function"]
 
     # params: small, structured passthrough -- the raw call arguments plus the
     # upstream name (not backend-specific enough to be its own field, but
@@ -623,7 +631,10 @@ def build_envelope(
         "arguments": arguments if isinstance(arguments, dict) else {},
     }
 
-    magnitude = {"count": count}
+    magnitude: dict[str, Any] = {"count": count}
+    assessment = cls.get("physical")
+    if assessment is not None and assessment.physical is not None:
+        magnitude["physical"] = assessment.physical
 
     axes = {
         "reversibility": cls["reversibility"],
@@ -641,6 +652,17 @@ def build_envelope(
         # -- which tier classified THIS call.
         "classification_source": classification_source,
     }
+    if assessment is not None and assessment.basis is not None:
+        # How envelope_fraction was reached: current | worst_case |
+        # midpoint | outside_range | fail_closed (mappings.assess_physical).
+        context["physical_basis"] = assessment.basis
+    if assessment is not None and assessment.error is not None:
+        context["physical_error"] = assessment.error
+        print(
+            f"[reeflex-mcp] physical extractor FAILED CLOSED for '{tool_name}': {assessment.error} "
+            f"-> envelope_fraction={assessment.physical['envelope_fraction']}, axes={axes}",
+            file=sys.stderr,
+        )
 
     ts = _now_utc()
     nonce = _make_nonce(session_id, ts, upstream_name, tool_name)

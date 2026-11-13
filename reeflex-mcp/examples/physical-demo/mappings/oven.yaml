@@ -1,0 +1,21 @@
+# DEMO ONLY -- a synthetic oven controller, not a real MCP server.
+#
+# The 40-steps demo needs a write tool that carries the oven's CURRENT
+# setpoint, so that each step is priced as the step it is (|requested -
+# current| / span). Neither real server mapped in reeflex_mcp/mappings/
+# (IndustriAgents/OPCUA-MCP, Home Assistant) passes a current value, so under
+# those packs every step is priced by the worst-case rule (>= 0.5 on any
+# range) and the slow-sweep pattern this demo exists to show is not what the
+# budget sees there. See README "Physical impact".
+
+tools:
+  set_oven_setpoint:
+    verb: set
+    axes: { reversibility: recoverable, blast_radius: single, externality: physical }
+    safety_function: false
+    magnitude:
+      physical:
+        value_arg: setpoint
+        current_arg: current_setpoint
+        range: [100, 300]
+        unit: degC

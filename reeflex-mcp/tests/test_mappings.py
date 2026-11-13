@@ -281,7 +281,10 @@ class TestStarterMappings(unittest.TestCase):
         cls.reg = mappings.load_mappings_dir()  # default -> bundled starters
 
     def test_all_three_starters_present(self) -> None:
-        self.assertEqual(self.reg.systems, frozenset({"filesystem", "github", "postgres"}))
+        # RFX-428 added the two OT packs alongside the three IT starters.
+        self.assertEqual(
+            self.reg.systems, frozenset({"filesystem", "github", "postgres", "opcua", "homeassistant"})
+        )
 
     # -- filesystem: real @modelcontextprotocol/server-filesystem tool names --
 
